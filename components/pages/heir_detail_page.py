@@ -1,8 +1,12 @@
+# /components/pages/heir_detail_page.py
+
+from typing import Optional
+
 import flet as ft
 from sqlalchemy.orm import Session
+
 from db_config import get_db
-from models import Heir, Decedent
-from typing import Optional
+from models import Decedent, Heir
 
 
 class HeirDetailPage(ft.View):
@@ -15,20 +19,24 @@ class HeirDetailPage(ft.View):
         # UIコントロール
         self.decedent_info = ft.Text("被相続人:", size=16, weight=ft.FontWeight.BOLD)
         self.name_input = ft.TextField(label="相続人名", autofocus=True)
-        self.relationship_input = ft.TextField(label="続柄")  # models.pyでrelationship_nameに変更済
+        self.relationship_input = ft.TextField(
+            label="続柄"
+        )  # models.pyでrelationship_nameに変更済
         self.save_button = ft.ElevatedButton("登録/更新", on_click=self.save_heir)
         self.delete_button = ft.ElevatedButton(
             "相続人を削除",
             on_click=self.delete_heir,
             style=ft.ButtonStyle(color=ft.Colors.RED),
-            visible=False
+            visible=False,
         )
 
         super().__init__(
             "/heir/:did/:hid",  # did: Decedent ID, hid: Heir ID
             [
                 ft.AppBar(
-                    title=ft.Text("相続人 詳細/編集", size=20, weight=ft.FontWeight.BOLD),
+                    title=ft.Text(
+                        "相続人 詳細/編集", size=20, weight=ft.FontWeight.BOLD
+                    ),
                     leading=ft.IconButton(ft.Icons.ARROW_BACK, on_click=self.go_back),
                 ),
                 ft.Container(
@@ -38,15 +46,18 @@ class HeirDetailPage(ft.View):
                             ft.Divider(),
                             self.name_input,
                             self.relationship_input,
-                            ft.Row([self.save_button, self.delete_button], alignment=ft.MainAxisAlignment.CENTER),
+                            ft.Row(
+                                [self.save_button, self.delete_button],
+                                alignment=ft.MainAxisAlignment.CENTER,
+                            ),
                         ],
                         scroll=ft.ScrollMode.ADAPTIVE,
-                        expand=True
+                        expand=True,
                     ),
                     padding=10,
-                    expand=True
-                )
-            ]
+                    expand=True,
+                ),
+            ],
         )
         # self.page.add_handler("on_route_change", self.on_view_load)  # main.pyで呼び出すためのダミー
 
@@ -104,7 +115,9 @@ class HeirDetailPage(ft.View):
                     self.save_button.text = "更新"
                     self.delete_button.visible = True
                 else:
-                    self.page.snack_bar = ft.SnackBar(ft.Text("相続人データが見つかりませんでした。"))
+                    self.page.snack_bar = ft.SnackBar(
+                        ft.Text("相続人データが見つかりませんでした。")
+                    )
                     self.page.snack_bar.open = True
                     self.go_back(None)
 
@@ -115,7 +128,9 @@ class HeirDetailPage(ft.View):
     def save_heir(self, e):
         """相続人の情報をデータベースに保存/更新する"""
         if not self.name_input.value or not self.relationship_input.value:
-            self.page.snack_bar = ft.SnackBar(ft.Text("名前と続柄を入力してください。", bgcolor=ft.Colors.RED_600))
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("名前と続柄を入力してください。", bgcolor=ft.Colors.RED_600)
+            )
             self.page.snack_bar.open = True
             self.page.update()
             return
@@ -127,7 +142,7 @@ class HeirDetailPage(ft.View):
                 new_heir = Heir(
                     decedent_id=self.decedent_id,
                     name=self.name_input.value,
-                    relationship_name=self.relationship_input.value
+                    relationship_name=self.relationship_input.value,
                 )
                 db.add(new_heir)
                 db.commit()
@@ -158,7 +173,9 @@ class HeirDetailPage(ft.View):
             if heir_to_delete:
                 db.delete(heir_to_delete)
                 db.commit()
-                self.page.snack_bar = ft.SnackBar(ft.Text(f"{heir_to_delete.name}を削除しました。"))
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text(f"{heir_to_delete.name}を削除しました。")
+                )
                 self.page.snack_bar.open = True
             break
 

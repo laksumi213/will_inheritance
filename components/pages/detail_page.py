@@ -1,8 +1,12 @@
+# /components/pages/detail_page.py
+
+from typing import Optional
+
 import flet as ft
 from sqlalchemy.orm import Session
+
 from db_config import get_db
 from models import Decedent, Heir
-from typing import Optional
 
 
 class DetailPage(ft.View):
@@ -21,15 +25,19 @@ class DetailPage(ft.View):
             "被相続人を削除",
             on_click=self.delete_decedent,
             style=ft.ButtonStyle(color=ft.Colors.RED),
-            visible=False
+            visible=False,
         )
 
         super().__init__(
             "/detail/:id",
             [
                 ft.AppBar(
-                    title=ft.Text("被相続人 詳細/編集", size=20, weight=ft.FontWeight.BOLD),
-                    leading=ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: page.go("/")),
+                    title=ft.Text(
+                        "被相続人 詳細/編集", size=20, weight=ft.FontWeight.BOLD
+                    ),
+                    leading=ft.IconButton(
+                        ft.Icons.ARROW_BACK, on_click=lambda e: page.go("/")
+                    ),
                 ),
                 ft.Container(
                     ft.Column(
@@ -44,15 +52,18 @@ class DetailPage(ft.View):
                                 padding=5,
                             ),
                             self.heirs_list_column,
-                            ft.Row([self.save_button, self.delete_button], alignment=ft.MainAxisAlignment.CENTER),
+                            ft.Row(
+                                [self.save_button, self.delete_button],
+                                alignment=ft.MainAxisAlignment.CENTER,
+                            ),
                         ],
                         scroll=ft.ScrollMode.ADAPTIVE,
-                        expand=True
+                        expand=True,
                     ),
                     padding=10,
-                    expand=True
-                )
-            ]
+                    expand=True,
+                ),
+            ],
         )
         # self.page.add_handler("on_route_change", self.on_view_load)
 
@@ -98,7 +109,9 @@ class DetailPage(ft.View):
                 self.add_heir_row(heir)
         else:
             # データが見つからない場合の処理 (例: ホームに戻る)
-            self.page.snack_bar = ft.SnackBar(ft.Text("被相続人データが見つかりませんでした。"))
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("被相続人データが見つかりませんでした。")
+            )
             self.page.snack_bar.open = True
             self.page.go("/")
 
@@ -107,7 +120,9 @@ class DetailPage(ft.View):
     def save_data(self, e):
         """被相続人の情報をデータベースに保存/更新する"""
         if not self.name_input.value:
-            self.page.snack_bar = ft.SnackBar(ft.Text("被相続人名を入力してください。", bgcolor=ft.Colors.RED_600))
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("被相続人名を入力してください。", bgcolor=ft.Colors.RED_600)
+            )
             self.page.snack_bar.open = True
             self.page.update()
             return
@@ -117,8 +132,7 @@ class DetailPage(ft.View):
             if self.decedent_id is None:
                 # 新規作成
                 new_decedent = Decedent(
-                    name=self.name_input.value,
-                    death_date=self.death_date_input.value
+                    name=self.name_input.value, death_date=self.death_date_input.value
                 )
                 db.add(new_decedent)
                 db.commit()
@@ -136,7 +150,9 @@ class DetailPage(ft.View):
                     decedent.name = self.name_input.value
                     decedent.death_date = self.death_date_input.value
                     db.commit()
-                    self.page.snack_bar = ft.SnackBar(ft.Text("被相続人情報を更新しました。"))
+                    self.page.snack_bar = ft.SnackBar(
+                        ft.Text("被相続人情報を更新しました。")
+                    )
                     self.page.snack_bar.open = True
                     self.page.update()
                     self.load_data()  # 最新の情報を再読み込み
@@ -153,7 +169,11 @@ class DetailPage(ft.View):
             if decedent:
                 db.delete(decedent)  # cascade="all, delete-orphan" により相続人も削除
                 db.commit()
-                self.page.snack_bar = ft.SnackBar(ft.Text(f"{decedent.name}を削除しました。", bgcolor=ft.Colors.RED_600))
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text(
+                        f"{decedent.name}を削除しました。", bgcolor=ft.Colors.RED_600
+                    )
+                )
                 self.page.snack_bar.open = True
                 self.page.go("/")  # 削除後、ホーム画面へ遷移
                 return
@@ -167,7 +187,7 @@ class DetailPage(ft.View):
             icon=ft.icons.EDIT,
             # 修正点: 編集画面へページ遷移
             on_click=lambda e: self.page.go(f"/heir/{self.decedent_id}/{heir.id}"),
-            tooltip="編集"
+            tooltip="編集",
         )
         # 相続人削除ボタン（削除は削除画面で行うため、ここでは削除します）
         # -> 相続人リストの Row から削除ボタンを削除します
@@ -184,14 +204,15 @@ class DetailPage(ft.View):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             padding=ft.padding.only(left=15, right=5, top=5, bottom=5),
             border=ft.border.only(bottom=ft.border.BorderSide(0.5, ft.colors.BLACK12)),
-
         )
         self.heirs_list_column.controls.append(heir_row)
 
     def open_heir_dialog(self, e, heir: Optional[Heir] = None):
         """相続人の追加処理を画面遷移に変更"""
         if self.decedent_id is None:
-            self.page.snack_bar = ft.SnackBar(ft.Text("まず被相続人を登録してください。"))
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("まず被相続人を登録してください。")
+            )
             self.page.snack_bar.open = True
             self.page.update()
             return
@@ -203,7 +224,8 @@ class DetailPage(ft.View):
             """ダイアログから相続人情報を保存/更新する"""
             if not heir_name_input.value or not heir_relationship_input.value:
                 e.control.page.snack_bar = ft.SnackBar(
-                    ft.Text("名前と続柄を入力してください。", bgcolor=ft.Colors.RED_400))
+                    ft.Text("名前と続柄を入力してください。", bgcolor=ft.Colors.RED_400)
+                )
                 e.control.page.snack_bar.open = True
                 e.control.page.update()
                 return
@@ -215,7 +237,7 @@ class DetailPage(ft.View):
                     new_heir = Heir(
                         decedent_id=self.decedent_id,
                         name=heir_name_input.value,
-                        relationship=heir_relationship_input.value
+                        relationship=heir_relationship_input.value,
                     )
                     db.add(new_heir)
                     db.commit()
@@ -238,16 +260,15 @@ class DetailPage(ft.View):
         self.page.dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("相続人 新規/編集"),
-            content=ft.Column(
-                [
-                    heir_name_input,
-                    heir_relationship_input
-                ],
-                tight=True
-            ),
+            content=ft.Column([heir_name_input, heir_relationship_input], tight=True),
             actions=[
-                ft.TextButton("キャンセル", on_click=lambda e: (
-                setattr(e.control.page.dialog, "open", False), e.control.page.update())),
+                ft.TextButton(
+                    "キャンセル",
+                    on_click=lambda e: (
+                        setattr(e.control.page.dialog, "open", False),
+                        e.control.page.update(),
+                    ),
+                ),
                 ft.TextButton("保存", on_click=save_heir),
             ],
             actions_alignment=ft.MainAxisAlignment.END,

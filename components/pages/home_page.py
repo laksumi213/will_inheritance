@@ -1,7 +1,8 @@
-# --- 修正後の pages/home_page.py ---
+# /components/pages//home_page.py
 
 import flet as ft
 from sqlalchemy.orm import Session
+
 from db_config import get_db
 from models import Decedent
 
@@ -11,7 +12,11 @@ class HomePage(ft.View):
         super().__init__(
             "/",
             [
-                ft.AppBar(title=ft.Text("被相続人一覧 (ホーム)", size=20, weight=ft.FontWeight.BOLD)),
+                ft.AppBar(
+                    title=ft.Text(
+                        "被相続人一覧 (ホーム)", size=20, weight=ft.FontWeight.BOLD
+                    )
+                ),
                 ft.Container(
                     ft.Text("新規被相続人を登録", color=ft.Colors.BLUE_600),
                     on_click=lambda e: page.go("/detail/new"),
@@ -24,11 +29,11 @@ class HomePage(ft.View):
                     ],
                     scroll=ft.ScrollMode.ADAPTIVE,
                     expand=True,
-                    key="decedent_list_container"
+                    key="decedent_list_container",
                     # key="main_content"
-                )
+                ),
             ],
-            scroll=ft.ScrollMode.ADAPTIVE
+            scroll=ft.ScrollMode.ADAPTIVE,
         )
         self.page = page
 
@@ -43,7 +48,7 @@ class HomePage(ft.View):
             db: Session
             for db in get_db():
                 decedents = db.query(Decedent).all()
-                break # ジェネレーターからセッションを取得したらbreak
+                break  # ジェネレーターからセッションを取得したらbreak
         except Exception as err:
             self.page.snack_bar = ft.SnackBar(ft.Text(f"DB読み込みエラー: {err}"))
             self.page.snack_bar.open = True
@@ -61,15 +66,22 @@ class HomePage(ft.View):
                         [
                             ft.Text(f"ID: {decedent.id}"),
                             ft.VerticalDivider(),
-                            ft.Text(f"被相続人: {decedent.name}", expand=True, size=16, weight=ft.FontWeight.BOLD),
+                            ft.Text(
+                                f"被相続人: {decedent.name}",
+                                expand=True,
+                                size=16,
+                                weight=ft.FontWeight.BOLD,
+                            ),
                             ft.Text(f"没年月日: {decedent.death_date or '未登録'}"),
-                            ft.Icon(ft.Icons.CHEVRON_RIGHT)
+                            ft.Icon(ft.Icons.CHEVRON_RIGHT),
                         ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                     on_click=lambda e, did=decedent.id: self.page.go(f"/detail/{did}"),
                     padding=15,
-                    border=ft.border.only(bottom=ft.border.BorderSide(1, ft.Colors.BLACK12)),
+                    border=ft.border.only(
+                        bottom=ft.border.BorderSide(1, ft.Colors.BLACK12)
+                    ),
                     ink=True,
                 )
                 list_controls.append(row)
