@@ -37,6 +37,16 @@ def delete_deceased(deceased_id: int):
             session.commit()
 
 
+def update_deceased(deceased_id: int, name: str, dob: str):
+    """指定されたIDの被相続人の名前と生年月日を更新する。"""
+    with Session(bind=Engine) as session:
+        deceased = session.query(Deceased).get(deceased_id)
+        if deceased:
+            deceased.name = name
+            deceased.date_of_birth = dob
+            session.commit()
+
+
 # 相続人関連のデータアクセスロジック（必要に応じてheir_service.pyに分離しても良い）
 
 
@@ -52,4 +62,14 @@ def delete_heir(heir_id: int):
         heir_to_delete = session.query(Heir).get(heir_id)
         if heir_to_delete:
             session.delete(heir_to_delete)
+            session.commit()
+
+
+def update_heir(heir_id: int, name: str, rel: str):
+    """指定されたIDの相続人の名前と続柄を更新する。"""
+    with Session(bind=Engine) as session:
+        heir = session.query(Heir).get(heir_id)
+        if heir:
+            heir.name = name
+            heir.relationship_name = rel
             session.commit()
