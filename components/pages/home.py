@@ -150,15 +150,6 @@ def DeceasedListView(page: Page):
         deceased_service.delete_deceased(deceased_id_to_delete)  # サービスを呼び出す
         update_deceased_list_ui()
 
-    def update_deceased(deceased_id: int, name: str, dob: str):
-        """指定されたIDの被相続人の名前と生年月日を更新する。"""
-        with Session(bind=Engine) as session:
-            deceased = session.query(Deceased).get(deceased_id)
-            if deceased:
-                deceased.name = name
-                deceased.date_of_birth = dob
-                session.commit()
-
     # 初期リストの表示
     update_deceased_list_ui()
 

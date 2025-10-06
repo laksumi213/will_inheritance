@@ -130,9 +130,15 @@ def DeceasedDetailView(page: Page, deceased_id: int):
                         Icons.EDIT,
                         icon_color=Colors.BLUE_500,
                         data=heir.id,
-                        on_click=lambda e: toggle_heir_edit(
-                            e, True, heir_name_field, heir_rel_field, e.control.parent
+                        # ★★★ 修正箇所: デフォルト引数を使って、TextFieldインスタンスをクロージャに固定
+                        on_click=lambda e,
+                        name_f=heir_name_field,
+                        rel_f=heir_rel_field: toggle_heir_edit(
+                            e, True, name_f, rel_f, e.control.parent
                         ),
+                        # on_click=lambda e: toggle_heir_edit(
+                        #     e, True, heir_name_field, heir_rel_field, e.control.parent
+                        # ),
                     ),
                 ],
                 spacing=0,
@@ -154,9 +160,9 @@ def DeceasedDetailView(page: Page, deceased_id: int):
                     alignment=MainAxisAlignment.SPACE_BETWEEN,
                 )
             )
+        page.update()
 
-            # 4. 相続人の編集モードを切り替える関数
-
+    # 4. 相続人の編集モードを切り替える関数
     def toggle_heir_edit(
         e,
         is_editing: bool,
@@ -195,7 +201,13 @@ def DeceasedDetailView(page: Page, deceased_id: int):
                     ),
                 )
             )
-        page.update()
+        # ★ 修正: save_heir_dataでリスト全体の更新を行うため、ここではpage.update()を呼び出さない
+        # page.update() # ここをコメントアウト/削除
+
+        # ただし、controls_row のコントロール変更を反映させるために、ここで page.update() が必要。
+        # 論理的なシンプルさを優先し、page.update()を復活させ、save_heir_dataでupdate_heirs_list()を呼ぶのが最善。
+
+        page.update()  # ★ controls_row内のボタン変更を反映させるために必要
 
     # 5. 相続人データを保存する関数
     def save_heir_data(
@@ -209,8 +221,11 @@ def DeceasedDetailView(page: Page, deceased_id: int):
             # サービス層の更新関数を呼び出す
             deceased_service.update_heir(heir_id, name, rel)
 
-            # 編集モードを終了
+            # 編集モードを終了 (ここで controls_row のボタンが切り替わる)
             toggle_heir_edit(e, False, name_field, rel_field, controls_row)
+
+            # ★ 修正: リスト全体を最新の情報で完全に再構築する
+            update_heirs_list()
         # エラー処理は省略
 
         # heirs_controls.controls.append(
