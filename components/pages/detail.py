@@ -1,6 +1,8 @@
 # /components/pages/detail.py
 
+import requests
 from flet import (
+    AlertDialog,
     AppBar,
     Colors,
     Column,
@@ -16,20 +18,45 @@ from flet import (
     Row,
     ScrollMode,
     Text,
+    TextButton,
     TextField,
     View,
     border,
 )
 
-from services import deceased_service  # サービス層からデータ操作関数をインポート
+from services import deceased_service
+from services.deceased_service import get_address_info
+
+# --- 1. モーダル編集で使用するフィールド定義 (DeceasedDetailView関数の外で定義) ---
+
+# 氏名・基本情報
+dialog_name_last_field = TextField(label="氏名 (姓)", width=150)
+dialog_name_first_field = TextField(label="氏名 (名)", width=150)
+dialog_kana_last_field = TextField(label="ふりがな (姓)", width=150)
+dialog_kana_first_field = TextField(label="ふりがな (名)", width=150)
+dialog_rel_field = TextField(label="続柄", width=200)
+
+# 住所・本籍地
+dialog_hometown_field = TextField(label="本籍地 (全体)")
+dialog_zip_field = TextField(label="郵便番号", width=150)
+dialog_pref_field = TextField(label="都道府県", width=150)
+dialog_city_field = TextField(label="市区町村", width=200)
+dialog_street_field = TextField(label="番地", width=150)
+dialog_building_field = TextField(label="建物名・部屋番号")
+
+# 日付
+dialog_dob_field = TextField(label="生年月日 (YYYY-MM-DD)", width=180)
+dialog_dod_field = TextField(label="死亡日 (YYYY-MM-DD)", width=180)
+
+# タイトルコントロール
+dialog_title_control = Text("情報編集", weight=FontWeight.BOLD)
 
 
 def DeceasedDetailView(page: Page, deceased_id: int):
-    # サービス層からデータを取得
+    # --- サービス層からデータを取得 ---
     deceased = deceased_service.get_deceased_by_id(deceased_id)
 
     if not deceased:
-        # ... エラー処理 (省略)
         return View(
             "/detail",
             [
@@ -39,117 +66,227 @@ def DeceasedDetailView(page: Page, deceased_id: int):
             ],
         )
 
-    # 被相続人情報のためのコントロール（初期値設定）
-    deceased_name_field = TextField(
-        value=deceased.name,
-        label="被相続人名",
-        read_only=True,
-        border_color=Colors.TRANSPARENT,
-    )
-    deceased_dob_field = TextField(
-        value=deceased.date_of_birth,
-        label="生年月日(YYYY-MM-DD)",
-        read_only=True,
-        border_color=Colors.TRANSPARENT,
-    )
-    deceased_edit_button = IconButton(
-        Icons.EDIT,
-        icon_color=Colors.BLUE_500,
-        on_click=lambda e: toggle_deceased_edit(e, True),
-    )
-    deceased_save_button = IconButton(
-        Icons.SAVE,
-        icon_color=Colors.GREEN_500,
-        visible=False,
-        on_click=lambda e: save_deceased_data(e),
-    )
+    # ★ スコープ修正: 表示用変数を最初に定義
+    full_name = f"{deceased.name_last} {deceased.name_first}"
+    dob_str = str(deceased.date_of_birth) if deceased.date_of_birth else ""
+    dod_str = str(deceased.date_of_death) if deceased.date_of_death else "未登録"
 
-    # UI要素の準備
     heirs_controls = Column()
-    new_heir_name_field = TextField(label="相続人名", width=200)
+    new_heir_name_field = TextField(label="相続人名 (姓 名)", width=200)
     new_heir_rel_field = TextField(label="続柄", width=150)
 
-    # 1. 被相続人の編集モードを切り替える関数
-    def toggle_deceased_edit(e, is_editing: bool):
-        deceased_name_field.read_only = not is_editing
-        deceased_dob_field.read_only = not is_editing
-        deceased_name_field.border_color = (
-            Colors.BLACK12 if is_editing else Colors.TRANSPARENT
+    # --- 共通モーダル定義 ---
+    def create_edit_dialog(is_deceased: bool):
+        # 続柄フィールドは被相続人（本人）の場合は表示しない (簡易的なUI制御)
+        rel_row = Row([dialog_rel_field])
+        if is_deceased:
+            rel_row.visible = False
+
+        date_rows = [Row([dialog_dob_field])]
+        if is_deceased:
+            date_rows.append(Row([dialog_dod_field]))
+
+        return AlertDialog(
+            modal=True,
+            title=dialog_title_control,
+            content=Container(
+                content=Column(
+                    [
+                        Text("基本情報", weight=FontWeight.BOLD),
+                        Row([dialog_name_last_field, dialog_name_first_field]),
+                        Row([dialog_kana_last_field, dialog_kana_first_field]),
+                        rel_row,
+                        *date_rows,
+                        Divider(),
+                        Text("住所情報", weight=FontWeight.BOLD),
+                        Row([dialog_zip_field, dialog_pref_field, dialog_city_field]),
+                        Row([dialog_street_field, dialog_building_field]),
+                        Divider(),
+                        dialog_hometown_field,
+                        Text(
+                            f"【タイプ: {'被相続人' if is_deceased else '相続人'}】",
+                            color=Colors.BLUE_500,
+                        ),
+                    ],
+                    scroll=ScrollMode.AUTO,
+                    tight=True,
+                    spacing=10,
+                ),
+                width=650,
+                height=550,
+            ),
+            actions=[
+                TextButton("キャンセル", on_click=lambda e: close_dialog()),
+                ElevatedButton("保存", on_click=lambda e: save_dialog(is_deceased)),
+            ],
+            actions_alignment=MainAxisAlignment.END,
         )
-        deceased_dob_field.border_color = (
-            Colors.BLACK12 if is_editing else Colors.TRANSPARENT
-        )
-        deceased_edit_button.visible = not is_editing
-        deceased_save_button.visible = is_editing
+
+    # モーダルインスタンスを生成
+    heir_edit_dialog = create_edit_dialog(is_deceased=False)
+    deceased_edit_dialog = create_edit_dialog(is_deceased=True)
+
+    # --- モーダル制御関数 ---
+    def close_dialog():
+        # if page.dialog:
+        if deceased_edit_dialog.open:
+            deceased_edit_dialog.open = False
+        elif heir_edit_dialog.open:
+            heir_edit_dialog.open = False
         page.update()
 
-    # 2. 被相続人データを保存する関数
-    def save_deceased_data(e):
-        name = deceased_name_field.value.strip()
-        dob = deceased_dob_field.value.strip()
+    def save_dialog(is_deceased: bool):
+        # 画面上のフィールドから値を取得 (簡易)
+        name = f"{dialog_name_last_field.value.strip()} {dialog_name_first_field.value.strip()}"
+        zip_code = dialog_zip_field.value.strip()
+        pref = dialog_pref_field.value.strip()
+        city = dialog_city_field.value.strip()
+        street = dialog_street_field.value.strip()
+        building = dialog_building_field.value.strip()
 
-        if name and dob:
-            # サービス層の更新関数を呼び出す
-            deceased_service.update_deceased(deceased_id, name, dob)
-
-            # 編集モードを終了
-            toggle_deceased_edit(e, False)
-            page.update()  # 変更が反映された状態で再描画
+        if is_deceased:
+            # 被相続人の保存
+            deceased_service.update_deceased(
+                deceased_id,
+                name,
+                dialog_dob_field.value.strip(),
+                dod=dialog_dod_field.value.strip(),
+                zip_code=zip_code,
+                pref=pref,
+                city=city,
+                street=street,
+                building=building,
+            )
         else:
-            # エラーメッセージ表示など (今回は省略)
-            pass
+            # 相続人の保存
+            heir_id = heir_edit_dialog.data
+            rel = dialog_rel_field.value.strip()
+            deceased_service.update_heir(
+                heir_id,
+                name,
+                rel,
+                zip_code=zip_code,
+                pref=pref,
+                city=city,
+                street=street,
+                building=building,
+            )
 
-    # 相続人リストを更新する関数
+        close_dialog()
+
+        # メイン画面の被相続人情報表示を更新するため、画面全体を再読み込み (または page.go(page.route))
+        page.go(f"/detail/{deceased_id}")
+
+    def open_deceased_dialog(e):
+        # 被相続人データをロード
+        dialog_title_control.value = "被相続人情報 編集"
+
+        dialog_name_last_field.value = deceased.name_last
+        dialog_name_first_field.value = deceased.name_first
+        dialog_kana_last_field.value = deceased.name_last_kana or ""
+        dialog_kana_first_field.value = deceased.name_first_kana or ""
+        dialog_dob_field.value = (
+            str(deceased.date_of_birth) if deceased.date_of_birth else ""
+        )
+        dialog_dod_field.value = (
+            str(deceased.date_of_death) if deceased.date_of_death else ""
+        )
+        dialog_rel_field.value = deceased.relationship_type
+        dialog_hometown_field.value = deceased.hometown or ""
+
+        # ★ 住所データを取得し、フィールドを更新 ★
+        address_info = get_address_info("deceased", deceased_id)
+        dialog_zip_field.value = address_info.get("zip_code", "")
+        dialog_pref_field.value = address_info.get("prefecture", "")
+        dialog_city_field.value = address_info.get("city_ward_town", "")
+        dialog_street_field.value = address_info.get("street_address", "")
+        dialog_building_field.value = address_info.get("building_name", "")
+
+        page.open(deceased_edit_dialog)
+        # page.dialog = deceased_edit_dialog
+        # deceased_edit_dialog.open = True
+        page.update()
+
+    def open_heir_dialog(e, heir_id: int):
+        current_deceased = deceased_service.get_deceased_by_id(deceased_id)
+        heir_to_edit = next(
+            (h for h in current_deceased.heirs if h.id == heir_id), None
+        )
+
+        if heir_to_edit:
+            heir_edit_dialog.data = heir_id
+            dialog_title_control.value = (
+                f"相続人情報 編集 ({heir_to_edit.name_last} {heir_to_edit.name_first})"
+            )
+
+            dialog_name_last_field.value = heir_to_edit.name_last
+            dialog_name_first_field.value = heir_to_edit.name_first
+            dialog_kana_last_field.value = heir_to_edit.name_last_kana or ""
+            dialog_kana_first_field.value = heir_to_edit.name_first_kana or ""
+            dialog_rel_field.value = heir_to_edit.relationship_type
+            dialog_dob_field.value = (
+                str(heir_to_edit.date_of_birth) if heir_to_edit.date_of_birth else ""
+            )
+            dialog_hometown_field.value = heir_to_edit.hometown or ""
+
+            # ★ 住所データを取得し、フィールドを更新 ★
+            address_info = get_address_info("heir", heir_id)
+            dialog_zip_field.value = address_info.get("zip_code", "")
+            dialog_pref_field.value = address_info.get("prefecture", "")
+            dialog_city_field.value = address_info.get("city_ward_town", "")
+            dialog_street_field.value = address_info.get("street_address", "")
+            dialog_building_field.value = address_info.get("building_name", "")
+
+            page.open(heir_edit_dialog)
+            # page.dialog = heir_edit_dialog
+            # heir_edit_dialog.open = True
+            page.update()
+
+    # --- 住所自動入力ロジック ---
+    def search_address_by_zip(e):
+        zip_code = dialog_zip_field.value.replace("-", "").strip()
+        if len(zip_code) == 7 and zip_code.isdigit():
+            try:
+                api_url = f"https://zipcloud.ibsnet.co.jp/api/search?zipcode={zip_code}"
+                response = requests.get(api_url)
+                data = response.json()
+                if data and data.get("results"):
+                    address_data = data["results"][0]
+                    dialog_pref_field.value = address_data["address1"]
+                    dialog_city_field.value = address_data["address2"]
+                    dialog_street_field.value = address_data["address3"]
+                    page.update()
+                else:
+                    dialog_pref_field.value = "住所が見つかりません"
+                    dialog_city_field.value = ""
+                    dialog_street_field.value = ""
+                    page.update()
+            except Exception as ex:
+                print(f"APIエラー: {ex}")
+        dialog_street_field.focus()
+
+    dialog_zip_field.on_blur = search_address_by_zip
+
+    # --- 3. 相続人リストの表示ロジック ---
     def update_heirs_list():
         heirs_controls.controls.clear()
-
-        # 詳細画面では再取得が必要なため、サービス層経由で最新のDeceasedオブジェクトを取得
         current_deceased = deceased_service.get_deceased_by_id(deceased_id)
 
         for heir in current_deceased.heirs:
-            # 3. 相続人の編集用フィールドとボタン
-            heir_name_field = TextField(
-                value=heir.name,
-                width=200,
-                data=heir.id,
-                read_only=True,
-                border_color=Colors.TRANSPARENT,
-            )
-            heir_rel_field = TextField(
-                value=heir.relationship_name,
-                width=150,
-                data=heir.id,
-                read_only=True,
-                border_color=Colors.TRANSPARENT,
-            )
-
-            # 編集ボタン (アイコンボタンの代わりにRowに入れて管理しやすくする)
-            edit_save_row = Row(
-                [
-                    IconButton(
-                        Icons.EDIT,
-                        icon_color=Colors.BLUE_500,
-                        data=heir.id,
-                        # ★★★ 修正箇所: デフォルト引数を使って、TextFieldインスタンスをクロージャに固定
-                        on_click=lambda e,
-                        name_f=heir_name_field,
-                        rel_f=heir_rel_field: toggle_heir_edit(
-                            e, True, name_f, rel_f, e.control.parent
-                        ),
-                        # on_click=lambda e: toggle_heir_edit(
-                        #     e, True, heir_name_field, heir_rel_field, e.control.parent
-                        # ),
-                    ),
-                ],
-                spacing=0,
-            )
+            heir_full_name = f"{heir.name_last} {heir.name_first}"
 
             heirs_controls.controls.append(
                 Row(
                     [
-                        heir_name_field,
-                        heir_rel_field,
-                        edit_save_row,
+                        Text(f"ID:{heir.id}", width=50),
+                        Text(f"名前: {heir_full_name}", width=200),
+                        Text(f"続柄: {heir.relationship_type}", width=150),
+                        IconButton(
+                            Icons.EDIT,
+                            icon_color=Colors.BLUE_500,
+                            data=heir.id,
+                            on_click=lambda e, h_id=heir.id: open_heir_dialog(e, h_id),
+                        ),
                         IconButton(
                             Icons.DELETE,
                             icon_color=Colors.RED_500,
@@ -157,110 +294,24 @@ def DeceasedDetailView(page: Page, deceased_id: int):
                             on_click=delete_heir,
                         ),
                     ],
-                    alignment=MainAxisAlignment.SPACE_BETWEEN,
+                    alignment=MainAxisAlignment.START,
                 )
             )
         page.update()
 
-    # 4. 相続人の編集モードを切り替える関数
-    def toggle_heir_edit(
-        e,
-        is_editing: bool,
-        name_field: TextField,
-        rel_field: TextField,
-        controls_row: Row,
-    ):
-        name_field.read_only = not is_editing
-        rel_field.read_only = not is_editing
-        name_field.border_color = Colors.BLACK12 if is_editing else Colors.TRANSPARENT
-        rel_field.border_color = Colors.BLACK12 if is_editing else Colors.TRANSPARENT
-
-        controls_row.controls.clear()
-
-        if is_editing:
-            # 編集モード: 保存ボタンを表示
-            controls_row.controls.append(
-                IconButton(
-                    Icons.SAVE,
-                    icon_color=Colors.GREEN_500,
-                    data=e.control.data,
-                    on_click=lambda event: save_heir_data(
-                        event, name_field, rel_field, controls_row
-                    ),
-                )
-            )
-        else:
-            # 表示モード: 編集ボタンを表示
-            controls_row.controls.append(
-                IconButton(
-                    Icons.EDIT,
-                    icon_color=Colors.BLUE_500,
-                    data=e.control.data,
-                    on_click=lambda event: toggle_heir_edit(
-                        event, True, name_field, rel_field, controls_row
-                    ),
-                )
-            )
-        # ★ 修正: save_heir_dataでリスト全体の更新を行うため、ここではpage.update()を呼び出さない
-        # page.update() # ここをコメントアウト/削除
-
-        # ただし、controls_row のコントロール変更を反映させるために、ここで page.update() が必要。
-        # 論理的なシンプルさを優先し、page.update()を復活させ、save_heir_dataでupdate_heirs_list()を呼ぶのが最善。
-
-        page.update()  # ★ controls_row内のボタン変更を反映させるために必要
-
-    # 5. 相続人データを保存する関数
-    def save_heir_data(
-        e, name_field: TextField, rel_field: TextField, controls_row: Row
-    ):
-        heir_id = e.control.data
-        name = name_field.value.strip()
-        rel = rel_field.value.strip()
-
-        if name:
-            # サービス層の更新関数を呼び出す
-            deceased_service.update_heir(heir_id, name, rel)
-
-            # 編集モードを終了 (ここで controls_row のボタンが切り替わる)
-            toggle_heir_edit(e, False, name_field, rel_field, controls_row)
-
-            # ★ 修正: リスト全体を最新の情報で完全に再構築する
-            update_heirs_list()
-        # エラー処理は省略
-
-        # heirs_controls.controls.append(
-        #     Row(
-        #         [
-        #             Text(f"名前: {heir.name}, 続柄: {heir.relationship_name}"),
-        #             IconButton(
-        #                 Icons.DELETE,
-        #                 icon_color=Colors.RED_500,
-        #                 data=heir.id,
-        #                 on_click=delete_heir,
-        #             ),
-        #         ],
-        #         alignment=MainAxisAlignment.SPACE_BETWEEN,
-        #     )
-        # )
-        page.update()
-
-    # 相続人を追加する関数 (ロジックはサービス層へ)
+    # --- 4. 追加/削除ロジック ---
     def add_heir(e):
         name = new_heir_name_field.value.strip()
         rel = new_heir_rel_field.value.strip()
-
         if name:
-            deceased_service.add_heir(deceased_id, name, rel)  # サービスを呼び出す
-
+            deceased_service.add_heir(deceased_id, name, rel)
             new_heir_name_field.value = ""
             new_heir_rel_field.value = ""
-
             update_heirs_list()
 
-    # 相続人を削除する関数 (ロジックはサービス層へ)
     def delete_heir(e):
         heir_id_to_delete = e.control.data
-        deceased_service.delete_heir(heir_id_to_delete)  # サービスを呼び出す
+        deceased_service.delete_heir(heir_id_to_delete)
         update_heirs_list()
 
     # 初期リストの表示
@@ -271,51 +322,53 @@ def DeceasedDetailView(page: Page, deceased_id: int):
         f"/detail/{deceased_id}",
         [
             AppBar(
-                title=Text("被相続人 詳細/相続人管理"),
-                bgcolor=Colors.BLUE_GREY_700,
+                title=Text("被相続人 詳細/相続人管理"), bgcolor=Colors.BLUE_GREY_700
             ),
             Container(
                 content=Column(
                     [
-                        Text("👤 被相続人情報 ✏️", size=18, weight=FontWeight.BOLD),
+                        Text(
+                            "👤 被相続人情報 ✏️ (クリックでモーダル編集)",
+                            size=18,
+                            weight=FontWeight.BOLD,
+                        ),
                         Row(
                             [
-                                deceased_name_field,
-                                deceased_dob_field,
-                                deceased_edit_button,
-                                deceased_save_button,
+                                Text(
+                                    f"名前: {full_name}",
+                                    weight=FontWeight.BOLD,
+                                    size=16,
+                                    width=200,
+                                ),
+                                Text(f"生年月日: {dob_str}", size=14, width=150),
+                                Text(f"死亡日: {dod_str}", size=14, width=150),
+                                IconButton(
+                                    Icons.EDIT,
+                                    icon_color=Colors.BLUE_500,
+                                    tooltip="被相続人を編集",
+                                    on_click=open_deceased_dialog,
+                                ),
                             ],
                             alignment=MainAxisAlignment.START,
                         ),
                         Divider(),
-                        Text("👨‍👩‍👧‍👦 相続人リスト ✏️", size=16),
+                        Text(
+                            "👨‍👩‍👧‍👦 相続人リスト (編集ボタンで全詳細情報モーダルが開きます)",
+                            size=16,
+                        ),
                         Container(
                             content=heirs_controls,
                             border=border.all(1, Colors.BLACK12),
                             padding=10,
                             width=page.width * 0.8,
                         ),
-                        # Text(
-                        #     f"被相続人名: {deceased.name}",
-                        #     weight=FontWeight.BOLD,
-                        #     size=18,
-                        # ),
-                        # Text(f"生年月日: {deceased.date_of_birth}"),
-                        # Divider(),
-                        # Text("👨‍👩‍👧‍👦 相続人リスト", size=16),
-                        # Container(
-                        #     content=heirs_controls,
-                        #     border=border.all(1, Colors.BLACK12),
-                        #     padding=10,
-                        #     width=page.width * 0.8,
-                        # ),
                         Divider(),
                         Text("新しい相続人の追加", size=16),
                         Row(
                             [
                                 new_heir_name_field,
                                 new_heir_rel_field,
-                                ElevatedButton("追加", on_click=add_heir),
+                                ElevatedButton("追加", on_click=lambda e: add_heir(e)),
                             ]
                         ),
                         Divider(),

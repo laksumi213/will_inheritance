@@ -1,16 +1,19 @@
 # /main.py
+
 import re
 
 from flet import Colors, CrossAxisAlignment, Page, app
 
 from components.pages.detail import DeceasedDetailView
 from components.pages.home import DeceasedListView
+
+# サービス層をインポート
 from services.db_setup import add_initial_data, init_db
 
 # データベースの初期化とテストデータの追加（アプリケーション起動時に一度だけ行う）
 
-init_db()
-add_initial_data()
+init_db()  # テーブル作成
+add_initial_data()  # 初期データ投入
 
 
 def main(page: Page):
