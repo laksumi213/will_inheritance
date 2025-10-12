@@ -56,20 +56,40 @@ def DeceasedDetailView(page: Page, deceased_id: int):
     # --- サービス層からデータを取得 ---
     deceased = deceased_service.get_deceased_by_id(deceased_id)
 
-    if not deceased:
-        return View(
-            "/detail",
-            [
-                AppBar(title=Text("エラー"), bgcolor=Colors.BLUE_GREY_900),
-                Text("指定された被相続人が見つかりません。", size=16),
-                ElevatedButton("一覧に戻る", on_click=lambda e: page.go("/")),
-            ],
-        )
+    if deceased:
+        full_name = f"{deceased.name_last} {deceased.name_first}"
+        dob_str = str(deceased.date_of_birth) if deceased.date_of_birth else ""
+        dod_str = str(deceased.date_of_death) if deceased.date_of_death else "未登録"
+        is_new_deceased = False
+    else:
+        # 新規登録の場合のデフォルト値
+        full_name = "【未登録】新規登録が必要です"
+        dob_str = "N/A"
+        dod_str = "N/A"
+        is_new_deceased = True  # 新規フラグ
+        # モーダルを開くためにダミーのオブジェクトを使用（モーダル内でデータは空でロードされる）
+        deceased = type(
+            "DummyDeceased",
+            (object,),
+            {
+                "name_last": "",
+                "name_first": "",
+                "name_last_kana": "",
+                "name_first_kana": "",
+                "date_of_birth": None,
+                "date_of_death": None,
+                "relationship_type": "本人",
+                "hometown": "",
+                "heirs": [],  # 相続人リストは空にしておく
+            },
+        )()
 
-    # ★ スコープ修正: 表示用変数を最初に定義
-    full_name = f"{deceased.name_last} {deceased.name_first}"
-    dob_str = str(deceased.date_of_birth) if deceased.date_of_birth else ""
-    dod_str = str(deceased.date_of_death) if deceased.date_of_death else "未登録"
+    # # ★ スコープ修正: 表示用変数を最初に定義
+    # full_name = f"{deceased.name_last} {deceased.name_first}" if deceased else ""
+    # # dob_str = str(deceased.date_of_birth) if deceased.date_of_birth else ""
+    # dob_str = str(deceased.date_of_birth) if deceased else ""
+    # # dod_str = str(deceased.date_of_death) if deceased.date_of_death else "未登録"
+    # dod_str = str(deceased.date_of_death) if deceased else ""
 
     heirs_controls = Column()
     new_heir_name_field = TextField(label="相続人名 (姓 名)", width=200)
@@ -138,6 +158,8 @@ def DeceasedDetailView(page: Page, deceased_id: int):
     def save_dialog(is_deceased: bool):
         # 画面上のフィールドから値を取得 (簡易)
         name = f"{dialog_name_last_field.value.strip()} {dialog_name_first_field.value.strip()}"
+        kana_last = dialog_kana_last_field.value.strip()
+        kana_first = dialog_kana_first_field.value.strip()
         zip_code = dialog_zip_field.value.strip()
         pref = dialog_pref_field.value.strip()
         city = dialog_city_field.value.strip()
@@ -149,8 +171,10 @@ def DeceasedDetailView(page: Page, deceased_id: int):
             deceased_service.update_deceased(
                 deceased_id,
                 name,
-                dialog_dob_field.value.strip(),
+                dob=dialog_dob_field.value.strip(),
                 dod=dialog_dod_field.value.strip(),
+                kana_last=kana_last,
+                kana_first=kana_first,
                 zip_code=zip_code,
                 pref=pref,
                 city=city,
@@ -165,6 +189,8 @@ def DeceasedDetailView(page: Page, deceased_id: int):
                 heir_id,
                 name,
                 rel,
+                kana_last=kana_last,
+                kana_first=kana_first,
                 zip_code=zip_code,
                 pref=pref,
                 city=city,
@@ -183,19 +209,21 @@ def DeceasedDetailView(page: Page, deceased_id: int):
 
         dialog_name_last_field.value = deceased.name_last
         dialog_name_first_field.value = deceased.name_first
-        dialog_kana_last_field.value = deceased.name_last_kana or ""
-        dialog_kana_first_field.value = deceased.name_first_kana or ""
+        dialog_kana_last_field.value = getattr(deceased, "name_last_kana", "") or ""
+        dialog_kana_first_field.value = getattr(deceased, "name_first_kana", "") or ""
         dialog_dob_field.value = (
             str(deceased.date_of_birth) if deceased.date_of_birth else ""
         )
         dialog_dod_field.value = (
             str(deceased.date_of_death) if deceased.date_of_death else ""
         )
-        dialog_rel_field.value = deceased.relationship_type
-        dialog_hometown_field.value = deceased.hometown or ""
+        dialog_rel_field.value = getattr(deceased, "relationship_type", "本人")
+        dialog_hometown_field.value = getattr(deceased, "hometown", "") or ""
 
         # ★ 住所データを取得し、フィールドを更新 ★
-        address_info = get_address_info("deceased", deceased_id)
+        address_info = (
+            get_address_info("deceased", deceased_id) if not is_new_deceased else {}
+        )
         dialog_zip_field.value = address_info.get("zip_code", "")
         dialog_pref_field.value = address_info.get("prefecture", "")
         dialog_city_field.value = address_info.get("city_ward_town", "")
@@ -203,9 +231,12 @@ def DeceasedDetailView(page: Page, deceased_id: int):
         dialog_building_field.value = address_info.get("building_name", "")
 
         page.open(deceased_edit_dialog)
-        # page.dialog = deceased_edit_dialog
-        # deceased_edit_dialog.open = True
         page.update()
+
+    def _on_mount(e):
+        if is_new_deceased:
+            # ページがマウントされた後にモーダルを開く
+            open_deceased_dialog(None)
 
     def open_heir_dialog(e, heir_id: int):
         current_deceased = deceased_service.get_deceased_by_id(deceased_id)
@@ -272,6 +303,11 @@ def DeceasedDetailView(page: Page, deceased_id: int):
         heirs_controls.controls.clear()
         current_deceased = deceased_service.get_deceased_by_id(deceased_id)
 
+        if current_deceased is None:
+            # 被相続人が存在しない（新規モード）場合、相続人リストは更新せずに終了
+            page.update()
+            return
+
         for heir in current_deceased.heirs:
             heir_full_name = f"{heir.name_last} {heir.name_first}"
 
@@ -318,68 +354,160 @@ def DeceasedDetailView(page: Page, deceased_id: int):
     update_heirs_list()
 
     # View の定義
-    return View(
+    view_controls = [
+        AppBar(title=Text("被相続人 詳細/相続人管理"), bgcolor=Colors.BLUE_GREY_700),
+        Container(
+            content=Column(
+                [
+                    Row(
+                        [
+                            Text(
+                                "👤 被相続人情報 ✏️ ",
+                                size=18,
+                                weight=FontWeight.BOLD,
+                            ),
+                            Text(
+                                "【新規登録モード】",
+                                size=16,
+                                color=Colors.RED_500,
+                                visible=is_new_deceased,
+                            ),
+                        ]
+                    ),
+                    Row(
+                        [
+                            Text(
+                                f"名前: {full_name}",
+                                weight=FontWeight.BOLD,
+                                size=16,
+                                width=200,
+                            ),
+                            Text(f"生年月日: {dob_str}", size=14, width=150),
+                            Text(f"死亡日: {dod_str}", size=14, width=150),
+                            IconButton(
+                                Icons.EDIT,
+                                icon_color=Colors.BLUE_500,
+                                tooltip="被相続人を編集",
+                                on_click=open_deceased_dialog,
+                            ),
+                        ],
+                        alignment=MainAxisAlignment.START,
+                    ),
+                    Divider(),
+                    # 💡 修正5: 被相続人未登録の場合は相続人セクションを非表示にする
+                    Column(
+                        [
+                            Text(
+                                "👨‍👩‍👧‍👦 相続人リスト (編集ボタンで全詳細情報モーダルが開きます)",
+                                size=16,
+                            ),
+                            Container(
+                                content=heirs_controls,
+                                border=border.all(1, Colors.BLACK12),
+                                padding=10,
+                                width=page.width * 0.8,
+                            ),
+                            Divider(),
+                            Text("新しい相続人の追加", size=16),
+                            Row(
+                                [
+                                    new_heir_name_field,
+                                    new_heir_rel_field,
+                                    ElevatedButton(
+                                        "追加", on_click=lambda e: add_heir(e)
+                                    ),
+                                ]
+                            ),
+                        ],
+                        visible=not is_new_deceased,  # 新規登録時は非表示
+                    ),
+                    Divider(),
+                    ElevatedButton("👈 一覧へ戻る", on_click=lambda e: page.go("/")),
+                ],
+                horizontal_alignment=CrossAxisAlignment.START,
+            ),
+            padding=20,
+        ),
+    ]
+
+    view = View(
         f"/detail/{deceased_id}",
-        [
-            AppBar(
-                title=Text("被相続人 詳細/相続人管理"), bgcolor=Colors.BLUE_GREY_700
-            ),
-            Container(
-                content=Column(
-                    [
-                        Text(
-                            "👤 被相続人情報 ✏️ (クリックでモーダル編集)",
-                            size=18,
-                            weight=FontWeight.BOLD,
-                        ),
-                        Row(
-                            [
-                                Text(
-                                    f"名前: {full_name}",
-                                    weight=FontWeight.BOLD,
-                                    size=16,
-                                    width=200,
-                                ),
-                                Text(f"生年月日: {dob_str}", size=14, width=150),
-                                Text(f"死亡日: {dod_str}", size=14, width=150),
-                                IconButton(
-                                    Icons.EDIT,
-                                    icon_color=Colors.BLUE_500,
-                                    tooltip="被相続人を編集",
-                                    on_click=open_deceased_dialog,
-                                ),
-                            ],
-                            alignment=MainAxisAlignment.START,
-                        ),
-                        Divider(),
-                        Text(
-                            "👨‍👩‍👧‍👦 相続人リスト (編集ボタンで全詳細情報モーダルが開きます)",
-                            size=16,
-                        ),
-                        Container(
-                            content=heirs_controls,
-                            border=border.all(1, Colors.BLACK12),
-                            padding=10,
-                            width=page.width * 0.8,
-                        ),
-                        Divider(),
-                        Text("新しい相続人の追加", size=16),
-                        Row(
-                            [
-                                new_heir_name_field,
-                                new_heir_rel_field,
-                                ElevatedButton("追加", on_click=lambda e: add_heir(e)),
-                            ]
-                        ),
-                        Divider(),
-                        ElevatedButton(
-                            "👈 一覧へ戻る", on_click=lambda e: page.go("/")
-                        ),
-                    ],
-                    horizontal_alignment=CrossAxisAlignment.START,
-                ),
-                padding=20,
-            ),
-        ],
+        view_controls,
         scroll=ScrollMode.AUTO,
     )
+
+    # ページがマウントされた時に自動でモーダルを開く設定
+    view.on_view_show = _on_mount
+
+    # 初期リストの表示 (新規の場合、heirs_controlsは空のまま)
+    if not is_new_deceased:
+        update_heirs_list()
+
+    return view
+
+    # # View の定義
+    # return View(
+    #     f"/detail/{deceased_id}",
+    #     [
+    #         AppBar(
+    #             title=Text("被相続人 詳細/相続人管理"), bgcolor=Colors.BLUE_GREY_700
+    #         ),
+    #         Container(
+    #             content=Column(
+    #                 [
+    #                     Text(
+    #                         "👤 被相続人情報 ✏️ (クリックでモーダル編集)",
+    #                         size=18,
+    #                         weight=FontWeight.BOLD,
+    #                     ),
+    #                     Row(
+    #                         [
+    #                             Text(
+    #                                 f"名前: {full_name}",
+    #                                 weight=FontWeight.BOLD,
+    #                                 size=16,
+    #                                 width=200,
+    #                             ),
+    #                             Text(f"生年月日: {dob_str}", size=14, width=150),
+    #                             Text(f"死亡日: {dod_str}", size=14, width=150),
+    #                             IconButton(
+    #                                 Icons.EDIT,
+    #                                 icon_color=Colors.BLUE_500,
+    #                                 tooltip="被相続人を編集",
+    #                                 on_click=open_deceased_dialog,
+    #                             ),
+    #                         ],
+    #                         alignment=MainAxisAlignment.START,
+    #                     ),
+    #                     Divider(),
+    #                     Text(
+    #                         "👨‍👩‍👧‍👦 相続人リスト (編集ボタンで全詳細情報モーダルが開きます)",
+    #                         size=16,
+    #                     ),
+    #                     Container(
+    #                         content=heirs_controls,
+    #                         border=border.all(1, Colors.BLACK12),
+    #                         padding=10,
+    #                         width=page.width * 0.8,
+    #                     ),
+    #                     Divider(),
+    #                     Text("新しい相続人の追加", size=16),
+    #                     Row(
+    #                         [
+    #                             new_heir_name_field,
+    #                             new_heir_rel_field,
+    #                             ElevatedButton("追加", on_click=lambda e: add_heir(e)),
+    #                         ]
+    #                     ),
+    #                     Divider(),
+    #                     ElevatedButton(
+    #                         "👈 一覧へ戻る", on_click=lambda e: page.go("/")
+    #                     ),
+    #                 ],
+    #                 horizontal_alignment=CrossAxisAlignment.START,
+    #             ),
+    #             padding=20,
+    #         ),
+    #     ],
+    #     scroll=ScrollMode.AUTO,
+    # )

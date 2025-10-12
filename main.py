@@ -2,10 +2,12 @@
 
 import re
 
-from flet import Colors, CrossAxisAlignment, Page, app
+from flet import Colors, CrossAxisAlignment, Page, View, app
 
 from components.pages.detail import DeceasedDetailView
-from components.pages.home import DeceasedListView
+
+# from components.pages.home import DeceasedListView
+from components.pages.home import CaseDashboardView
 
 # サービス層をインポート
 from services.db_setup import add_initial_data, init_db
@@ -27,7 +29,8 @@ def main(page: Page):
 
         # 1. メイン画面 (被相続人一覧)
         if page.route == "/":
-            page.views.append(DeceasedListView(page))
+            page.views.append(View(route="/", controls=[CaseDashboardView(page)]))
+            # page.views.append(CaseDashboardView(page))
 
         # 2. 詳細画面 (被相続人詳細/相続人管理)
         elif re.match(r"^/detail/(\d+)$", page.route):

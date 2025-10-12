@@ -143,6 +143,8 @@ def update_deceased(
     name: str,
     dob: str,
     dod: str = None,
+    kana_last: str = None,
+    kana_first: str = None,
     zip_code: str = None,
     pref: str = None,
     city: str = None,
@@ -171,6 +173,8 @@ def update_deceased(
             # 1. 基本情報の更新
             deceased.name_last = name_last
             deceased.name_first = name_first
+            deceased.name_last_kana = kana_last
+            deceased.name_first_kana = kana_first
             deceased.date_of_birth = dob_date
             deceased.date_of_death = dod_date
 
@@ -218,6 +222,8 @@ def update_heir(
     heir_id: int,
     name: str,
     rel: str,
+    kana_last: str = None,
+    kana_first: str = None,
     zip_code: str = None,
     pref: str = None,
     city: str = None,
@@ -237,6 +243,8 @@ def update_heir(
             # 1. 基本情報の更新
             heir.name_last = name_last
             heir.name_first = name_first
+            heir.name_last_kana = kana_last
+            heir.name_first_kana = kana_first
             heir.relationship_type = rel
 
             # 2. 住所情報の更新/作成
