@@ -23,6 +23,18 @@ def main(page: Page):
     page.bgcolor = Colors.AMBER_50
     page.horizontal_alignment = CrossAxisAlignment.CENTER
 
+    # 💡 画面サイズの調整
+    page.window.width = 1400  # 幅を広めに設定
+    page.window.height = 850  # 高さを設定 (タスクバーなどを考慮し、画面より少し小さく)
+    page.window.center()
+
+    # 💡 ウィンドウを最大化する設定を追加
+    # page.window_maximizable = True  # 最大化ボタンを有効にする
+    # page.window_maximized = True  # 起動時にウィンドウを最大化する
+    # page.window_resizable = True
+
+    page.update()
+
     # ルーティングの処理
     def route_change(route):
         page.views.clear()
@@ -33,9 +45,9 @@ def main(page: Page):
             # page.views.append(CaseDashboardView(page))
 
         # 2. 詳細画面 (被相続人詳細/相続人管理)
-        elif re.match(r"^/detail/(\d+)$", page.route):
-            match = re.match(r"^/detail/(\d+)$", page.route)
-            deceased_id = int(match.group(1))
+        elif re.match(r"^/detail/(-?\d+)$", page.route):
+            match = re.match(r"^/detail/(-?\d+)$", page.route)
+            deceased_id = int(match.group(1))  # -1 や 0、正の数をintとして正しく取得
             page.views.append(DeceasedDetailView(page, deceased_id))
 
         page.update()

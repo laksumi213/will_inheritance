@@ -1,5 +1,7 @@
 # /components/pages/home.py
 
+import threading  # 👈️ デバウンス用に追加
+
 from flet import (
     Colors,
     Column,
@@ -17,7 +19,12 @@ from flet import (
 )
 
 # サービス層をインポート
-from services.db_setup import get_case_list, get_incomplete_tasks
+from services.db_setup import (
+    get_case_list,
+    get_incomplete_tasks,
+    get_my_cases,
+    get_user_capacity_data,
+)
 
 
 class CaseDashboardView(Column):
@@ -25,6 +32,9 @@ class CaseDashboardView(Column):
     メインダッシュボード画面 (Todoリスト、コントロール、案件一覧を統合)
     Columnを継承し、自身がルートの縦方向コンテナとなる
     """
+
+    # 💡 デバウンスタイマーをクラス変数として保持
+    search_timer: threading.Timer = None
 
     def __init__(self, page: Page):
         # Columnの初期化。外側のRowと結合するため、ここではコントロールは定義しない
@@ -35,16 +45,28 @@ class CaseDashboardView(Column):
             horizontal_alignment=CrossAxisAlignment.START,
         )
         self.page = page
+
+        # 💡 追加: 役割判定 (実際は認証システムから取得)
+        # 仮にユーザーID 1 を管理職（Manager）とします。
+        self.current_user_id = 1
+        self.is_manager = True  # 👈️ 役割判定の仮実装
+
         self.search_field = TextField(
             label="案件番号/依頼者名で検索",
-            on_submit=self._run_search,
-            width=250,
+            on_change=self._debounce_search,
+            width=500,
             label_style=TextStyle(color=Colors.BLACK),
             color=Colors.BLACK,
         )
 
         # 内部で利用するUIコンポーネントを属性として保持
+        # 💡 役割によって異なるコンテナを初期化
+        if self.is_manager:
+            self.capacity_view_container = self._create_manager_capacity_view()
+
+        # 内部で利用するUIコンポーネントを属性として保持
         self.todo_list_container = self._create_todo_list_view()
+        self.my_case_list_container = self._create_my_case_list_view()
         self.main_list_view_column = self._create_main_list_view_column()
 
         # 画面のルートとなるRowを構築し、それをcontrolsに設定
@@ -57,11 +79,15 @@ class CaseDashboardView(Column):
                     vertical_alignment=CrossAxisAlignment.START,
                     spacing=20,
                     controls=[
-                        # 1. Todoリストエリア (左側、固定幅)
-                        self.todo_list_container,
+                        # 💡 修正: 左側のエリアを役割によってコントロールを切り替える
+                        Column(
+                            controls=self._get_left_sidebar_controls(),  # 👈️ 新しいヘルパー関数を呼び出し
+                            width=500,
+                            scroll="auto",
+                        ),
                         # メインコンテンツエリア (右側)
                         Column(
-                            expand=True,  # 残りの幅を全て使用
+                            expand=True,
                             controls=[
                                 # 2. コントロールエリア (上部)
                                 self._create_control_area(),
@@ -75,9 +101,62 @@ class CaseDashboardView(Column):
             )
         ]
 
-        # データをロード
-        # self._update_all_views()
         self.on_mount = self._on_mount
+
+    # 💡 追加: 左側サイドバーのコントロールを役割に応じて取得
+    def _get_left_sidebar_controls(self):
+        if self.is_manager:
+            return [
+                Text(
+                    "🔥 チーム業務負荷 (管理職ビュー)",
+                    size=16,
+                    weight="bold",
+                    color=Colors.RED_700,
+                ),
+                self.capacity_view_container,
+                Divider(),
+                # 管理職でも自分のToDoは必要
+                Text("📋 自分のToDo", size=16, weight="bold"),
+                self.todo_list_container,
+            ]
+        else:
+            return [
+                # 一般担当者の場合: Todoリストと担当案件リスト
+                self.todo_list_container,
+                Divider(),
+                self.my_case_list_container,
+            ]
+
+    # 💡 修正2: デバウンス関数を追加
+    def _debounce_search(self, e):
+        """入力停止後に検索を実行するためのデバウンス処理"""
+        # 既存のタイマーがあればキャンセル
+        if self.search_timer:
+            self.search_timer.cancel()
+
+        # 300ms後に _run_search_action を実行するタイマーを設定
+        self.search_timer = threading.Timer(
+            0.3, self._run_search_action, [e.control.value]
+        )
+        self.search_timer.start()
+
+    # 💡 修正3: デバウンスから呼ばれる実際の検索処理
+    def _run_search_action(self, search_term):
+        """デバウンス後に実行される検索処理"""
+        list_view = self.main_list_view_column.controls[-1]
+        list_view.controls = self._get_case_items(search_term)
+        self.page.run_thread(
+            self.update
+        )  # FletのUI更新はメインスレッドで行う必要がある
+
+    # 💡 修正4: on_submit 削除に伴い _run_search の定義を調整（デバウンス版を優先）
+    # 元の on_submit 処理を、デバウンス版の _run_search_action に置き換えるか、
+    # 既存の _run_search を以下のように調整します。
+    def _run_search(self, e):
+        """検索ボタン（残っている場合）のクリック処理"""
+        # デバウンス版を直接呼び出すか、_run_search_actionを呼ぶ
+        search_term = e.control.value if e.control and e.control.value else ""
+        self._run_search_action(search_term)
 
     def _on_mount(self, e):
         """コントロールがページに追加された後にデータをロードする"""
@@ -88,17 +167,107 @@ class CaseDashboardView(Column):
         # Todoリストの更新
         self.todo_list_container.content.controls = self._get_todo_items()
 
+        # # 💡 追加: 担当顧客リストの更新
+        # self.my_case_list_container.content.controls = self._get_my_case_items()
+
+        # 💡 追加: 管理職ビューの更新
+        if self.is_manager:
+            self.capacity_view_container.content.controls = self._get_capacity_items()
+        else:
+            self.my_case_list_container.content.controls = self._get_my_case_items()
+
         # メイン一覧の更新
         list_view = self.main_list_view_column.controls[-1]
         list_view.controls = self._get_case_items(self.search_field.value)
 
         self.update()
 
-    def _run_search(self, e):
-        """検索ボタンまたはEnterキーで案件一覧を更新"""
-        list_view = self.main_list_view_column.controls[-1]
-        list_view.controls = self._get_case_items(self.search_field.value)
-        self.update()
+    # 💡 追加: 管理職向けキャパシティビューのアイテム生成
+    def _get_capacity_items(self):
+        data = get_user_capacity_data()
+
+        items = []
+        for d in data:
+            # 負荷が高い担当者を強調
+            color = Colors.RED_700 if d["total_incomplete_tasks"] > 5 else Colors.BLACK
+
+            items.append(
+                ListTile(
+                    title=Text(
+                        f"{d['name']} ({d['role']})", weight="bold", color=color
+                    ),
+                    subtitle=Text(
+                        f"未完了タスク: {d['total_incomplete_tasks']} 件 | 担当案件数: {d['total_cases_handled']} 件"
+                    ),
+                    dense=True,
+                )
+            )
+        return items
+
+    # 💡 追加: 管理職向けキャパシティビューのコンテナ
+    def _create_manager_capacity_view(self):
+        """管理職が業務量を把握するためのUI"""
+        return Container(
+            content=Column(
+                controls=self._get_capacity_items(),
+                spacing=5,
+                scroll="auto",
+            ),
+            padding=10,
+            bgcolor=Colors.WHITE,
+            border_radius=10,
+            width=500,
+            height=300,  # 画面サイズに合わせて調整
+        )
+
+    def _get_my_case_items(self):
+        """担当顧客（案件）のデータを取得し、ListTileのリストとして返す"""
+        # ここではユーザーIDを固定値1としていますが、実際にはログインユーザーのIDを使用
+        # 💡 get_my_cases を呼び出し
+        cases = get_my_cases(user_id=1, limit=10)
+
+        if not cases:
+            return [Text("現在、担当案件はありません。", color=Colors.BLACK)]
+
+        items = [Text("あなたの担当案件", weight="bold", color=Colors.BLACK)]
+
+        for case in cases:
+
+            def open_detail(e, case_id=case["case_id"]):
+                self.page.go(f"/detail/{case_id}")
+
+            items.append(
+                ListTile(
+                    title=Text(
+                        f"案件: {case['case_number']}",
+                        color=Colors.BLACK,
+                        size=14,
+                    ),
+                    subtitle=Text(
+                        f"依頼者: {case['client_name']} | 状態: {case['status']}",
+                        color=Colors.BLACK,
+                        size=12,
+                    ),
+                    dense=True,
+                    on_click=open_detail,
+                )
+            )
+        return items
+
+    def _create_my_case_list_view(self):
+        """1.5. 担当顧客リストエリアのUI (Todoリストの下に配置)"""
+        return Container(
+            content=Column(
+                controls=self._get_my_case_items(),  # 💡 初期ロードメッセージは _update_all_views で上書きされる
+                spacing=5,
+                scroll="auto",
+            ),
+            padding=10,
+            bgcolor=Colors.WHITE,
+            border_radius=10,
+            width=500,
+            height=200,  # 画面サイズに合わせて調整
+        )
 
     def _get_case_items(self, search_term=""):
         """案件データを取得し、ListTileのリストとして返す"""
@@ -136,6 +305,12 @@ class CaseDashboardView(Column):
         items = [Text("期限が近いタスク", weight="bold", color=Colors.BLACK)]
 
         for task in tasks:
+            # 💡 修正5: タスククリックで案件詳細に遷移するロジック
+            case_id = task["case_id"]  # 👈️ サービス関数から取得したID
+
+            def open_detail(e, case_id=case_id):
+                self.page.go(f"/detail/{case_id}")
+
             items.append(
                 ListTile(
                     title=Text(
@@ -144,10 +319,11 @@ class CaseDashboardView(Column):
                         size=14,
                     ),
                     subtitle=Text(
-                        f"案件: {task['case_number']} | 期限: {task['due_date']}",
+                        f"案件: {task['case_number']}({task['client_name']}) | 期限: {task['due_date']}",
                         color=Colors.BLACK,
                     ),
                     dense=True,
+                    on_click=open_detail,  # 👈️ タスクから詳細へ遷移
                 )
             )
         return items
@@ -163,8 +339,8 @@ class CaseDashboardView(Column):
             padding=10,
             bgcolor=Colors.WHITE,
             border_radius=10,
-            width=350,
-            height=600,
+            width=500,
+            height=300,
         )
 
     def _create_control_area(self):
@@ -173,7 +349,9 @@ class CaseDashboardView(Column):
             content=Row(
                 controls=[
                     self.search_field,
-                    ElevatedButton("検索", on_click=self._run_search),
+                    ElevatedButton(
+                        "➕ 新規案件登録", on_click=lambda e: self.page.go("/detail/-1")
+                    ),
                     # ここにステータスフィルターなどのドロップダウンを追加可能
                 ],
                 alignment="start",

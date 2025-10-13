@@ -7,17 +7,17 @@ from datetime import date, datetime, time, timedelta
 # プロジェクトのルートディレクトリをパスに追加 (インポートエラー対策)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), ".", "..")))
 
-# 既存のインポートをそのまま続ける
-from services.db_setup import (
-    Base,  # 💡 クラス: データベースの宣言的ベースクラス (SQLAlchemy)
-    Case,  # 💡 クラス: 案件情報 (ケース) を格納するDBモデル
-    CaseStatus,  # 💡 クラス: 案件のステータス (例: 受託、作業中) を格納するDBモデル
-    Engine,  # 💡 クラス: データベース接続エンジン (SQLAlchemy)
-    Session,  # 💡 クラス: データベース操作を行うセッションクラス (SQLAlchemy)
-    Task,  # 💡 クラス: 個別のタスク (TODO) を格納するDBモデル
-    TaskTemplate,  # 💡 クラス: 定型タスクのテンプレート情報を格納するDBモデル
-    User,  # 💡 クラス: ユーザー (担当者) 情報を格納するDBモデル
-)
+# # 既存のインポートをそのまま続ける
+# from services.db_setup import (
+#     Base,  # 💡 クラス: データベースの宣言的ベースクラス (SQLAlchemy)
+#     Case,  # 💡 クラス: 案件情報 (ケース) を格納するDBモデル
+#     CaseStatus,  # 💡 クラス: 案件のステータス (例: 受託、作業中) を格納するDBモデル
+#     Engine,  # 💡 クラス: データベース接続エンジン (SQLAlchemy)
+#     Session,  # 💡 クラス: データベース操作を行うセッションクラス (SQLAlchemy)
+#     Task,  # 💡 クラス: 個別のタスク (TODO) を格納するDBモデル
+#     TaskTemplate,  # 💡 クラス: 定型タスクのテンプレート情報を格納するDBモデル
+#     User,  # 💡 クラス: ユーザー (担当者) 情報を格納するDBモデル
+# )
 
 # --- DBモデル定義の重複を回避するため、TaskTemplateなどのクラス定義は全てdb_setup.pyに移動します ---
 
@@ -29,6 +29,14 @@ def generate_case_tasks(db, case_id: int):
     特定の案件が受託された際に、定型タスクテンプレートに基づき、
     TaskテーブルにTODOレコードを一括生成するコアロジック。
     """
+
+    # 既存のインポートをそのまま続ける
+    from services.db_setup import (
+        Case,  # 💡 クラス: 案件情報 (ケース) を格納するDBモデル
+        Task,  # 💡 クラス: 個別のタスク (TODO) を格納するDBモデル
+        TaskTemplate,  # 💡 クラス: 定型タスクのテンプレート情報を格納するDBモデル
+    )
+
     # 💡 変数: データベースセッションオブジェクト
     # 💡 変数: タスクを生成する対象案件のID
     case = (
@@ -89,6 +97,10 @@ def generate_case_tasks(db, case_id: int):
 
 def setup_task_templates(db):
     """データベースに定型タスクテンプレート（TaskTemplate）を初期投入する"""
+
+    from services.db_setup import (
+        TaskTemplate,  # 💡 クラス: 定型タスクのテンプレート情報を格納するDBモデル
+    )
 
     # 役割: 担当2(False) または 担当1(True)
     templates = [
@@ -186,6 +198,12 @@ def setup_task_templates(db):
 
 def seed_db_users_and_cases(db):
     """UserとCaseの初期データを投入する (タスク生成テスト用)"""
+    from services.db_setup import (
+        Case,  # 💡 クラス: 案件情報 (ケース) を格納するDBモデル
+        CaseStatus,  # 💡 クラス: 案件のステータス (例: 受託、作業中) を格納するDBモデル
+        User,  # 💡 クラス: ユーザー (担当者) 情報を格納するDBモデル
+    )
+
     # 💡 変数: データベースセッションオブジェクト
     # ユーザー
     users_data = [  # 💡 変数: 投入するユーザーの初期データ (辞書のリスト)
@@ -244,10 +262,15 @@ def seed_db_users_and_cases(db):
 # --- 4. 実行ブロック (テスト) ---
 
 if __name__ == "__main__":
-    from services.db_setup import Base, Engine, Session
     # 💡 クラス: データベースの宣言的ベースクラス (SQLAlchemy)
     # 💡 クラス: データベース接続エンジン (SQLAlchemy)
     # 💡 クラス: データベース操作を行うセッションクラス (SQLAlchemy)
+    from services.db_setup import (
+        Base,
+        Engine,
+        Session,
+        Task,  # 💡 クラス: 個別のタスク (TODO) を格納するDBモデル
+    )
 
     # DBテーブル構造の作成（db_setup.pyで定義した全てのテーブルを作成）
     Base.metadata.create_all(Engine)
