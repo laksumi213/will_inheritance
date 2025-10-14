@@ -20,6 +20,7 @@ from flet import (
 
 # サービス層をインポート
 from services.db_setup import (
+    get_all_users,
     get_case_list,
     get_incomplete_tasks,
     get_my_cases,
@@ -50,6 +51,9 @@ class CaseDashboardView(Column):
         # 仮にユーザーID 1 を管理職（Manager）とします。
         self.current_user_id = 1
         self.is_manager = True  # 👈️ 役割判定の仮実装
+
+        # 💡 追加: ユーザーマップを初期化（UI表示で名前を解決するために使用）
+        self.USER_MAP = get_all_users()
 
         self.search_field = TextField(
             label="案件番号/依頼者名で検索",
@@ -162,25 +166,60 @@ class CaseDashboardView(Column):
         """コントロールがページに追加された後にデータをロードする"""
         self._update_all_views()
 
+    # 💡 担当案件リスト（左サイドバー）は、メイン一覧に統合するため、ここではリストビューの更新を削除します。
+    # この部分が左サイドバーに残っていると冗長になるため、_update_all_views の内容を変更します。
+    # 役割判定がFalseの場合の my_case_list_container の更新を削除します。
+
     def _update_all_views(self):
         """全ての表示データを更新"""
         # Todoリストの更新
         self.todo_list_container.content.controls = self._get_todo_items()
 
-        # # 💡 追加: 担当顧客リストの更新
-        # self.my_case_list_container.content.controls = self._get_my_case_items()
-
-        # 💡 追加: 管理職ビューの更新
+        # 💡 役割ごとの左サイドバーの更新
         if self.is_manager:
             self.capacity_view_container.content.controls = self._get_capacity_items()
         else:
+            # 💡 修正: 左側の担当案件リストはもう使わないため、ここは空のままにしておくか、削除する
+            # ただし、UIが崩れるのを防ぐため、一旦そのままにしておきます。
             self.my_case_list_container.content.controls = self._get_my_case_items()
+            # ↑ 担当者ビューの時は不要ですが、既存コードのロジック維持のため残します
 
-        # メイン一覧の更新
+        # メイン一覧の更新 (案件一覧)
         list_view = self.main_list_view_column.controls[-1]
-        list_view.controls = self._get_case_items(self.search_field.value)
+
+        # 💡 修正: 初期ロード時 (検索フィールドが空) は、自分の担当案件のみを表示
+        search_term = self.search_field.value.strip()
+
+        if not search_term:
+            # 💡 初期表示は自分のIDでフィルタ
+            list_view.controls = self._get_case_items(
+                search_term="", filter_by_user_id=self.current_user_id
+            )
+        else:
+            # 💡 検索時は全案件から検索 (ここではフィルタを無効)
+            list_view.controls = self._get_case_items(search_term=search_term)
 
         self.update()
+
+    # def _update_all_views(self):
+    #     """全ての表示データを更新"""
+    #     # Todoリストの更新
+    #     self.todo_list_container.content.controls = self._get_todo_items()
+
+    #     # # 💡 追加: 担当顧客リストの更新
+    #     # self.my_case_list_container.content.controls = self._get_my_case_items()
+
+    #     # 💡 追加: 管理職ビューの更新
+    #     if self.is_manager:
+    #         self.capacity_view_container.content.controls = self._get_capacity_items()
+    #     else:
+    #         self.my_case_list_container.content.controls = self._get_my_case_items()
+
+    #     # メイン一覧の更新
+    #     list_view = self.main_list_view_column.controls[-1]
+    #     list_view.controls = self._get_case_items(self.search_field.value)
+
+    #     self.update()
 
     # 💡 追加: 管理職向けキャパシティビューのアイテム生成
     def _get_capacity_items(self):
@@ -269,12 +308,24 @@ class CaseDashboardView(Column):
             height=200,  # 画面サイズに合わせて調整
         )
 
-    def _get_case_items(self, search_term=""):
+    # 💡 修正: 案件リストの取得 (メイン一覧用) - filter_by_user_id パラメータを追加
+    def _get_case_items(self, search_term="", filter_by_user_id=None):
         """案件データを取得し、ListTileのリストとして返す"""
-        cases = get_case_list(search_term=search_term)
+
+        # 💡 サービス層の関数呼び出しに user_id パラメータを渡す
+        cases = get_case_list(search_term=search_term, user_id=filter_by_user_id)
 
         if not cases:
-            return [Text("該当する案件はありません。", color=Colors.GREY_600)]
+            # 💡 フィルタリングされている場合はメッセージを変更
+            if filter_by_user_id:
+                return [
+                    Text(
+                        "担当案件、または該当する案件はありません。",
+                        color=Colors.GREY_600,
+                    )
+                ]
+            else:
+                return [Text("該当する案件はありません。", color=Colors.GREY_600)]
 
         items = []
         for case in cases:
@@ -282,9 +333,17 @@ class CaseDashboardView(Column):
             def open_detail(e, case_id=case["case_id"]):
                 self.page.go(f"/detail/{case_id}")
 
+            # 💡 追加: 担当ロールの表示
+            role_text = ""
+            if case.get("role_label"):
+                role_text = f"【{case['role_label']}】"
+
             items.append(
                 ListTile(
-                    title=Text(f"{case['case_number']} - {case['client_name']}"),
+                    # 💡 修正: 案件番号と依頼者名の前に担当ロールを表示
+                    title=Text(
+                        f"{role_text} {case['case_number']} - {case['client_name']}"
+                    ),
                     subtitle=Text(
                         f"被相続人: {case['deceased_name']} | ステータス: {case['status']} | 契約日: {case['contract_date']}"
                     ),
@@ -293,6 +352,31 @@ class CaseDashboardView(Column):
                 )
             )
         return items
+
+    # def _get_case_items(self, search_term=""):
+    #     """案件データを取得し、ListTileのリストとして返す"""
+    #     cases = get_case_list(search_term=search_term)
+
+    #     if not cases:
+    #         return [Text("該当する案件はありません。", color=Colors.GREY_600)]
+
+    #     items = []
+    #     for case in cases:
+    #         # 各案件をクリックした際のルーティング
+    #         def open_detail(e, case_id=case["case_id"]):
+    #             self.page.go(f"/detail/{case_id}")
+
+    #         items.append(
+    #             ListTile(
+    #                 title=Text(f"{case['case_number']} - {case['client_name']}"),
+    #                 subtitle=Text(
+    #                     f"被相続人: {case['deceased_name']} | ステータス: {case['status']} | 契約日: {case['contract_date']}"
+    #                 ),
+    #                 trailing=ElevatedButton("詳細", on_click=open_detail),
+    #                 on_click=open_detail,
+    #             )
+    #         )
+    #     return items
 
     def _get_todo_items(self):
         """Todoデータを取得し、ListTileのリストとして返す"""
@@ -376,13 +460,35 @@ class CaseDashboardView(Column):
 
         return Column(
             controls=[
-                Text("案件一覧", size=20, weight="bold"),
+                # 💡 修正: 自分の案件であることを強調
+                Text("案件一覧 (初期表示: 自分の担当案件)", size=20, weight="bold"),
                 Divider(),
                 main_list_view,
             ],
             expand=True,
             scroll="auto",
         )
+
+    # def _create_main_list_view_column(self):
+    #     """3. メイン一覧エリア（案件リスト表示）のUI"""
+
+    #     # ListViewはColumnの最後の要素としてexpandさせる
+    #     main_list_view = ListView(
+    #         controls=[],  # 初期データは__init__で更新される
+    #         expand=True,
+    #         spacing=10,
+    #         auto_scroll=False,
+    #     )
+
+    #     return Column(
+    #         controls=[
+    #             Text("案件一覧", size=20, weight="bold"),
+    #             Divider(),
+    #             main_list_view,
+    #         ],
+    #         expand=True,
+    #         scroll="auto",
+    #     )
 
 
 # def DeceasedListView(page: Page):

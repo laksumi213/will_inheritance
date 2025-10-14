@@ -9,6 +9,7 @@ from flet import (
     Container,
     CrossAxisAlignment,
     Divider,
+    Dropdown,
     ElevatedButton,
     FontWeight,
     IconButton,
@@ -22,9 +23,11 @@ from flet import (
     TextField,
     View,
     border,
+    dropdown,
 )
 
 from services import deceased_service
+from services.db_setup import get_all_users
 from services.deceased_service import get_address_info
 
 # --- 1. モーダル編集で使用するフィールド定義 (DeceasedDetailView関数の外で定義) ---
@@ -35,6 +38,23 @@ dialog_name_first_field = TextField(label="氏名 (名)", width=150)
 dialog_kana_last_field = TextField(label="ふりがな (姓)", width=150)
 dialog_kana_first_field = TextField(label="ふりがな (名)", width=150)
 dialog_rel_field = TextField(label="続柄", width=200)
+
+# 💡 追加: 担当者情報用のフィールド
+# ユーザーリストを最初にロード
+USER_MAP = get_all_users()
+USER_OPTIONS = [dropdown.Option(str(id), name) for id, name in USER_MAP.items()]
+USER_OPTIONS.insert(0, dropdown.Option(None, "未割当"))  # 未割当オプションを追加
+
+dialog_manager_field = Dropdown(
+    label="担当者1 (進捗管理)",
+    width=200,
+    options=USER_OPTIONS,
+    # None (未割当) を許容するためデフォルトは None に近い値
+    value=None,
+)
+dialog_operator_field = Dropdown(
+    label="担当者2 (実務担当)", width=200, options=USER_OPTIONS, value=None
+)
 
 # 住所・本籍地
 dialog_hometown_field = TextField(label="本籍地 (全体)")
@@ -58,22 +78,22 @@ def DeceasedDetailView(page: Page, deceased_id: int):
     # --- サービス層からデータを取得 ---
     deceased = deceased_service.get_deceased_by_id(deceased_id)
 
+    # 💡 案件情報を取得（担当者IDを取得するため）
+    # deceasedオブジェクトがcaseへのリレーション（deceased.case）を持つと仮定
+    case = None
+    if deceased and deceased.case:
+        case = deceased.case
+
     # 💡 新規モードのフラグを定義
     is_new_client_case = deceased_id == -1  # 新規案件（契約者登録）モード
     is_new_deceased = deceased_id == 0  # 被相続人単独の新規登録モード
 
-    if deceased and not is_new_client_case:
-        full_name = f"{deceased.name_last} {deceased.name_first}"
-        dob_str = str(deceased.date_of_birth) if deceased.date_of_birth else ""
-        dod_str = str(deceased.date_of_death) if deceased.date_of_death else "未登録"
-        # is_new_deceased は deceased_id=0 で処理
-
-    elif is_new_client_case or is_new_deceased:
+    if is_new_client_case or is_new_deceased or deceased is None:
         # 新規登録の場合のデフォルト値
         full_name = "【未登録】新規登録が必要です"
         dob_str = "N/A"
         dod_str = "N/A"
-        # モーダルを開くためにダミーのオブジェクトを使用（モーダル内でデータは空でロードされる）
+        # モーダルを開くためにダミーのオブジェクトを使用（deceasedがNoneの場合もこれで安全になる）
         deceased = type(
             "DummyDeceased",
             (object,),
@@ -87,13 +107,42 @@ def DeceasedDetailView(page: Page, deceased_id: int):
                 "relationship_type": "本人",
                 "hometown": "",
                 "heirs": [],  # 相続人リストは空にしておく
+                # 💡 注意: 他の箇所でアクセスされる可能性のある必要な属性を全て追加してください
             },
         )()
 
     else:
-        # deceased_id が存在しない、かつ新規モードではない場合（通常は発生しない）
-        # エラー処理やリダイレクトを追加することも可能
-        pass
+        full_name = f"{deceased.name_last} {deceased.name_first}"
+        dob_str = str(deceased.date_of_birth) if deceased.date_of_birth else ""
+        dod_str = str(deceased.date_of_death) if deceased.date_of_death else "未登録"
+        # is_new_deceased は deceased_id=0 で処理
+
+    # elif is_new_client_case or is_new_deceased:
+    #     # 新規登録の場合のデフォルト値
+    #     full_name = "【未登録】新規登録が必要です"
+    #     dob_str = "N/A"
+    #     dod_str = "N/A"
+    #     # モーダルを開くためにダミーのオブジェクトを使用（モーダル内でデータは空でロードされる）
+    #     deceased = type(
+    #         "DummyDeceased",
+    #         (object,),
+    #         {
+    #             "name_last": "",
+    #             "name_first": "",
+    #             "name_last_kana": "",
+    #             "name_first_kana": "",
+    #             "date_of_birth": None,
+    #             "date_of_death": None,
+    #             "relationship_type": "本人",
+    #             "hometown": "",
+    #             "heirs": [],  # 相続人リストは空にしておく
+    #         },
+    #     )()
+
+    # else:
+    #     # deceased_id が存在しない、かつ新規モードではない場合（通常は発生しない）
+    #     # エラー処理やリダイレクトを追加することも可能
+    #     pass
 
     heirs_controls = Column()
     new_heir_name_field = TextField(label="相続人名 (姓 名)", width=200)
@@ -116,6 +165,14 @@ def DeceasedDetailView(page: Page, deceased_id: int):
             # 被相続人編集時は案件番号は表示しない（登録済みのため）
             case_num_row.visible = False
 
+        # 💡 追加: 担当者選択行
+        assignment_row = Row([dialog_manager_field, dialog_operator_field])
+
+        # 被相続人情報編集時のみ表示（案件情報のため）
+        if not is_deceased:
+            # 相続人編集時は担当者情報は編集しない（案件情報のため）
+            assignment_row.visible = False
+
         return AlertDialog(
             modal=True,
             title=dialog_title_control,
@@ -123,6 +180,8 @@ def DeceasedDetailView(page: Page, deceased_id: int):
                 content=Column(
                     [
                         case_num_row,
+                        assignment_row,
+                        Divider(),
                         Text("基本情報", weight=FontWeight.BOLD),
                         Row([dialog_name_last_field, dialog_name_first_field]),
                         Row([dialog_kana_last_field, dialog_kana_first_field]),
@@ -182,9 +241,18 @@ def DeceasedDetailView(page: Page, deceased_id: int):
         rel = dialog_rel_field.value.strip()
         hometown = dialog_hometown_field.value.strip()
 
+        # 💡 追加: 担当者IDの取得
+        # Dropdownの値は文字列IDまたはNone
+        manager_id = (
+            int(dialog_manager_field.value) if dialog_manager_field.value else None
+        )
+        operator_id = (
+            int(dialog_operator_field.value) if dialog_operator_field.value else None
+        )
+
         if is_new_client_case:
-            # 契約者登録用の新規IDを発行 (deceased_id が実際のDB IDに更新される)
-            new_deceased = deceased_service.add_new_case_for_client_registration(
+            # 1. 契約者登録用の新規IDを発行 (deceased_id が実際のDB IDに更新される)
+            new_deceased_id = deceased_service.add_new_case_for_client_registration(
                 case_number=case_number,
                 name=name,
                 kana_last=kana_last,
@@ -201,11 +269,24 @@ def DeceasedDetailView(page: Page, deceased_id: int):
 
             # 新しいdeceased_idでリダイレクトし直す際に、被相続人登録画面を開くフラグを付加
             # page.go(f"/detail/{new_deceased.id}/next-deceased")
-            page.go(f"/detail/{new_deceased.id}")
+            page.go(f"/detail/{new_deceased_id}")
             return  # ここで処理を終了
 
         # 2. 被相続人の情報保存 (is_deceased=True かつ 既存または単独新規(ID=0))
         elif is_deceased:
+            # 💡 追加: 案件の担当者情報を更新
+            if deceased_id != 0:  # 既存案件の場合のみ
+                # deceased_id から case_id を取得する必要があるが、ここでは簡易的に service.update_case_assignment を呼ぶ
+
+                # 案件IDが必要なため、一度deceasedオブジェクトを取得し、case_idを取得する
+                current_deceased = deceased_service.get_deceased_by_id(deceased_id)
+                if current_deceased and current_deceased.case_id:
+                    deceased_service.update_case_assignment(
+                        case_id=current_deceased.case_id,
+                        manager_id=manager_id,
+                        operator_id=operator_id,
+                    )
+
             # 💡 既存の被相続人更新、または単独の新規被相続人登録（deceased_id=0の時）
             deceased_service.update_deceased(
                 deceased_id,
@@ -261,6 +342,7 @@ def DeceasedDetailView(page: Page, deceased_id: int):
 
         # メイン画面の被相続人情報表示を更新するため、画面全体を再読み込み (または page.go(page.route))
         page.go(f"/detail/{deceased_id}")
+        return
 
     def open_deceased_dialog(e):
         # 被相続人データをロード
@@ -278,6 +360,24 @@ def DeceasedDetailView(page: Page, deceased_id: int):
         )
         dialog_rel_field.value = getattr(deceased, "relationship_type", "本人")
         dialog_hometown_field.value = getattr(deceased, "hometown", "") or ""
+
+        # 💡 追加: 担当者ドロップダウンの初期値を設定
+        case = deceased_service.get_deceased_by_id(
+            deceased_id
+        ).case  # Caseオブジェクトの再取得 (リレーションがない場合を考慮)
+
+        if case:
+            # IDを文字列に変換して設定 (Dropdownは文字列のvalueを期待)
+            dialog_manager_field.value = (
+                str(case.manager_id) if case.manager_id else None
+            )
+            dialog_operator_field.value = (
+                str(case.operator_id) if case.operator_id else None
+            )
+        else:
+            # 新規案件/ケースなしの場合
+            dialog_manager_field.value = None
+            dialog_operator_field.value = None
 
         # ★ 住所データを取得し、フィールドを更新 ★
         address_info = (

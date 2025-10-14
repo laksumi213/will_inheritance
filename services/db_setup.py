@@ -585,7 +585,8 @@ def get_incomplete_tasks(user_id=None):
 
 
 # 💡 追加: 案件リストの取得 (メイン一覧用)
-def get_case_list(search_term="", status_id=None):
+# def get_case_list(search_term="", status_id=None):
+def get_case_list(search_term="", status_id=None, user_id=None):
     """案件一覧を取得する (検索・フィルタリング対応)"""
     db = Session()
     try:
@@ -620,6 +621,16 @@ def get_case_list(search_term="", status_id=None):
         for case, d_last, d_first, status_name in cases_data:
             deceased_name = f"{d_last} {d_first}" if d_last else "N/A"
 
+            # 💡 担当情報を付加
+            role_label = ""
+            if user_id:
+                if case.manager_id == user_id and case.operator_id == user_id:
+                    role_label = "担当1 & 2"
+                elif case.manager_id == user_id:
+                    role_label = "担当1"
+                elif case.operator_id == user_id:
+                    role_label = "担当2"
+
             case_list.append(
                 {
                     "case_id": case.case_id,
@@ -629,7 +640,10 @@ def get_case_list(search_term="", status_id=None):
                     "contract_date": case.contract_date.strftime("%Y/%m/%d")
                     if case.contract_date
                     else "N/A",
-                    "status": case.status_ref.name if case.status_ref else "N/A",
+                    "status": status_name,
+                    "role_label": role_label,  # 💡 新しく追加
+                    "manager_id": case.manager_id,  # 💡 担当IDを念のため追加
+                    "operator_id": case.operator_id,  # 💡 担当IDを念のため追加
                 }
             )
         return case_list
@@ -715,6 +729,35 @@ def get_user_capacity_data():
         capacity_data.sort(key=lambda x: x["total_incomplete_tasks"], reverse=True)
 
         return capacity_data
+    finally:
+        db.close()
+
+
+# 💡 追加: 全ユーザー（担当者）リストを取得
+def get_all_users():
+    """全てのユーザーIDと名前を取得する"""
+    db = Session()
+    try:
+        # Userクラスは既に定義されているとして利用
+        users = db.query(User.id, User.name).order_by(User.id).all()
+        # {ID: Name} の辞書形式で返す
+        return {id: name for id, name in users}
+    finally:
+        db.close()
+
+
+# 💡 追加: 案件の担当者情報を更新する関数
+def update_case_assignment(case_id: int, manager_id: int, operator_id: int):
+    """案件の担当者1 (manager_id) と担当者2 (operator_id) を更新する"""
+    db = Session()
+    try:
+        case = db.query(Case).filter(Case.case_id == case_id).first()
+        if case:
+            case.manager_id = manager_id
+            case.operator_id = operator_id
+            db.commit()
+            return True
+        return False
     finally:
         db.close()
 
