@@ -15,16 +15,8 @@ from sqlalchemy import (
     create_engine,
     func,
 )
-from sqlalchemy.orm import (
-    Session,
-    declarative_base,
-    joinedload,
-    relationship,
-    sessionmaker,
-)
+from sqlalchemy.orm import declarative_base, joinedload, relationship, sessionmaker
 
-# サービス層内のインポートは、相対パスまたはsys.pathの調整が必要ですが、
-# ここでは同じディレクトリに存在すると仮定して記述します。
 from services.task_generation_logic import (
     generate_case_tasks,
     seed_db_users_and_cases,
@@ -32,6 +24,7 @@ from services.task_generation_logic import (
 )
 
 # --- データベース接続設定 ---
+# 指定されたデータベースファイルパスを使用
 DATABASE_URL = "sqlite:///data/customer_management.db"
 Engine = create_engine(DATABASE_URL)
 Base = declarative_base()
@@ -43,62 +36,69 @@ def get_db():
     """DBセッションを取得するヘルパー関数"""
     db = Session()
     try:
-        yield db
+        return db
     finally:
         db.close()
 
-
-# 💡 以下、既存コードで定義されていた全てのDBモデル
 
 # --- 2. マスタテーブル (Master Data) ---
 
 
 class User(Base):
-    __tablename__ = "users"  # 担当者（アプリケーション利用者）
+    __tablename__ = "users"
+    # 【役割】 アプリケーションの利用者（担当1・担当2・管理者）のマスター情報
     id = Column(Integer, primary_key=True)
-    windows_id = Column(String, unique=True, nullable=False)  # 認証キー
-    role = Column(String, default="Operator")  # 役割 (Manager: 担当1, Operator: 担当2)
-    name = Column(String, nullable=False)  # 担当者名
+    windows_id = Column(
+        String, unique=True, nullable=False
+    )  # Windowsログインアカウント名 (認証キー)
+    role = Column(String, default="Operator")  # 役割 (Manager:担当1, Operator:担当2)
+    name = Column(String, nullable=False)  # 担当者名（フルネーム）
 
 
 class CaseStatus(Base):
-    __tablename__ = "case_statuses"  # 案件の進捗ステータス
+    __tablename__ = "case_statuses"
+    # 【役割】 案件が受託に至るまでの進捗ステータスを管理（例: 面談調整中, 受託）
     id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True, nullable=False)  # ステータス名 (例: 受託)
-    order_num = Column(Integer)  # ステータスの表示/処理順序
+    name = Column(String, unique=True, nullable=False)  # ステータス名
+    order_num = Column(Integer)  # ステータスの表示順/処理順
 
 
 class FinancialInstitution(Base):
-    __tablename__ = "institutions"  # 金融機関名のマスター
+    __tablename__ = "institutions"
+    # 【役割】 金融機関名のマスタ情報（表記ゆれ防止）
     id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True, nullable=False)  # 金融機関名
+    name = Column(String, unique=True, nullable=False)
 
 
 class DocumentType(Base):
-    __tablename__ = "document_types"  # 原本追跡対象書類のマスター
+    __tablename__ = "document_types"
+    # 【役割】 原本追跡の対象となる書類の種類マスタ (例: 印鑑登録証明書, 戸籍謄本)
     id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True, nullable=False)  # 書類名 (例: 戸籍謄本)
+    name = Column(String, unique=True, nullable=False)
 
 
 class ShippingMethod(Base):
-    __tablename__ = "shipping_methods"  # 追跡管理を行う送付方法のマスター
+    __tablename__ = "shipping_methods"
+    # 【役割】 追跡管理を行う送付方法のマスタ（追跡URL自動生成の元データ）
     id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True, nullable=False)  # 送付方法名 (例: レターパック)
+    name = Column(String, unique=True, nullable=False)  # 簡易書留, レターパックプラス
     tracking_base_url = Column(String, nullable=False)  # 追跡URLの基盤
     estimated_days = Column(Integer)  # 標準的な配達所要日数
 
 
 class SubmissionDocType(Base):
-    __tablename__ = "submission_doc_types"  # 顧客提出依頼書類のマスター
+    __tablename__ = "submission_doc_types"
+    # 【役割】 お客様に提出を依頼する各種書類のマスタ（例: 通帳写し, 源泉徴収票）
     id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True, nullable=False)  # 書類名 (例: 通帳写し)
+    name = Column(String, unique=True, nullable=False)
 
 
 # --- 3. 個人情報管理テーブル ---
 
 
 class Address(Base):
-    __tablename__ = "address"  # 住所情報の構成要素
+    __tablename__ = "address"
+    # 【役割】 住所情報を構成要素ごとに分離して管理（履歴管理の核）
     id = Column(Integer, primary_key=True)
     zip_code = Column(String)  # 郵便番号
     prefecture = Column(String, nullable=False)  # 都道府県
@@ -108,77 +108,100 @@ class Address(Base):
 
     deceased_history = relationship(
         "D_AddressHistory", back_populates="address", cascade="all, delete-orphan"
-    )
+    )  # 被相続人の住所履歴を参照
     heir_history = relationship(
         "H_AddressHistory", back_populates="address", cascade="all, delete-orphan"
-    )
+    )  # 相続人の住所履歴を参照
 
 
 class Contact(Base):
-    __tablename__ = "contact"  # 連絡先本体 (電話番号、メールなど)
+    __tablename__ = "contact"
+    # 【役割】 電話番号やメールアドレスなど、連絡先本体を管理
     id = Column(Integer, primary_key=True)
-    value = Column(String, nullable=False)  # 連絡先の値
-    type = Column(String, nullable=False)  # 種別 (PHONE, EMAIL)
-    sub_type = Column(String)  # 詳細種別 (自宅、携帯など)
+    value = Column(String, nullable=False)  # 連絡先の値（例: 090-xxxx-xxxx）
+    type = Column(String, nullable=False)  # 種別（PHONE, EMAIL）
+    sub_type = Column(String)  # 詳細種別（自宅、携帯など）
 
 
 class D_AddressHistory(Base):
-    __tablename__ = "d_address_history"  # 被相続人の住所履歴 (中間テーブル)
+    __tablename__ = "d_address_history"
+    # 【役割】 被相続人の住所とAddressマスタを結びつけ、履歴を管理する中間テーブル
     id = Column(Integer, primary_key=True)
     deceased_id = Column(
         Integer, ForeignKey("deceased.id"), nullable=False
-    )  # 被相続人ID
-    address_id = Column(Integer, ForeignKey("address.id"), nullable=False)  # 住所ID
-    is_last_address = Column(Boolean, nullable=False, default=False)  # 最後の住所フラグ
+    )  # 被相続人ID (FK)
+    address_id = Column(
+        Integer, ForeignKey("address.id"), nullable=False
+    )  # 住所ID (FK)
+    is_last_address = Column(
+        Boolean, nullable=False, default=False
+    )  # 最後の住所フラグ (Trueは一つ)
 
     deceased = relationship("Deceased", back_populates="address_links")
     address = relationship("Address", back_populates="deceased_history")
 
 
 class H_AddressHistory(Base):
-    __tablename__ = "h_address_history"  # 相続人の住所履歴 (中間テーブル)
+    __tablename__ = "h_address_history"
+    # 【役割】 相続人の住所とAddressマスタを結びつけ、履歴を管理する中間テーブル
     id = Column(Integer, primary_key=True)
-    heir_id = Column(Integer, ForeignKey("heirs.id"), nullable=False)  # 相続人ID
-    address_id = Column(Integer, ForeignKey("address.id"), nullable=False)  # 住所ID
+    heir_id = Column(Integer, ForeignKey("heirs.id"), nullable=False)  # 相続人ID (FK)
+    address_id = Column(
+        Integer, ForeignKey("address.id"), nullable=False
+    )  # 住所ID (FK)
     is_current_address = Column(
         Boolean, nullable=False, default=False
-    )  # 現在の住所フラグ
+    )  # 現在の住所フラグ (Trueは一つ)
 
     heir = relationship("Heir", back_populates="address_links")
     address = relationship("Address", back_populates="heir_history")
 
 
 class D_ContactLink(Base):
-    __tablename__ = "d_contact_link"  # 被相続人と連絡先を結ぶ中間テーブル
+    __tablename__ = "d_contact_link"
+    # 【役割】 被相続人と連絡先（Contact）を結びつける中間テーブル
     id = Column(Integer, primary_key=True)
-    deceased_id = Column(Integer, ForeignKey("deceased.id"), nullable=False)
-    contact_id = Column(Integer, ForeignKey("contact.id"), nullable=False)
+    deceased_id = Column(
+        Integer, ForeignKey("deceased.id"), nullable=False
+    )  # 被相続人ID (FK)
+    contact_id = Column(
+        Integer, ForeignKey("contact.id"), nullable=False
+    )  # 連絡先ID (FK)
 
     deceased = relationship("Deceased", back_populates="contact_links")
     contact = relationship("Contact")
 
 
 class H_ContactLink(Base):
-    __tablename__ = "h_contact_link"  # 相続人と連絡先を結ぶ中間テーブル
+    __tablename__ = "h_contact_link"
+    # 【役割】 相続人と連絡先（Contact）を結びつける中間テーブル
     id = Column(Integer, primary_key=True)
-    heir_id = Column(Integer, ForeignKey("heirs.id"), nullable=False)
-    contact_id = Column(Integer, ForeignKey("contact.id"), nullable=False)
+    heir_id = Column(Integer, ForeignKey("heirs.id"), nullable=False)  # 相続人ID (FK)
+    contact_id = Column(
+        Integer, ForeignKey("contact.id"), nullable=False
+    )  # 連絡先ID (FK)
 
     heir = relationship("Heir", back_populates="contact_links")
     contact = relationship("Contact")
 
 
 class CaseContactPoint(Base):
-    __tablename__ = "case_contact_points"  # 案件ごとの特別な連絡窓口
+    __tablename__ = "case_contact_points"
+    # 【役割】 案件ごとの特別な連絡窓口（高齢者の代理人、書類送付先など）を管理
     id = Column(Integer, primary_key=True)
-    case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)  # 案件ID
-    contact_person_name = Column(String)  # 第三者連絡先氏名
-    relationship_to_client = Column(String)
+    case_id = Column(
+        Integer, ForeignKey("cases.case_id"), nullable=False
+    )  # 案件ID (FK)
+
+    contact_person_name = Column(String)  # 連絡窓口となる第三者の氏名
+    relationship_to_client = Column(String)  # 契約者との関係性
     address_id = Column(Integer, ForeignKey("address.id"))
     contact_id = Column(Integer, ForeignKey("contact.id"))
 
-    is_primary_contact = Column(Boolean, default=False)
-    is_primary_mail_send_destination = Column(Boolean, default=False)
+    is_primary_contact = Column(Boolean, default=False)  # 主な電話連絡窓口フラグ
+    is_primary_mail_send_destination = Column(
+        Boolean, default=False
+    )  # 書類郵送の送付先フラグ
 
     case_ref = relationship("Case", back_populates="contact_points")
     address_ref = relationship("Address")
@@ -189,42 +212,48 @@ class CaseContactPoint(Base):
 
 
 class Case(Base):
-    __tablename__ = "cases"  # 遺産整理業務案件のコアハブ
+    __tablename__ = "cases"
+    # 【役割】 遺産整理業務全体のハブ、進捗、担当者、入金、期限を一元管理
     case_id = Column(Integer, primary_key=True)
-    case_number = Column(String, unique=True, nullable=False)  # 案件番号 (G0001)
-    folder_path = Column(String)
-    client_name = Column(String, nullable=False)  # 依頼者（契約者）名
-    client_name_kana = Column(String)  # 依頼者（契約者）ふりがな
+    case_number = Column(String, unique=True, nullable=False)  # 案件番号 (例: G0001)
+    client_name = Column(String, nullable=False)  # 依頼者（契約者）名 (漢字)
+    client_name_kana = Column(String)  # 依頼者（契約者）かな (検索用)
 
-    manager_id = Column(Integer, ForeignKey("users.id"))  # 担当1 (進捗管理責任者)
-    operator_id = Column(Integer, ForeignKey("users.id"))  # 担当2 (実務担当者)
+    # 担当者とステータス
+    manager_id = Column(Integer, ForeignKey("users.id"))  # 担当1: 進捗管理責任者 (FK)
+    operator_id = Column(Integer, ForeignKey("users.id"))  # 担当2: 実務担当者 (FK)
     current_status_id = Column(
         Integer, ForeignKey("case_statuses.id")
-    )  # 現在のステータス
+    )  # 受託までのステータス (FK)
 
+    # 入金情報
     fee_contract_amount = Column(Float, default=0.0)  # 契約時の総報酬額
-    deposit_required_amount = Column(Float, default=0.0)
-    deposit_paid_amount = Column(Float, default=0.0)
-    is_paid_in_full = Column(Boolean, default=False)
+    deposit_required_amount = Column(Float, default=0.0)  # 着手金の請求額
+    deposit_paid_amount = Column(Float, default=0.0)  # 着手金の入金額
+    is_paid_in_full = Column(Boolean, default=False)  # 全額入金完了フラグ
 
-    certs_of_seal_count = Column(Integer, default=0)
-    power_of_attorney_count = Column(Integer, default=0)
+    # 提出書類数量
+    certs_of_seal_count = Column(Integer, default=0)  # 印鑑証明書の受領枚数
+    power_of_attorney_count = Column(Integer, default=0)  # 委任状の受領枚数
 
-    date_of_death = Column(Date)  # 死亡日
+    # 日程情報
+    date_of_death = Column(Date)  # 死亡日 (簡略化されたフィールド)
     interview_date = Column(DateTime)  # 面談日時
     contract_date = Column(Date)  # 受託日 (契約締結日)
     tax_deadline = Column(DateTime)  # 相続税申告期限
-    created_at = Column(DateTime, default=datetime.now)  # 案件作成日時
+    created_at = Column(DateTime, default=datetime.now)
 
-    manager = relationship("User", foreign_keys=[manager_id])  # 担当1 Userオブジェクト
-    operator = relationship(
-        "User", foreign_keys=[operator_id]
-    )  # 担当2 Userオブジェクト
+    # リレーションシップ (詳細なリレーションは割愛し、主要なもののみ記載)
+    manager = relationship("User", foreign_keys=[manager_id])
+    operator = relationship("User", foreign_keys=[operator_id])
     status_ref = relationship("CaseStatus")
 
+    # Deceasedへのリレーション (1対1)
     deceased_ref = relationship(
         "Deceased", back_populates="case", uselist=False, cascade="all, delete-orphan"
     )
+
+    # スポークテーブルへのリレーション群 (FinancialAsset, Task, etc.)
     financial_assets = relationship(
         "FinancialAsset", back_populates="case_ref", cascade="all, delete-orphan"
     )
@@ -252,64 +281,100 @@ class Case(Base):
     liabilities = relationship(
         "Liability", back_populates="case_ref", cascade="all, delete-orphan"
     )
+    # 案件に紐づく特別な連絡窓口
     contact_points = relationship(
         "CaseContactPoint", back_populates="case_ref", cascade="all, delete-orphan"
     )
+
+    # # Deceasedへのリレーション (1対1)
+    # deceased_ref = relationship(
+    #     "Deceased", back_populates="case", uselist=False, cascade="all, delete-orphan"
+    # )
+    # # ContactPointへのリレーション
+    # contact_points = relationship(
+    #     "CaseContactPoint", back_populates="case_ref", cascade="all, delete-orphan"
+    # )
+
+    # # スポークテーブルへのリレーション群 (FinancialAsset, Task, etc.)
+    # financial_assets = relationship(
+    #     "FinancialAsset", back_populates="case_ref", cascade="all, delete-orphan"
+    # )
+    # tasks = relationship(
+    #     "Task", back_populates="case_ref", cascade="all, delete-orphan"
+    # )
+    # real_estates = relationship(
+    #     "RealEstateAsset", back_populates="case_ref", cascade="all, delete-orphan"
+    # )
+    # liabilities = relationship(
+    #     "Liability", back_populates="case_ref", cascade="all, delete-orphan"
+    # )
+    # expenses = relationship(
+    #     "Expense", back_populates="case_ref", cascade="all, delete-orphan"
+    # )
 
 
 # --- 5. タスクテンプレートと実行タスクモデル ---
 
 
 class TaskTemplate(Base):
-    __tablename__ = "task_templates"  # 定型タスクの定義マスター
+    __tablename__ = "task_templates"
+    # 【役割】定型タスクの定義マスター (ロジックの元データ)
     template_id = Column(Integer, primary_key=True)
-    description = Column(String, nullable=False)  # タスク名
-    default_due_days = Column(Integer, default=1)  # 契約日からの標準的な期限日数
-    is_manager_task = Column(
-        Boolean, default=False
-    )  # 担当1 (Manager) への割り当てフラグ
-    depends_on_template_id = Column(Integer, ForeignKey("task_templates.template_id"))
+    description = Column(
+        String, nullable=False
+    )  # タスク名 (例: 【承認】目録ドラフトの最終チェック)
+    default_due_days = Column(Integer, default=1)  # 契約日から何日後か
+    is_manager_task = Column(Boolean, default=False)  # True: 担当1(Manager)に割り当て
+    depends_on_template_id = Column(
+        Integer, ForeignKey("task_templates.template_id")
+    )  # 依存先タスクID
 
+    # 自己参照リレーション
     depends_on = relationship("TaskTemplate", remote_side=[template_id])
 
 
 class Task(Base):
-    __tablename__ = "tasks"  # 実行中の個別のTODOレコード
+    __tablename__ = "tasks"
+    # 【役割】実行中の個別のTODOレコード (担当者に割り当てられる具体的な作業)
     task_id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)  # 案件ID
     template_id = Column(
         Integer, ForeignKey("task_templates.template_id")
-    )  # テンプレートID
-    description = Column(String, nullable=False)  # 次のアクション名を格納
-    last_updated_at = Column(
-        DateTime, default=datetime.now, onupdate=datetime.now
-    )  # 最終更新日/進捗確認日
-    assigned_user_id = Column(Integer, ForeignKey("users.id"))  # 実行担当者ID
+    )  # テンプレートID (どの定型タスクか)
+
+    description = Column(String, nullable=False)
+    assigned_user_id = Column(Integer, ForeignKey("users.id"))  # 実行担当者ID (FK)
     due_date = Column(DateTime)  # 実行期限
     is_completed = Column(Boolean, default=False)  # 完了フラグ
 
     assigned_user = relationship("User", foreign_keys=[assigned_user_id])
     template_ref = relationship("TaskTemplate")
     document_logs = relationship(
-        "TaskDocumentLog", back_populates="task_ref", cascade="all, delete-orphan"
+        "TaskDocumentLog",
+        back_populates="task_ref",
+        cascade="all, delete-orphan",
     )
     case_ref = relationship("Case", back_populates="tasks")
 
 
 class TaskDocumentLog(Base):
     __tablename__ = "task_document_logs"
+    # 【役割】 原本追跡ログ (いつ、どの原本を、誰に、何で送ったかの監査ログ)
     log_id = Column(Integer, primary_key=True)
-    task_id = Column(Integer, ForeignKey("tasks.task_id"), nullable=False)
+    task_id = Column(
+        Integer, ForeignKey("tasks.task_id"), nullable=False
+    )  # 紐づくタスクID
     document_type_id = Column(
         Integer, ForeignKey("document_types.id"), nullable=False
-    )  # 原本の種類
+    )  # 原本の種類 (例: 印鑑証明書)
     shipping_method_id = Column(
         Integer, ForeignKey("shipping_methods.id"), nullable=False
-    )  # 送付方法
+    )  # 送付方法 (例: レターパック)
+
     sent_date = Column(DateTime, nullable=False)
-    sent_to = Column(String, nullable=False)  # 送付先
+    sent_to = Column(String, nullable=False)  # 送付先（例: 〇〇銀行 or 司法書士）
     tracking_number = Column(String, unique=True)  # 追跡番号
-    is_returned = Column(Boolean, default=False)
+    is_returned = Column(Boolean, default=False)  # 還付完了フラグ
 
     document_type = relationship("DocumentType")
     shipping_method = relationship("ShippingMethod")
@@ -321,33 +386,41 @@ class TaskDocumentLog(Base):
 
 class Deceased(Base):
     __tablename__ = "deceased"
+    # 【役割】 被相続人の戸籍上の基本情報と、案件への紐付け (Caseのコア情報)
     id = Column(Integer, primary_key=True)
-    case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False, unique=True)
-    name_last = Column(String)  # 姓
-    name_first = Column(String)  # 名
+    case_id = Column(
+        Integer, ForeignKey("cases.case_id"), nullable=False, unique=True
+    )  # 案件ID (FK)
+
+    name_last = Column(String)
+    name_first = Column(String)
     name_last_kana = Column(String)
     name_first_kana = Column(String)
     hometown = Column(String)
     date_of_birth = Column(Date)
     date_of_death = Column(Date)
-    relationship_type = Column(String)  # 続柄 (通常は「本人」)
+    relationship_type = Column(String)  # 本人
 
     heirs = relationship(
         "Heir", back_populates="deceased", cascade="all, delete-orphan"
-    )
+    )  # 相続人一覧
     address_links = relationship(
         "D_AddressHistory", back_populates="deceased", cascade="all, delete-orphan"
-    )
+    )  # 住所履歴 (中間テーブル)
     contact_links = relationship(
         "D_ContactLink", back_populates="deceased", cascade="all, delete-orphan"
-    )
-    case = relationship("Case", back_populates="deceased_ref")
+    )  # 連絡先履歴 (中間テーブル)
+    case = relationship("Case", back_populates="deceased_ref")  # Caseへの逆参照
 
 
 class Heir(Base):
     __tablename__ = "heirs"
+    # 【役割】 個々の相続人の戸籍上の基本情報と、被相続人への紐付け (遺産分割協議の対象者)
     id = Column(Integer, primary_key=True)
-    deceased_id = Column(Integer, ForeignKey("deceased.id"), nullable=False)
+    deceased_id = Column(
+        Integer, ForeignKey("deceased.id"), nullable=False
+    )  # 被相続人ID (FK)
+
     name_last = Column(String, nullable=False)
     name_first = Column(String)
     name_last_kana = Column(String)
@@ -357,7 +430,7 @@ class Heir(Base):
     relationship_type = Column(String, nullable=False)  # 続柄（例: 長男、配偶者）
     is_contracting_party = Column(Boolean, default=False)  # 契約者本人であるか
 
-    deceased = relationship("Deceased", back_populates="heirs")
+    deceased = relationship("Deceased", back_populates="heirs")  # Deceasedへの逆参照
     address_links = relationship(
         "H_AddressHistory", back_populates="heir", cascade="all, delete-orphan"
     )
@@ -371,9 +444,10 @@ class Heir(Base):
 
 class FinancialAsset(Base):
     __tablename__ = "financial_assets"
+    # 【役割】 金融資産詳細 (預貯金口座ごとの情報)
     asset_id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
-    inst_id = Column(Integer, ForeignKey("institutions.id"))
+    inst_id = Column(Integer, ForeignKey("institutions.id"))  # 金融機関マスタへのFK
 
     bank_name = Column(String)
     account_number = Column(String)
@@ -385,29 +459,33 @@ class FinancialAsset(Base):
 
 class RealEstateAsset(Base):
     __tablename__ = "real_estate_assets"
+    # 【役割】 不動産資産詳細 (登記簿謄本記載情報)
     real_estate_id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
-    municipality_name = Column(String, nullable=False)
+    municipality_name = Column(String, nullable=False)  # 名寄帳取得時の市区町村名
 
     case_ref = relationship("Case", back_populates="real_estates")
 
 
 class Liability(Base):
     __tablename__ = "liability"
+    # 【役割】 債務および費用 (葬儀費用、借金など)
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
-    is_debt = Column(Boolean, nullable=False, default=True)
-    description = Column(String)
+    is_debt = Column(Boolean, nullable=False, default=True)  # 借金か費用か
+    description = Column(String)  # 内容
     amount = Column(Float, nullable=False)
-    is_funeral_cost = Column(Boolean, nullable=False, default=False)
+    is_funeral_cost = Column(Boolean, nullable=False, default=False)  # 葬儀費用フラグ
 
     case_ref = relationship("Case", back_populates="liabilities")
 
 
 class InsuranceAsset(Base):
     __tablename__ = "insurance_assets"
+    # 💡 修正4で Case に追加されたリレーションに対応
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
+    # ... (保険固有のフィールドを追加)
     insurance_company = Column(String)
     policy_number = Column(String)
     estimated_value = Column(Float)
@@ -417,8 +495,10 @@ class InsuranceAsset(Base):
 
 class OtherAsset(Base):
     __tablename__ = "other_assets"
+    # 💡 修正4で Case に追加されたリレーションに対応
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
+    # ... (その他財産固有のフィールドを追加)
     description = Column(String)
     estimated_value = Column(Float)
 
@@ -427,55 +507,50 @@ class OtherAsset(Base):
 
 class Expense(Base):
     __tablename__ = "expenses"
+    # 【役割】 会社が立て替えた実費 (レターパック代、戸籍代など)
     expense_id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
+
+    # 💡 必要な最小限のフィールドを追加
     description = Column(String)
     amount = Column(Float, nullable=False)
     expense_date = Column(Date)
 
-    case_ref = relationship("Case", back_populates="expenses")
+    case_ref = relationship("Case", back_populates="expenses")  # Caseへの逆参照
 
 
 class ContactLog(Base):
     __tablename__ = "contact_logs"
+    # 【役割】 顧客連絡履歴 (いつ、誰が、何を連絡したか)
     log_id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
-    contact_content = Column(String, nullable=False)
-    is_thank_you_payment = Column(Boolean, default=False)
+    contact_content = Column(String, nullable=False)  # 連絡内容の要約
+    is_thank_you_payment = Column(Boolean, default=False)  # 入金お礼連絡フラグ
 
     case_ref = relationship("Case", back_populates="contact_logs")
 
 
 class CaseSubmissionDoc(Base):
     __tablename__ = "case_submission_docs"
+    # 【役割】 お客様への提出依頼書類の進捗管理 (柔軟な提出リスト)
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
 
     case_ref = relationship("Case", back_populates="submitted_docs")
 
 
-# =======================================================
-## データアクセス関数 (CRUD)
-# =======================================================
-
-
-# 💡 全ユーザーリストの取得 (担当者ドロップダウン用)
-def get_all_users():
-    """全てのユーザーIDと名前を取得する"""
-    db = Session()
-    try:
-        users = db.query(User.id, User.name).order_by(User.id).all()
-        # {ID: Name} の辞書形式で返す
-        return {id: name for id, name in users}  # {ID: Name} の辞書形式で返す
-    finally:
-        db.close()
-
-
-# 💡 未完了タスクの取得 (ダッシュボード左側用)
+# 💡 追加: 未完了タスクの取得
 def get_incomplete_tasks(user_id=None):
     """未完了のタスクを取得する (ユーザーIDでフィルタ可能)"""
     db = Session()
     try:
+        query = db.query(Task).filter(Task.is_completed == False)
+
+        if user_id:
+            query = query.filter(Task.assigned_user_id == user_id)
+
+        # 期限が近い順にソート
+        # tasks = query.order_by(Task.due_date).limit(10).all()
         tasks = (
             db.query(Task, Case.case_number, User.name, Case.client_name)
             .join(Case, Task.case_id == Case.case_id)
@@ -487,8 +562,12 @@ def get_incomplete_tasks(user_id=None):
             .all()
         )
 
+        # 案件番号と担当者名を取得するために結合（Eager Loading）
         tasks_data = []
         for task, case_number, assigned_user_name, client_name in tasks:
+            # case_number = task.case_ref.case_number if task.case_ref else "N/A"
+            # assigned_user = task.assigned_user.name if task.assigned_user else "未割当"
+
             tasks_data.append(
                 {
                     "task_id": task.task_id,
@@ -507,30 +586,22 @@ def get_incomplete_tasks(user_id=None):
         db.close()
 
 
-# 💡 案件リストの取得 (メイン一覧用)
+# 💡 追加: 案件リストの取得 (メイン一覧用)
+# def get_case_list(search_term="", status_id=None):
 def get_case_list(search_term="", status_id=None, user_id=None):
-    """案件一覧を取得する (検索・フィルタリング・担当者フィルタ対応)"""
+    """案件一覧を取得する (検索・フィルタリング対応)"""
     db = Session()
     try:
         query = (
             db.query(
-                Case,  # 1. Caseオブジェクト全体
-                Deceased.name_last,  # 2. Deceasedの姓
-                Deceased.name_first,  # 3. Deceasedの名
-                CaseStatus.name.label("status_name"),  # 4. ステータス名
-                Task.description,
-                Task.last_updated_at,
+                Case,
+                Deceased.name_last,
+                Deceased.name_first,
+                CaseStatus.name.label("status_name"),
             )
-            .join(
-                Deceased, Case.case_id == Deceased.case_id, isouter=True
-            )  # Deceasedテーブルとの結合
-            .join(
-                CaseStatus, Case.current_status_id == CaseStatus.id, isouter=True
-            )  # CaseStatusテーブルとの結合
-            .join(
-                Task, Case.case_id == Task.task_id, isouter=True
-            )  # Taskテーブルとの結合
-            .order_by(Task.last_updated_at.desc())
+            .join(Case.deceased_ref, isouter=True)
+            .join(Case.status_ref, isouter=True)
+            .order_by(Case.contract_date.desc())
         )
 
         # 検索条件
@@ -539,41 +610,27 @@ def get_case_list(search_term="", status_id=None, user_id=None):
                 (Case.case_number.ilike(f"%{search_term}%"))
                 | (Case.client_name.ilike(f"%{search_term}%"))
                 | (Case.client_name_kana.ilike(f"%{search_term}%"))
+                # | (Case.client_name_kana.upper().ilike(f"%{search_term}%"))
             )
 
         # ステータスフィルター
         if status_id:
             query = query.filter(Case.current_status_id == status_id)
 
-        # 💡 担当者によるフィルタ
-        if user_id:
-            query = query.filter(
-                (Case.manager_id == user_id) | (Case.operator_id == user_id)
-            )
-
         cases_data = query.limit(50).all()
 
         case_list = []
-        for (
-            case,
-            d_last,
-            d_first,
-            status_name,
-            description,
-            last_updated_at,
-        ) in cases_data:
+        for case, d_last, d_first, status_name in cases_data:
             deceased_name = f"{d_last} {d_first}" if d_last else "N/A"
 
-            # 担当ロールの決定 (ユーザーが担当1か担当2かを判定)
+            # 💡 担当情報を付加
             role_label = ""
             if user_id:
-                is_manager = case.manager_id == user_id
-                is_operator = case.operator_id == user_id
-                if is_manager and is_operator:
+                if case.manager_id == user_id and case.operator_id == user_id:
                     role_label = "担当1 & 2"
-                elif is_manager:
+                elif case.manager_id == user_id:
                     role_label = "担当1"
-                elif is_operator:
+                elif case.operator_id == user_id:
                     role_label = "担当2"
 
             case_list.append(
@@ -585,41 +642,29 @@ def get_case_list(search_term="", status_id=None, user_id=None):
                     "contract_date": case.contract_date.strftime("%Y/%m/%d")
                     if case.contract_date
                     else "N/A",
-                    "status": status_name if status_name else "N/A",
-                    "role_label": role_label,
-                    "manager_id": case.manager_id,
-                    "operator_id": case.operator_id,
-                    "description": description,
-                    "last_updated_at": (
-                        last_updated_at.strftime("%Y/%m/%d")
-                        if last_updated_at
-                        else "N/A"
-                    ),
+                    "status": status_name,
+                    "role_label": role_label,  # 💡 新しく追加
+                    "manager_id": case.manager_id,  # 💡 担当IDを念のため追加
+                    "operator_id": case.operator_id,  # 💡 担当IDを念のため追加
                 }
-            )
-            print()
-            print(
-                case.case_id,
-                case.case_number,
-                f"case.client_name:{case.client_name}",
-                f"deceased_name:{deceased_name}",
             )
         return case_list
     finally:
         db.close()
 
 
-# 💡 担当案件の取得 (get_case_listのuser_idフィルタとほぼ同じだが、既存コードに合わせたため残す)
 def get_my_cases(user_id: int, limit: int = 10):
-    """特定のユーザーが担当者(Manager)または実務担当者(Operator)である案件を取得する。"""
+    """
+    特定のユーザーが担当者(Manager)または実務担当者(Operator)である案件を取得する。
+    """
     db = Session()
     try:
         query = (
             db.query(Case)
-            .options(joinedload(Case.deceased_ref), joinedload(Case.status_ref))
+            .options(joinedload(Case.deceased_ref))
             .filter((Case.manager_id == user_id) | (Case.operator_id == user_id))
             .order_by(Case.current_status_id, Case.contract_date.desc())
-        )
+        )  # ステータスと契約日でソート
 
         cases = query.limit(limit).all()
 
@@ -645,23 +690,27 @@ def get_my_cases(user_id: int, limit: int = 10):
         db.close()
 
 
-# 💡 全担当者の業務キャパシティを取得 (管理職ビュー用)
 def get_user_capacity_data():
-    """管理職向け: 全担当者の業務キャパシティ（未完了タスク数、担当案件数）を取得する。"""
+    """
+    管理職向け: 全担当者の業務キャパシティ（未完了タスク数、担当案件数）を取得する。
+    """
     db = Session()
     try:
+        # 1. ユーザーリストを取得
         users = db.query(User).all()
         capacity_data = []
 
         for user in users:
             user_id = user.id
 
+            # 2. 未完了タスク数を集計 (担当者として割り当てられた全てのタスク)
             task_count = (
                 db.query(func.count(Task.task_id))
                 .filter(Task.assigned_user_id == user_id, Task.is_completed == False)
                 .scalar()
             )
 
+            # 3. 担当案件数 (担当1/担当2のいずれか) を集計
             case_count = (
                 db.query(func.count(Case.case_id))
                 .filter((Case.manager_id == user_id) | (Case.operator_id == user_id))
@@ -677,61 +726,52 @@ def get_user_capacity_data():
                     "total_cases_handled": case_count,
                 }
             )
+
+        # タスク数が多い順にソート (負荷の高い順)
         capacity_data.sort(key=lambda x: x["total_incomplete_tasks"], reverse=True)
+
         return capacity_data
     finally:
         db.close()
 
 
-# 💡 月ごとの面談スケジュールを取得
-def get_interviews_by_month(year: int, month: int):
-    """指定された年月に面談予定がある案件のリストを取得する。"""
+# 💡 追加: 全ユーザー（担当者）リストを取得
+def get_all_users():
+    """全てのユーザーIDと名前を取得する"""
     db = Session()
     try:
-        # 月の開始日と終了日を計算
-        start_date = datetime(year, month, 1)
-        if month == 12:
-            end_date = datetime(year + 1, 1, 1)
-        else:
-            end_date = datetime(year, month + 1, 1)
-
-        query = (
-            db.query(Case, Deceased.name_last, Deceased.name_first)
-            .join(Deceased, Case.case_id == Deceased.case_id, isouter=True)
-            .filter(Case.interview_date.isnot(None))
-            .filter(Case.interview_date >= start_date)
-            .filter(Case.interview_date < end_date)
-            .order_by(Case.interview_date)
-        )
-
-        results = query.all()
-
-        interview_list = []
-        for case, d_last, d_first in results:
-            deceased_name = f"{d_last} {d_first}" if d_last else "N/A"
-
-            interview_list.append(
-                {
-                    "case_id": case.case_id,
-                    "case_number": case.case_number,
-                    "client_name": case.client_name,
-                    "deceased_name": deceased_name,
-                    "interview_date": case.interview_date,
-                    "manager_id": case.manager_id,
-                    "operator_id": case.operator_id,
-                }
-            )
-        return interview_list
+        # Userクラスは既に定義されているとして利用
+        users = db.query(User.id, User.name).order_by(User.id).all()
+        # {ID: Name} の辞書形式で返す
+        return {id: name for id, name in users}
     finally:
         db.close()
 
 
-# --- DB初期化関数 ---
-def init_db():
-    Base.metadata.create_all(Engine)
+# 💡 追加: 案件の担当者情報を更新する関数
+def update_case_assignment(case_id: int, manager_id: int, operator_id: int):
+    """案件の担当者1 (manager_id) と担当者2 (operator_id) を更新する"""
+    db = Session()
+    try:
+        case = db.query(Case).filter(Case.case_id == case_id).first()
+        if case:
+            case.manager_id = manager_id
+            case.operator_id = operator_id
+            db.commit()
+            return True
+        return False
+    finally:
+        db.close()
 
+
+# 💡 注意: 実際のログインユーザーの役割判定ロジックもここで必要だが、
+# 今回は簡略化のため、すべてのユーザーを表示し、UI側で役割を判定する。
 
 # --- DB操作関数 ---
+
+
+def init_db():
+    Base.metadata.create_all(Engine)
 
 
 def add_initial_data():
@@ -745,7 +785,7 @@ def add_initial_data():
         session.flush()
 
         case1 = Case(
-            case_number="G0001",
+            case_number="2025-001",
             client_name="山田 花子",
             client_name_kana="やまだ　はなこ",
             # 💡 修正5: Caseモデルから deceased_name は削除されたため、初期データからも削除
@@ -913,137 +953,3 @@ def display_records_pretty(model_class):
     pretty_json = json.dumps(records, indent=2, ensure_ascii=False)
     print(pretty_json)
     print("=======================================\n")
-
-
-# 次の案件番号を生成する関数
-def get_next_case_number():
-    """
-    既存の案件番号 'GXXXX' のうち最大の番号を取得し、次の番号 (GXXXX+1) を生成する。
-    案件番号がない場合は 'G0001' を返す。
-    """
-    with Session() as db:
-        # 1. 案件番号が 'G' で始まるレコードをフィルタ
-        # 2. 案件番号の末尾の4桁の数字部分を抽出 (SUBSTR) し、それを最大値として取得
-
-        # SQLiteのSUBSTR/CASTを仮定
-        max_num_str = (
-            db.query(func.max(func.cast(func.substr(Case.case_number, 2), Integer)))
-            .filter(Case.case_number.like("G%"))
-            .scalar()
-        )
-
-        if max_num_str is None:
-            # 案件が一つもない場合
-            next_number = 1
-        else:
-            # 最大値に1を加える
-            next_number = int(max_num_str) + 1
-
-        # 案件番号 'G' + 4桁のゼロパディング形式にフォーマット
-        return f"G{next_number:04d}"
-
-
-def delete_case_and_all_related_data(case_number: str):
-    """
-    指定された案件番号のCaseレコードと、それにカスケード削除される全ての関連レコードを削除する。
-    さらに、孤立した Address, Contact レコードを削除する。
-    """
-    db = Session()
-    try:
-        # 1. Caseレコードを取得
-        case_to_delete = db.query(Case).filter(Case.case_number == case_number).first()
-
-        if not case_to_delete:
-            print(f"案件番号 {case_number} は見つかりませんでした。")
-            return False
-
-        case_id = case_to_delete.case_id
-        print(f"案件ID {case_id} ({case_number}) の削除を開始します...")
-
-        # 2. Caseに紐づく Deceased と Heir の ID を事前に取得 (クリーンアップのため)
-        deceased = db.query(Deceased).filter(Deceased.case_id == case_id).first()
-        deceased_id = deceased.id if deceased else None
-
-        heir_ids = []
-        if deceased_id:
-            heir_ids = [
-                h.id
-                for h in db.query(Heir).filter(Heir.deceased_id == deceased_id).all()
-            ]
-
-        # 3. Caseの削除を実行
-        #    - Case, Deceased, Heir, Task, Asset... (cascade設定されているもの全て) が自動削除される
-        #    - D_AddressHistory, H_AddressHistory, D_ContactLink, H_ContactLink も自動削除される
-        db.delete(case_to_delete)
-        db.commit()
-        print(
-            f"Case ID {case_id} およびカスケード関連データ ({len(heir_ids)}件の相続人を含む) の削除が完了しました。"
-        )
-
-        # 4. 孤立した Address および Contact レコードのクリーンアップ
-
-        # 4-1. 孤立した Address レコードの削除
-        # どの D_AddressHistory/H_AddressHistory からも参照されていない Address を削除する
-        # (NOT EXISTS を使用)
-
-        # Address が D_AddressHistory/H_AddressHistory のどちらからも参照されていない Address ID を見つける
-        subquery_deceased = db.query(D_AddressHistory.address_id)
-        subquery_heir = db.query(H_AddressHistory.address_id)
-
-        delete_count_addr = (
-            db.query(Address)
-            .filter(~Address.id.in_(subquery_deceased), ~Address.id.in_(subquery_heir))
-            .delete(synchronize_session="fetch")
-        )
-        db.commit()
-        print(f"孤立した Address レコードを {delete_count_addr} 件削除しました。")
-
-        # 4-2. 孤立した Contact レコードの削除
-        # どの D_ContactLink/H_ContactLink/CaseContactPoint からも参照されていない Contact を削除する
-        subquery_d = db.query(D_ContactLink.contact_id)
-        subquery_h = db.query(H_ContactLink.contact_id)
-        subquery_c = db.query(CaseContactPoint.contact_id)
-
-        delete_count_contact = (
-            db.query(Contact)
-            .filter(
-                ~Contact.id.in_(subquery_d),
-                ~Contact.id.in_(subquery_h),
-                ~Contact.id.in_(subquery_c),
-            )
-            .delete(synchronize_session="fetch")
-        )
-        db.commit()
-        print(f"孤立した Contact レコードを {delete_count_contact} 件削除しました。")
-
-        return True
-
-    except Exception as e:
-        db.rollback()
-        print(f"データ削除中にエラーが発生しました: {e}")
-        return False
-    finally:
-        db.close()
-
-
-def create_contact_and_link_to_heir(
-    db: Session, heir_id: int, phone: str | None, email: str | None
-):
-    """
-    電話番号とメールアドレスを Contact テーブルに登録し、H_ContactLink を介して相続人に紐づける。
-    """
-    if phone:
-        contact_phone = Contact(value=phone, type="PHONE", sub_type="携帯")
-        db.add(contact_phone)
-        db.flush()  # IDを取得するため
-
-        link_phone = H_ContactLink(heir_id=heir_id, contact_id=contact_phone.id)
-        db.add(link_phone)
-
-    if email:
-        contact_email = Contact(value=email, type="EMAIL", sub_type="自宅")
-        db.add(contact_email)
-        db.flush()  # IDを取得するため
-
-        link_email = H_ContactLink(heir_id=heir_id, contact_id=contact_email.id)
-        db.add(link_email)

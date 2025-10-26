@@ -13,9 +13,18 @@ from components.pages.home import CaseDashboardView
 from services.db_setup import add_initial_data, init_db
 
 # データベースの初期化とテストデータの追加（アプリケーション起動時に一度だけ行う）
-
+# print("---------------------------------------")
+# print("init_db")
+# print("---------------------------------------")
 init_db()  # テーブル作成
+
+# print()
+# print("---------------------------------------")
+# print("add_initial_data")
 add_initial_data()  # 初期データ投入
+# print("---------------------------------------")
+
+# from components.pages.detail import DeceasedDetailView
 
 
 def main(page: Page):

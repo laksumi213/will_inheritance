@@ -47,12 +47,12 @@ class CaseDashboardView(Column):
         )
         self.page = page
 
-        # 💡 追加: 役割判定 (実際は認証システムから取得)
+        # 役割判定 (実際は認証システムから取得)
         # 仮にユーザーID 1 を管理職（Manager）とします。
         self.current_user_id = 1
         self.is_manager = True  # 👈️ 役割判定の仮実装
 
-        # 💡 追加: ユーザーマップを初期化（UI表示で名前を解決するために使用）
+        # ユーザーマップを初期化（UI表示で名前を解決するために使用）
         self.USER_MAP = get_all_users()
 
         self.search_field = TextField(
@@ -83,7 +83,7 @@ class CaseDashboardView(Column):
                     vertical_alignment=CrossAxisAlignment.START,
                     spacing=20,
                     controls=[
-                        # 💡 修正: 左側のエリアを役割によってコントロールを切り替える
+                        # 左側のエリアを役割によってコントロールを切り替える
                         Column(
                             controls=self._get_left_sidebar_controls(),  # 👈️ 新しいヘルパー関数を呼び出し
                             width=500,
@@ -107,7 +107,7 @@ class CaseDashboardView(Column):
 
         self.on_mount = self._on_mount
 
-    # 💡 追加: 左側サイドバーのコントロールを役割に応じて取得
+    # 左側サイドバーのコントロールを役割に応じて取得
     def _get_left_sidebar_controls(self):
         if self.is_manager:
             return [
@@ -131,7 +131,7 @@ class CaseDashboardView(Column):
                 self.my_case_list_container,
             ]
 
-    # 💡 修正2: デバウンス関数を追加
+    # デバウンス関数を追加
     def _debounce_search(self, e):
         """入力停止後に検索を実行するためのデバウンス処理"""
         # 既存のタイマーがあればキャンセル
@@ -144,7 +144,7 @@ class CaseDashboardView(Column):
         )
         self.search_timer.start()
 
-    # 💡 修正3: デバウンスから呼ばれる実際の検索処理
+    # デバウンスから呼ばれる実際の検索処理
     def _run_search_action(self, search_term):
         """デバウンス後に実行される検索処理"""
         list_view = self.main_list_view_column.controls[-1]
@@ -153,7 +153,7 @@ class CaseDashboardView(Column):
             self.update
         )  # FletのUI更新はメインスレッドで行う必要がある
 
-    # 💡 修正4: on_submit 削除に伴い _run_search の定義を調整（デバウンス版を優先）
+    # on_submit 削除に伴い _run_search の定義を調整（デバウンス版を優先）
     # 元の on_submit 処理を、デバウンス版の _run_search_action に置き換えるか、
     # 既存の _run_search を以下のように調整します。
     def _run_search(self, e):
@@ -179,7 +179,7 @@ class CaseDashboardView(Column):
         if self.is_manager:
             self.capacity_view_container.content.controls = self._get_capacity_items()
         else:
-            # 💡 修正: 左側の担当案件リストはもう使わないため、ここは空のままにしておくか、削除する
+            # 左側の担当案件リストはもう使わないため、ここは空のままにしておくか、削除する
             # ただし、UIが崩れるのを防ぐため、一旦そのままにしておきます。
             self.my_case_list_container.content.controls = self._get_my_case_items()
             # ↑ 担当者ビューの時は不要ですが、既存コードのロジック維持のため残します
@@ -187,41 +187,21 @@ class CaseDashboardView(Column):
         # メイン一覧の更新 (案件一覧)
         list_view = self.main_list_view_column.controls[-1]
 
-        # 💡 修正: 初期ロード時 (検索フィールドが空) は、自分の担当案件のみを表示
+        # 初期ロード時 (検索フィールドが空) は、自分の担当案件のみを表示
         search_term = self.search_field.value.strip()
 
-        if not search_term:
-            # 💡 初期表示は自分のIDでフィルタ
-            list_view.controls = self._get_case_items(
-                search_term="", filter_by_user_id=self.current_user_id
-            )
-        else:
-            # 💡 検索時は全案件から検索 (ここではフィルタを無効)
-            list_view.controls = self._get_case_items(search_term=search_term)
+        # if not search_term:
+        #     # 💡 初期表示は自分のIDでフィルタ
+        #     list_view.controls = self._get_case_items(
+        #         search_term="", filter_by_user_id=self.current_user_id
+        #     )
+        # else:
+        #     # 💡 検索時は全案件から検索 (ここではフィルタを無効)
+        #     list_view.controls = self._get_case_items(search_term=search_term)
 
         self.update()
 
-    # def _update_all_views(self):
-    #     """全ての表示データを更新"""
-    #     # Todoリストの更新
-    #     self.todo_list_container.content.controls = self._get_todo_items()
-
-    #     # # 💡 追加: 担当顧客リストの更新
-    #     # self.my_case_list_container.content.controls = self._get_my_case_items()
-
-    #     # 💡 追加: 管理職ビューの更新
-    #     if self.is_manager:
-    #         self.capacity_view_container.content.controls = self._get_capacity_items()
-    #     else:
-    #         self.my_case_list_container.content.controls = self._get_my_case_items()
-
-    #     # メイン一覧の更新
-    #     list_view = self.main_list_view_column.controls[-1]
-    #     list_view.controls = self._get_case_items(self.search_field.value)
-
-    #     self.update()
-
-    # 💡 追加: 管理職向けキャパシティビューのアイテム生成
+    # 管理職向けキャパシティビューのアイテム生成
     def _get_capacity_items(self):
         data = get_user_capacity_data()
 
@@ -243,7 +223,7 @@ class CaseDashboardView(Column):
             )
         return items
 
-    # 💡 追加: 管理職向けキャパシティビューのコンテナ
+    # 管理職向けキャパシティビューのコンテナ
     def _create_manager_capacity_view(self):
         """管理職が業務量を把握するためのUI"""
         return Container(
@@ -308,7 +288,7 @@ class CaseDashboardView(Column):
             height=200,  # 画面サイズに合わせて調整
         )
 
-    # 💡 修正: 案件リストの取得 (メイン一覧用) - filter_by_user_id パラメータを追加
+    # 案件リストの取得 (メイン一覧用) - filter_by_user_id パラメータを追加
     def _get_case_items(self, search_term="", filter_by_user_id=None):
         """案件データを取得し、ListTileのリストとして返す"""
 
@@ -333,50 +313,25 @@ class CaseDashboardView(Column):
             def open_detail(e, case_id=case["case_id"]):
                 self.page.go(f"/detail/{case_id}")
 
-            # 💡 追加: 担当ロールの表示
+            # 担当ロールの表示
             role_text = ""
             if case.get("role_label"):
                 role_text = f"【{case['role_label']}】"
 
             items.append(
                 ListTile(
-                    # 💡 修正: 案件番号と依頼者名の前に担当ロールを表示
+                    # 案件番号と依頼者名の前に担当ロールを表示
                     title=Text(
-                        f"{role_text} {case['case_number']} - {case['client_name']}"
+                        f"{role_text} {case['case_number']} - {case['client_name']}　　被相続人: {case['deceased_name'] if case['deceased_name'] != 'N/A' else '未設定'}　　ステータス: {case['status'] if case['status'] != 'N/A' else '未設定'} "
                     ),
                     subtitle=Text(
-                        f"被相続人: {case['deceased_name']} | ステータス: {case['status']} | 契約日: {case['contract_date']}"
+                        f" 更新日:{case['last_updated_at']}　　次アクション:{case['description']}"
                     ),
                     trailing=ElevatedButton("詳細", on_click=open_detail),
                     on_click=open_detail,
                 )
             )
         return items
-
-    # def _get_case_items(self, search_term=""):
-    #     """案件データを取得し、ListTileのリストとして返す"""
-    #     cases = get_case_list(search_term=search_term)
-
-    #     if not cases:
-    #         return [Text("該当する案件はありません。", color=Colors.GREY_600)]
-
-    #     items = []
-    #     for case in cases:
-    #         # 各案件をクリックした際のルーティング
-    #         def open_detail(e, case_id=case["case_id"]):
-    #             self.page.go(f"/detail/{case_id}")
-
-    #         items.append(
-    #             ListTile(
-    #                 title=Text(f"{case['case_number']} - {case['client_name']}"),
-    #                 subtitle=Text(
-    #                     f"被相続人: {case['deceased_name']} | ステータス: {case['status']} | 契約日: {case['contract_date']}"
-    #                 ),
-    #                 trailing=ElevatedButton("詳細", on_click=open_detail),
-    #                 on_click=open_detail,
-    #             )
-    #         )
-    #     return items
 
     def _get_todo_items(self):
         """Todoデータを取得し、ListTileのリストとして返す"""
@@ -389,7 +344,7 @@ class CaseDashboardView(Column):
         items = [Text("期限が近いタスク", weight="bold", color=Colors.BLACK)]
 
         for task in tasks:
-            # 💡 修正5: タスククリックで案件詳細に遷移するロジック
+            # タスククリックで案件詳細に遷移するロジック
             case_id = task["case_id"]  # 👈️ サービス関数から取得したID
 
             def open_detail(e, case_id=case_id):
@@ -450,9 +405,15 @@ class CaseDashboardView(Column):
     def _create_main_list_view_column(self):
         """3. メイン一覧エリア（案件リスト表示）のUI"""
 
+        # 初期ロード時に自分の案件データを取得して設定する
+        initial_case_items = self._get_case_items(
+            search_term="",
+            filter_by_user_id=self.current_user_id,  # 自分のIDでフィルタ
+        )
+
         # ListViewはColumnの最後の要素としてexpandさせる
         main_list_view = ListView(
-            controls=[],  # 初期データは__init__で更新される
+            controls=initial_case_items,
             expand=True,
             spacing=10,
             auto_scroll=False,
@@ -460,7 +421,7 @@ class CaseDashboardView(Column):
 
         return Column(
             controls=[
-                # 💡 修正: 自分の案件であることを強調
+                # 自分の案件であることを強調
                 Text("案件一覧 (初期表示: 自分の担当案件)", size=20, weight="bold"),
                 Divider(),
                 main_list_view,
@@ -468,169 +429,3 @@ class CaseDashboardView(Column):
             expand=True,
             scroll="auto",
         )
-
-    # def _create_main_list_view_column(self):
-    #     """3. メイン一覧エリア（案件リスト表示）のUI"""
-
-    #     # ListViewはColumnの最後の要素としてexpandさせる
-    #     main_list_view = ListView(
-    #         controls=[],  # 初期データは__init__で更新される
-    #         expand=True,
-    #         spacing=10,
-    #         auto_scroll=False,
-    #     )
-
-    #     return Column(
-    #         controls=[
-    #             Text("案件一覧", size=20, weight="bold"),
-    #             Divider(),
-    #             main_list_view,
-    #         ],
-    #         expand=True,
-    #         scroll="auto",
-    #     )
-
-
-# def DeceasedListView(page: Page):
-#     # SnackBarの修正: page.open() に直接SnackBarインスタンスを渡す形に変更
-#     def show_snackbar(text_to_copy):
-#         page.open(
-#             SnackBar(
-#                 Text(f"'{text_to_copy}' をクリップボードにコピーしました。📋"),
-#                 duration=1000,
-#             )
-#         )
-#         page.update()
-
-#     deceased_data_table = DataTable(
-#         columns=[
-#             DataColumn(Text("ID")),
-#             DataColumn(Text("名前")),
-#             DataColumn(Text("生年月日")),
-#             DataColumn(Text("アクション")),
-#         ],
-#         rows=[],
-#         data_text_style=TextStyle(color=Colors.BLACK),
-#         heading_text_style=TextStyle(color=Colors.WHITE),
-#         heading_row_color=Colors.BLUE_GREY_300,
-#         bgcolor=Colors.WHITE,
-#         border=border.all(1, Colors.BLACK12),
-#         horizontal_lines=border.BorderSide(1, Colors.BLACK12),
-#         vertical_lines=border.BorderSide(1, Colors.BLACK12),
-#     )
-
-#     new_deceased_name_field = CustomTextField(
-#         label="新しい被相続人名 (姓 名)", width=250
-#     )
-#     new_deceased_dob_field = CustomTextField(label="生年月日(YYYY-MM-DD)", width=250)
-
-#     # コピー処理と通知を行う共通関数
-#     def copy_to_clipboard_and_notify(e):
-#         clicked_text_control: Text = e.control.content
-#         text_to_copy = clicked_text_control.value
-#         page.set_clipboard(text_to_copy)
-#         show_snackbar(text_to_copy)
-
-#     # UIリストを更新する関数
-#     def update_deceased_list_ui():
-#         deceased_data_table.rows.clear()
-
-#         for deceased in deceased_service.get_all_deceased():
-#             # ★ 氏名と生年月日の取得方法を修正
-#             full_name = f"{deceased.name_last} {deceased.name_first}"
-#             dob_str = (
-#                 str(deceased.date_of_birth) if deceased.date_of_birth else "未登録"
-#             )
-
-#             detail_button = IconButton(
-#                 Icons.ARROW_RIGHT,
-#                 tooltip="詳細へ",
-#                 on_click=lambda e, d_id=deceased.id: page.go(f"/detail/{d_id}"),
-#             )
-
-#             delete_button = IconButton(
-#                 Icons.DELETE,
-#                 icon_color=Colors.RED_500,
-#                 data=deceased.id,
-#                 on_click=delete_deceased,
-#             )
-
-#             deceased_data_table.rows.append(
-#                 DataRow(
-#                     cells=[
-#                         DataCell(
-#                             GestureDetector(
-#                                 content=Text(str(deceased.id)),
-#                                 on_tap=copy_to_clipboard_and_notify,
-#                             )
-#                         ),
-#                         DataCell(
-#                             GestureDetector(
-#                                 content=Text(full_name, weight=FontWeight.BOLD),
-#                                 on_tap=copy_to_clipboard_and_notify,
-#                             )
-#                         ),
-#                         DataCell(
-#                             GestureDetector(
-#                                 content=Text(dob_str),
-#                                 on_tap=copy_to_clipboard_and_notify,
-#                             )
-#                         ),
-#                         DataCell(Row([detail_button, delete_button], spacing=5)),
-#                     ]
-#                 )
-#             )
-#         page.update()
-
-#     # 被相続人を追加する関数 (ロジックはサービス層へ)
-#     def add_deceased(e):
-#         name = new_deceased_name_field.value.strip()
-#         dob = new_deceased_dob_field.value.strip()
-
-#         if name and dob:
-#             deceased_service.add_deceased(name, dob)
-#             new_deceased_name_field.value = ""
-#             new_deceased_dob_field.value = ""
-#             update_deceased_list_ui()
-
-#     # 被相続人を削除する関数 (ロジックはサービス層へ)
-#     def delete_deceased(e):
-#         deceased_id_to_delete = e.control.data
-#         deceased_service.delete_deceased(deceased_id_to_delete)
-#         update_deceased_list_ui()
-
-#     update_deceased_list_ui()
-
-#     return View(
-#         "/",
-#         [
-#             AppBar(
-#                 title=Text("顧客管理システム (被相続人一覧)"),
-#                 bgcolor=Colors.BLUE_GREY_900,
-#             ),
-#             Container(
-#                 content=Column(
-#                     [
-#                         Text("👨‍🦳 新しい被相続人を追加", size=16),
-#                         Row(
-#                             [
-#                                 new_deceased_name_field,
-#                                 new_deceased_dob_field,
-#                                 CustomElevatedButton("追加", on_click=add_deceased),
-#                             ]
-#                         ),
-#                         Divider(height=20),
-#                         Text("📋 登録済み被相続人", size=16),
-#                         Container(
-#                             content=deceased_data_table,
-#                             padding=10,
-#                             width=page.width * 0.9,
-#                         ),
-#                     ],
-#                     horizontal_alignment=CrossAxisAlignment.START,
-#                 ),
-#                 padding=20,
-#             ),
-#         ],
-#         scroll=ScrollMode.AUTO,
-#     )

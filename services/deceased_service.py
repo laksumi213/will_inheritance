@@ -2,19 +2,158 @@
 
 from datetime import date, datetime
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from services.db_setup import (
     Address,
     Case,
+    Contact,
     D_AddressHistory,
     Deceased,
     Engine,
     H_AddressHistory,
+    H_ContactLink,
     Heir,
+    Session,
+    Task,
+    delete_case_and_all_related_data,
 )
 
 # --- 内部ヘルパー関数 ---
+
+
+def delete_case_by_case_number(case_number: str) -> bool:
+    """
+    案件番号を指定して、案件と全ての関連データを削除するサービスラッパー。
+    """
+    return delete_case_and_all_related_data(case_number)
+
+
+def convert_gengo_to_seireki(gengo_date_string):
+    """
+    元号の略称（s60, h20など）を含む文字列を西暦に変換し、年-月-日形式にする。
+    例: 's60-1-15' -> '1985-1-15'
+    """
+    gengo = gengo_date_string[0].upper()  # 最初の文字を取得し大文字化 (S, H, R)
+
+    # 基準年を定義 (和暦年 + 基準年 = 西暦年)
+    gengo_base_year = {
+        "T": 1911,  # 大正 (Taisho 1年 = 1912年)
+        "S": 1925,  # 昭和 (Showa 1年 = 1926年)
+        "H": 1988,  # 平成 (Heisei 1年 = 1989年)
+        "R": 2018,  # 令和 (Reiwa 1年 = 2019年)
+    }
+
+    if gengo in gengo_base_year:
+        # 1. 元号部分を抽出 (例: s60)
+        try:
+            # 2. 年の部分を数値として抽出 (例: 60)
+            gengo_year_part = (
+                gengo_date_string[1:].split("-", 1)[0].split("/", 1)[0].split(".", 1)[0]
+            )
+            gengo_year = int(gengo_year_part)
+
+            # 3. 西暦を計算 (例: 60 + 1925 = 1985)
+            seireki_year = gengo_year + gengo_base_year[gengo]
+
+            # 4. 元の文字列の元号部分を西暦に置き換えて返す
+            # 元号部分の文字列長 (例: 's60' は3文字)
+            gengo_part_length = len(gengo) + len(gengo_year_part)
+
+            # 西暦 + 残りの日付部分 (例: '1985' + '-1-15')
+            return str(seireki_year) + gengo_date_string[gengo_part_length:]
+
+        except ValueError:
+            # 年の数値変換に失敗した場合など、元号形式ではないと判断
+            pass
+
+    # 元号の形式でなかった場合は、元の文字列をそのまま返す
+    return gengo_date_string
+
+
+def parse_all_flexible_date(date_string):
+    """
+    元号、西暦、様々な区切り文字、年なしの入力に対応する統合日付解析関数。
+    """
+
+    # 1. 元号を西暦に変換
+    processed_string = convert_gengo_to_seireki(date_string)
+
+    # 2. 年がない入力（例: 1/15）かチェックし、年を補完する（前回の回答のロジックを簡略化）
+    # 区切り文字が一つだけ見つかり、年が最初の部分に含まれていない場合などを想定
+    if (
+        len(processed_string.split("/", 2)) == 2
+        or len(processed_string.split("-", 2)) == 2
+        or len(processed_string.split(".", 2)) == 2
+    ):
+        # 年なしフォーマットで試行
+        formats_to_try_no_year = ["%m/%d", "%m-%d", "%m.%d"]
+        for fmt in formats_to_try_no_year:
+            try:
+                dt_object_no_year = datetime.strptime(processed_string, fmt)
+                # 今年の年を補完
+                return date(
+                    date.today().year, dt_object_no_year.month, dt_object_no_year.day
+                )
+            except ValueError:
+                continue
+
+    # 3. 完全な日付形式で試行 (元号変換後の西暦、または最初から西暦で入力された場合)
+    # %Y-%m-%d  (例: 1985-1-15)
+    # %Y/%m/%d  (例: 1985/1/15)
+    # %Y.%m.%d  (例: 1985.1.15)
+    formats_to_try_full = ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"]
+
+    for fmt in formats_to_try_full:
+        try:
+            return datetime.strptime(processed_string, fmt).date()
+        except ValueError:
+            continue
+
+    # 4. すべての形式で失敗した場合
+    raise ValueError(
+        f"日付文字列 '{date_string}' (処理後: '{processed_string}') は無効な形式です。"
+    )
+
+
+def get_case_progress_summary(case_id: int):
+    """
+    案件の進捗サマリー（次のアクションと最終更新日）を取得する。
+    """
+    with Session(bind=Engine) as session:
+        # 1. 「次のアクション」の取得
+        # 未完了 (is_completed=False) のタスクのうち、due_dateが最も早いものを取得
+        next_task = (
+            session.query(Task)
+            .filter(Task.case_id == case_id)
+            .filter(Task.is_completed == False)
+            .order_by(Task.due_date)  # 期限が早い順にソート
+            .first()  # 最初の一つ（最も期限が近いタスク）を取得
+        )
+
+        # 2. 「進捗管理の更新日」の取得
+        # 全タスクの中で、last_updated_atが最新のものの日付を取得
+        last_update_date = (
+            session.query(
+                func.max(Task.last_updated_at)
+            )  # last_updated_atの最大値を取得
+            .filter(Task.case_id == case_id)
+            .scalar()  # 結果を単一の値として取得
+        )
+
+        # 結果を辞書形式で返す
+        return {
+            "next_action": next_task.description
+            if next_task
+            else "全て完了/未割り当て",
+            "next_due_date": next_task.due_date.strftime("%Y-%m-%d")
+            if next_task and next_task.due_date
+            else "N/A",
+            "last_updated_at": last_update_date.strftime("%Y-%m-%d %H:%M")
+            if last_update_date
+            else "N/A",
+        }
 
 
 def _update_or_create_address(
@@ -76,6 +215,34 @@ def _update_or_create_address(
         session.add(new_link)
 
 
+# 連絡先登録ヘルパー関数の追加
+def _create_contact_and_link_to_heir(
+    db: Session, heir_id: int, contacts: list[dict], contact_type: str
+):
+    """
+    収集された連絡先リストを Contact テーブルに登録し、H_ContactLink を介して相続人に紐づける。
+
+    Args:
+        db (Session): SQLAlchemy セッション
+        heir_id (int): 紐づける相続人のID
+        contacts (list[dict]): [{'value': '090...', 'sub_type': '携帯'}, ...]
+        contact_type (str): "PHONE" または "EMAIL"
+    """
+    for contact_data in contacts:
+        value = contact_data.get("value")
+        sub_type = contact_data.get("sub_type")
+
+        if value:
+            # 1. Contact レコードの作成
+            new_contact = Contact(value=value, type=contact_type, sub_type=sub_type)
+            db.add(new_contact)
+            db.flush()  # IDを取得
+
+            # 2. H_ContactLink レコードの作成
+            link = H_ContactLink(heir_id=heir_id, contact_id=new_contact.id)
+            db.add(link)
+
+
 # --- 被相続人関連のデータアクセスロジック ---
 
 
@@ -121,7 +288,7 @@ def add_deceased(name: str, dob: str):
         new_case = Case(
             case_number=f"T{datetime.now().strftime('%y%m%d%H%M%S')}",
             client_name=name_last,
-            deceased_name=name,
+            # deceased_name=name,
         )
         session.add(new_case)
         session.flush()
@@ -134,6 +301,7 @@ def add_deceased(name: str, dob: str):
         )
         session.add(new_deceased)
         session.commit()
+        return new_deceased.id
 
 
 def delete_deceased(deceased_id: int):
@@ -167,12 +335,12 @@ def update_deceased(
     name_last = parts[0].strip()
     name_first = parts[1].strip() if len(parts) > 1 else ""
     try:
-        dob_date = date.fromisoformat(dob)
+        dob_date = parse_all_flexible_date(dob) if dob else None
     except ValueError:
         dob_date = None
 
     try:
-        dod_date = date.fromisoformat(dod) if dod else None
+        dod_date = parse_all_flexible_date(dod) if dod else None
     except ValueError:
         dod_date = None
 
@@ -210,151 +378,122 @@ def update_deceased(
 
 
 def add_new_case_for_client_registration(
-    full_name: str,
-    kana: str,
-    zip_code: str,
-    address_raw: str,
-    address_info: dict,
-    dob_str: str,
-    dod_str: str,
     case_number: str,
-    # 💡 変更点: 担当者IDの引数を追加 (Noneを許容)
+    name: str,
+    kana_last: str = None,
+    kana_first: str = None,
+    rel: str = None,
+    hometown: str = None,
+    zip_code: str = None,
+    pref: str = None,
+    city: str = None,
+    street: str = None,
+    building: str = None,
+    dob: str = None,  # 被相続人情報として登録される（UIから渡される）
+    dod: str = None,  # 被相続人情報として登録される（UIから渡される）
     manager_id: int | None = None,
     operator_id: int | None = None,
+    phone_contacts: list[dict] = None,
+    email_contacts: list[dict] = None,
 ) -> int:
-    """契約者情報に基づいて新しい案件と被相続人レコードを作成する"""
-    db = Session()
+    """
+    新規案件を登録し、同時に契約者（依頼者: Heir）と被相続人（Deceased）を登録する。
+    登録後、新しい Deceased の ID を返す。
+    """
+
+    parts = name.split(" ", 1)
+    name_last = parts[0].strip()
+    name_first = parts[1].strip() if len(parts) > 1 else ""
+
     try:
-        # 1. 新しい案件 (Case) を作成
-        new_case = Case(
-            case_number=case_number,
-            status="進行中",
-            # 💡 変更点: 担当者IDを設定
-            manager_id=manager_id,
-            operator_id=operator_id,
-        )
-        db.add(new_case)
-        db.flush()  # New case_id is generated
+        dob_date = parse_all_flexible_date(dob) if dob else None
+    except ValueError:
+        dob_date = None
 
-        # 2. 被相続人 (Deceased) レコードを作成
-        new_deceased = Deceased(
-            full_name=full_name,
-            kana=kana,
-            zip_code=zip_code,
-            address_raw=address_raw,
-            address_info=address_info,
-            dob_str=dob_str,
-            dod_str=dod_str,
-            case_id=new_case.case_id,  # 案件IDを紐づけ
-        )
-        db.add(new_deceased)
-        db.commit()
-        return new_deceased.deceased_id
-    except Exception as e:
-        db.rollback()
-        print(f"契約者登録エラー: {e}")
-        return -1
-    finally:
-        db.close()
+    try:
+        dod_date = parse_all_flexible_date(dod) if dod else None
+    except ValueError:
+        dod_date = None
 
+    with Session(bind=Engine) as session:
+        try:
+            # 1. 新しい案件 (Case) を作成
+            new_case = Case(
+                case_number=case_number,
+                client_name=f"{name_last} {name_first}",  # 契約者名を設定
+                client_name_kana=f"{kana_last} {kana_first}" if kana_last else None,
+                contract_date=date.today(),  # 簡易的に今日を受託日とする
+                # 担当者IDを設定 (Noneの場合は未割り当て)
+                manager_id=manager_id,
+                operator_id=operator_id,
+                # current_status_id は別途初期ステータスIDを設定する必要があるが、ここでは省略
+            )
+            session.add(new_case)
+            session.flush()  # new_case.case_id を確定させる
 
-# def add_new_case_for_client_registration(
-#     case_number: str,
-#     name: str,
-#     kana_last: str = None,
-#     kana_first: str = None,
-#     hometown: str = None,
-#     zip_code: str = None,
-#     pref: str = None,
-#     city: str = None,
-#     street: str = None,
-#     building: str = None,
-#     dob: str = None,  # 被相続人情報として登録される
-#     dod: str = None,  # 被相続人情報として登録される
-# ):
-#     """
-#     新規案件を登録し、同時に契約者（依頼者: Heir）と被相続人（Deceased）を登録する。
-#     """
+            # 2. 被相続人 (Deceased) を作成（仮の被相続人情報）
+            new_deceased = Deceased(
+                case_id=new_case.case_id,
+                name_last="",
+                name_first="",
+                name_last_kana="",
+                name_first_kana="",
+                hometown="",
+                date_of_birth=None,
+                date_of_death=None,
+                relationship_type="本人",
+            )
+            session.add(new_deceased)
+            session.flush()  # new_deceased.id を確定させる
 
-#     parts = name.split(" ", 1)
-#     name_last = parts[0].strip()
-#     name_first = parts[1].strip() if len(parts) > 1 else ""
+            # 3. 契約者（依頼者）を相続人 (Heir) として作成し、is_contracting_party=True を設定
+            new_client_heir = Heir(
+                deceased_id=new_deceased.id,
+                name_last=name_last,
+                name_first=name_first,
+                name_last_kana=kana_last,
+                name_first_kana=kana_first,
+                hometown=hometown,
+                date_of_birth=dob_date,  # 契約者の生年月日を登録
+                relationship_type=rel,
+                is_contracting_party=True,
+            )
+            session.add(new_client_heir)
+            session.flush()
 
-#     try:
-#         dob_date = date.fromisoformat(dob) if dob else None
-#     except ValueError:
-#         dob_date = None
+            # 4. 契約者（相続人）の住所情報を更新/作成
+            if pref and street:
+                _update_or_create_address(
+                    session,
+                    new_client_heir.id,
+                    "heir",  # 相続人として登録
+                    zip_code,
+                    pref,
+                    city,
+                    street,
+                    building,
+                )
 
-#     try:
-#         dod_date = date.fromisoformat(dod) if dod else None
-#     except ValueError:
-#         dod_date = None
+            # 連絡先情報を登録
+            if phone_contacts:
+                _create_contact_and_link_to_heir(
+                    session, new_client_heir.id, phone_contacts, "PHONE"
+                )
 
-#     with Session(bind=Engine) as session:
-#         # 1. 新しい案件 (Case) を作成
-#         new_case = Case(
-#             # case_number=f"G{datetime.now().strftime('%y%m%d%H%M%S')}",
-#             case_number=case_number,
-#             client_name=f"{name_last} {name_first}",  # 契約者名を設定
-#             client_name_kana=f"{kana_last} {kana_first}" if kana_last else None,
-#             contract_date=date.today(),  # 簡易的に今日を受託日とする
-#             # manager_id, current_status_id は後で設定
-#         )
-#         session.add(new_case)
-#         session.flush()
+            if email_contacts:
+                _create_contact_and_link_to_heir(
+                    session, new_client_heir.id, email_contacts, "EMAIL"
+                )
 
-#         # 2. 被相続人 (Deceased) を作成（名前は空欄や仮置きでもよいが、ここでは契約者情報から類推）
-#         new_deceased = Deceased(
-#             case_id=new_case.case_id,
-#             name_last="",
-#             name_first="",
-#             name_last_kana="",
-#             name_first_kana="",
-#             hometown="",
-#             date_of_birth=None,
-#             date_of_death=None,
-#             # name_last=name_last,  # 契約者の姓を仮の被相続人姓とする
-#             # name_first="氏名未定",
-#             # name_last_kana=kana_last,
-#             # name_first_kana=kana_first,
-#             # date_of_birth=dob_date,
-#             # date_of_death=dod_date,
-#             relationship_type="本人",  # 仮の被相続人として作成
-#         )
-#         session.add(new_deceased)
-#         session.flush()
+            session.commit()
 
-#         # 3. 契約者（依頼者）を相続人 (Heir) として作成し、is_contracting_party=True を設定
-#         new_client_heir = Heir(
-#             deceased_id=new_deceased.id,
-#             name_last=name_last,
-#             name_first=name_first,
-#             name_last_kana=kana_last,
-#             name_first_kana=kana_first,
-#             hometown=hometown,
-#             relationship_type="契約者",  # 続柄は「契約者」と明記
-#             is_contracting_party=True,  # 契約者フラグを立てる
-#         )
-#         session.add(new_client_heir)
-#         session.flush()
+            # 💡 DetachedInstanceError を回避するため、IDのみを返す
+            return new_deceased.id
 
-#         # 4. 契約者（相続人）の住所情報を更新/作成
-#         if pref and street:
-#             _update_or_create_address(
-#                 session,
-#                 new_client_heir.id,
-#                 "heir",  # 相続人として登録
-#                 zip_code,
-#                 pref,
-#                 city,
-#                 street,
-#                 building,
-#             )
-
-#         session.commit()
-#         return (
-#             new_deceased.id
-#         )  # 新規作成されたDeceasedオブジェクトを返す（IDを取得するため）
+        except Exception as e:
+            session.rollback()
+            print(f"契約者登録エラー: {e}")
+            return -1  # 登録失敗を示すID
 
 
 # --- 相続人関連のデータアクセスロジック ---
@@ -411,7 +550,7 @@ def add_heir(
 
     with Session(bind=Engine) as session:
         session.add(new_heir)
-        # 💡 修正: new_heir のIDを確定させるために flush が必要
+        # new_heir のIDを確定させるために flush が必要
         session.flush()
 
         # 住所情報が提供されていれば、_update_or_create_address を呼び出す
@@ -516,3 +655,26 @@ def get_address_info(owner_type: str, owner_id: int):
                 }
 
         return {}
+
+
+# --- 案件の担当者情報を更新する関数 ---
+def update_case_assignment(
+    case_id: int, manager_id: int | None, operator_id: int | None
+):
+    """案件の担当者1 (manager_id) と担当者2 (operator_id) を更新する"""
+
+    # Session() は db_setup.py で定義されたセッションメーカーを使用
+    with Session(bind=Engine) as session:
+        try:
+            case = session.query(Case).filter(Case.case_id == case_id).first()
+            if case:
+                # Noneが渡された場合はDBのNULLに設定される
+                case.manager_id = manager_id
+                case.operator_id = operator_id
+                session.commit()
+                return True
+            return False
+        except Exception as e:
+            session.rollback()
+            print(f"担当者割り当て更新エラー: {e}")
+            return False
