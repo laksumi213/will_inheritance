@@ -354,7 +354,8 @@ class Heir(Base):
     name_first_kana = Column(String)
     hometown = Column(String)
     date_of_birth = Column(Date)
-    relationship_type = Column(String, nullable=False)  # 続柄（例: 長男、配偶者）
+    date_of_death = Column(Date)
+    relationship_type = Column(String)  # 続柄（例: 長男、配偶者）
     is_contracting_party = Column(Boolean, default=False)  # 契約者本人であるか
 
     deceased = relationship("Deceased", back_populates="heirs")
@@ -528,7 +529,7 @@ def get_case_list(search_term="", status_id=None, user_id=None):
                 CaseStatus, Case.current_status_id == CaseStatus.id, isouter=True
             )  # CaseStatusテーブルとの結合
             .join(
-                Task, Case.case_id == Task.task_id, isouter=True
+                Task, Case.case_id == Task.case_id, isouter=True
             )  # Taskテーブルとの結合
             .order_by(Task.last_updated_at.desc())
         )
@@ -554,6 +555,8 @@ def get_case_list(search_term="", status_id=None, user_id=None):
         cases_data = query.limit(50).all()
 
         case_list = []
+        processed_case_ids = set()
+
         for (
             case,
             d_last,
@@ -562,6 +565,16 @@ def get_case_list(search_term="", status_id=None, user_id=None):
             description,
             last_updated_at,
         ) in cases_data:
+            if case.case_id in processed_case_ids:
+                # 既に処理済みであれば、この行はタスク情報のみが異なる重複行であるため、
+                # リストへの追加処理をスキップします。
+                continue
+
+            # 💡 案件IDの記録:
+            #    - 処理を行う案件IDをセットに追加し、以降の行で重複として識別できるようにします。
+            processed_case_ids.add(case.case_id)
+
+            # --- 重複排除後に実行される、案件情報構築ロジック ---
             deceased_name = f"{d_last} {d_first}" if d_last else "N/A"
 
             # 担当ロールの決定 (ユーザーが担当1か担当2かを判定)
@@ -915,6 +928,29 @@ def display_records_pretty(model_class):
     print("=======================================\n")
 
 
+def get_case_folder_path(case_id: int) -> str | None:
+    """
+    Case ID に紐づくフォルダパス (Case.folder_path) を取得する。
+    """
+    with Session(bind=Engine) as session:
+        case = session.query(Case).filter(Case.case_id == case_id).first()
+        # フォルダパスが存在しない場合や Case が見つからない場合は None を返す
+        return case.folder_path if case and case.folder_path else None
+
+
+def get_case_by_number(case_number: str):
+    """
+    案件番号を指定して、Caseレコードを一つ取得する。
+    存在しない場合は None を返す。
+    """
+    db = Session()
+    try:
+        case = db.query(Case).filter(Case.case_number == case_number).first()
+        return case
+    finally:
+        db.close()
+
+
 # 次の案件番号を生成する関数
 def get_next_case_number():
     """
@@ -1027,23 +1063,33 @@ def delete_case_and_all_related_data(case_number: str):
 
 
 def create_contact_and_link_to_heir(
-    db: Session, heir_id: int, phone: str | None, email: str | None
+    db: Session, heir_id: int, contacts: list[dict], contact_type: str
 ):
     """
-    電話番号とメールアドレスを Contact テーブルに登録し、H_ContactLink を介して相続人に紐づける。
+    収集された連絡先リストを Contact テーブルに登録し、H_ContactLink を介して相続人に紐づける。
+
+    Args:
+        db (Session): SQLAlchemy セッション
+        heir_id (int): 紐づける相続人のID
+        contacts (list[dict]): [{'value': '090...', 'sub_type': '携帯'}, ...]
+        contact_type (str): "PHONE" または "EMAIL"
     """
-    if phone:
-        contact_phone = Contact(value=phone, type="PHONE", sub_type="携帯")
-        db.add(contact_phone)
-        db.flush()  # IDを取得するため
+    # リストをループして各連絡先を処理
+    for contact_data in contacts:
+        value = contact_data.get("value")
+        sub_type = contact_data.get("sub_type")
 
-        link_phone = H_ContactLink(heir_id=heir_id, contact_id=contact_phone.id)
-        db.add(link_phone)
+        # 値が空でなければ登録
+        if value:
+            # 1. Contact レコードの作成
+            new_contact = Contact(
+                value=value,
+                type=contact_type,
+                sub_type=sub_type,
+            )
+            db.add(new_contact)
+            db.flush()  # IDを取得
 
-    if email:
-        contact_email = Contact(value=email, type="EMAIL", sub_type="自宅")
-        db.add(contact_email)
-        db.flush()  # IDを取得するため
-
-        link_email = H_ContactLink(heir_id=heir_id, contact_id=contact_email.id)
-        db.add(link_email)
+            # 2. H_ContactLink レコードの作成
+            link = H_ContactLink(heir_id=heir_id, contact_id=new_contact.id)
+            db.add(link)

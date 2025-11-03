@@ -2,6 +2,7 @@
 
 from datetime import date, datetime
 
+import requests
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
@@ -12,15 +13,116 @@ from services.db_setup import (
     D_AddressHistory,
     Deceased,
     Engine,
+    FinancialAsset,
     H_AddressHistory,
     H_ContactLink,
     Heir,
     Session,
     Task,
     delete_case_and_all_related_data,
+    get_all_users,
+    get_case_by_number,
+    get_case_folder_path,
+    get_next_case_number,
 )
 
 # --- 内部ヘルパー関数 ---
+
+
+def get_case_folder_path_service(case_id: int) -> str | None:
+    """
+    Case ID に紐づくフォルダパス (Case.folder_path) を取得する。
+    """
+    return get_case_folder_path()
+
+    # with Session(bind=Engine) as session:
+    #     case = session.query(Case).filter(Case.case_id == case_id).first()
+    #     # フォルダパスが存在しない場合や Case が見つからない場合は None を返す
+    #     return case.folder_path if case and case.folder_path else None
+
+
+def get_user_name_map() -> dict[int, str]:
+    """
+    担当者IDと名前のマップ {ID: Name} を取得する (db_setupから転送)
+    """
+    # db_setup.py の関数を呼び出すだけの中間関数
+    return get_all_users()
+
+
+# 案件番号取得のためのサービスラッパー
+def get_next_case_number_service() -> str:
+    """
+    次の案件番号を取得する (DBアクセス層のラッパー)
+    """
+    return get_next_case_number()
+
+
+# 💡 案件ハブタイトル用
+def get_contracting_party_name(case_id: int) -> str:
+    """Case IDに紐づく契約者（is_contracting_party=TrueのHeir）の氏名を取得する。"""
+    with Session(bind=Engine) as session:
+        deceased = session.query(Deceased).filter(Deceased.case_id == case_id).first()
+        if not deceased:
+            return "案件が見つかりません"
+
+        contracting_heir = (
+            session.query(Heir)
+            .filter(Heir.deceased_id == deceased.id)
+            .filter(Heir.is_contracting_party == True)
+            .first()
+        )
+
+        if contracting_heir:
+            return f"{contracting_heir.name_last} {contracting_heir.name_first}"
+        else:
+            return deceased.case.client_name if deceased.case else "契約者情報なし"
+
+
+def get_financial_asset_by_case(case_id: int) -> list[dict]:
+    """
+    指定された案件IDに紐づく全ての金融資産を取得する。
+    """
+    with Session(bind=Engine) as session:
+        assets = (
+            session.query(FinancialAsset)
+            .filter(FinancialAsset.case_id == case_id)
+            .all()
+        )
+
+        # 簡易的な辞書形式に変換して返す
+        return [
+            {
+                "id": a.asset_id,
+                "bank_name": a.bank_name,
+                "account_number": a.account_number,
+                "balance": a.balance,
+                "status": a.status,
+            }
+            for a in assets
+        ]
+
+
+def add_financial_asset(
+    case_id: int,
+    bank_name: str,
+    account_number: str,
+    balance: float,
+    status: str = "調査中",
+) -> int:
+    """
+    新しい金融資産レコードを追加する。
+    """
+    with Session(bind=Engine) as session:
+        new_asset = FinancialAsset(
+            case_id=case_id,
+            bank_name=bank_name,
+            account_number=account_number,
+            balance=balance,
+            status=status,
+        )
+        session.add(new_asset)
+        session.commit()
+        return new_asset.asset_id
 
 
 def delete_case_by_case_number(case_number: str) -> bool:
@@ -28,6 +130,46 @@ def delete_case_by_case_number(case_number: str) -> bool:
     案件番号を指定して、案件と全ての関連データを削除するサービスラッパー。
     """
     return delete_case_and_all_related_data(case_number)
+
+
+# --- 住所検索 API ユーティリティ関数 ---
+
+
+def search_address_by_zip_api(zip_code: str) -> dict | None:
+    """
+    郵便番号を引数に取り、住所情報をAPIから取得する。
+    成功した場合、住所情報を含む辞書を返し、失敗した場合、Noneを返す。
+    """
+    cleaned_zip = zip_code.replace("-", "").strip()
+
+    if len(cleaned_zip) != 7 or not cleaned_zip.isdigit():
+        return None  # 無効な形式の場合は処理しない
+
+    try:
+        api_url = f"https://zipcloud.ibsnet.co.jp/api/search?zipcode={cleaned_zip}"
+
+        response = requests.get(api_url)
+        response.raise_for_status()  # HTTPエラー（4xx, 5xx）があれば例外を発生
+        data = response.json()
+
+        if data and data.get("results"):
+            address_data = data["results"][0]
+
+            # 必要な住所情報を抽出して返す
+            return {
+                "prefecture": address_data["address1"],
+                "city_ward_town": address_data["address2"],
+                "street_address": address_data["address3"],
+            }
+        else:
+            return {}  # 住所が見つからなかったが、API通信は成功
+
+    except requests.exceptions.RequestException as req_ex:
+        print(f"APIリクエストエラー: {req_ex}")
+        return None  # 通信エラー
+    except Exception as ex:
+        print(f"予期せぬAPIエラー: {ex}")
+        return None
 
 
 def convert_gengo_to_seireki(gengo_date_string):
@@ -221,6 +363,7 @@ def _create_contact_and_link_to_heir(
 ):
     """
     収集された連絡先リストを Contact テーブルに登録し、H_ContactLink を介して相続人に紐づける。
+    UIで種別が選択されなくなったため、sub_typeは「Primary」固定とする。
 
     Args:
         db (Session): SQLAlchemy セッション
@@ -230,7 +373,8 @@ def _create_contact_and_link_to_heir(
     """
     for contact_data in contacts:
         value = contact_data.get("value")
-        sub_type = contact_data.get("sub_type")
+        # ★ 修正: sub_type は UI から渡されなくなったため、固定値を設定 ★
+        sub_type = "Primary"
 
         if value:
             # 1. Contact レコードの作成
@@ -243,6 +387,43 @@ def _create_contact_and_link_to_heir(
             db.add(link)
 
 
+def _sync_heir_contacts(
+    db: Session, heir_id: int, phone_contacts: list[dict], email_contacts: list[dict]
+):
+    """
+    既存の連絡先リンクとContactレコードを削除し、新しい連絡先を登録する。
+    更新処理において、古い連絡先を削除し、フォームで送られた最新のリストで置き換える。
+    """
+
+    # 1. 既存の H_ContactLink を取得・削除
+    existing_links = (
+        db.query(H_ContactLink).filter(H_ContactLink.heir_id == heir_id).all()
+    )
+
+    # 削除対象の Contact ID を収集
+    contact_ids_to_delete = [link.contact_id for link in existing_links]
+
+    # H_ContactLink を削除
+    db.query(H_ContactLink).filter(H_ContactLink.heir_id == heir_id).delete(
+        synchronize_session=False
+    )
+
+    # 2. リンクが切れた Contact レコードを削除
+    if contact_ids_to_delete:
+        # H_ContactLink から参照されなくなった Contact を削除
+        # 💡 注: Contact レコードは他のテーブル (D_ContactLink, CaseContactPoint) から参照されていないことを前提とする
+        db.query(Contact).filter(Contact.id.in_(contact_ids_to_delete)).delete(
+            synchronize_session=False
+        )
+
+    # 3. 新しい連絡先を登録
+    if phone_contacts:
+        _create_contact_and_link_to_heir(db, heir_id, phone_contacts, "PHONE")
+
+    if email_contacts:
+        _create_contact_and_link_to_heir(db, heir_id, email_contacts, "EMAIL")
+
+
 # --- 被相続人関連のデータアクセスロジック ---
 
 
@@ -252,23 +433,42 @@ def get_all_deceased():
         return session.query(Deceased).all()
 
 
-def get_deceased_by_id(deceased_id: int):
-    """指定IDの被相続人詳細とその相続人リストを取得"""
+# IDがCase IDでもDeceasedオブジェクトを取得できるように拡張
+def get_deceased_by_id(identifier_id: int):  # 💡 変数名を identifier_id に変更
+    """
+    指定IDの被相続人詳細とその相続人リストを取得。
+    IDが Deceased.id として見つからない場合、Case.case_id として検索を試みる。
+    """
     with Session(bind=Engine) as session:
-        # Heirリレーションを結合ロード
+        # 共通のオプション定義
+        options_load = (
+            joinedload(Deceased.heirs),  # 相続人リスト
+            joinedload(Deceased.case).joinedload(
+                Case.manager
+            ),  # Case.manager/operatorも取得
+            joinedload(Deceased.case).joinedload(Case.operator),
+            joinedload(Deceased.case).joinedload(Case.status_ref),  # CaseStatusも取得
+        )
+
+        # 1. まず Deceased ID (Deceased.id) として検索を試みる
         deceased = (
             session.query(Deceased)
-            .options(
-                joinedload(Deceased.heirs),  # 相続人リスト
-                joinedload(Deceased.case),  # 案件情報
-            )
-            .get(deceased_id)
+            .options(*options_load)
+            .filter(Deceased.id == identifier_id)
+            .first()
+        )
+
+        if deceased:
+            return deceased
+
+        # 2. 見つからなかった場合、Case ID (Deceased.case_id) として検索を試みる
+        deceased = (
+            session.query(Deceased)
+            .options(*options_load)
+            .filter(Deceased.case_id == identifier_id)  # 💡 Case IDで検索
+            .first()
         )
         return deceased
-        # deceased = (
-        #     session.query(Deceased).options(joinedload(Deceased.heirs)).get(deceased_id)
-        # )
-        # return deceased
 
 
 def add_deceased(name: str, dob: str):
@@ -322,6 +522,7 @@ def update_deceased(
     dod: str = None,
     kana_last: str = None,
     kana_first: str = None,
+    hometown: str = None,  # 追加: hometownを引数に追加
     zip_code: str = None,
     pref: str = None,
     city: str = None,
@@ -354,6 +555,7 @@ def update_deceased(
             deceased.name_first_kana = kana_first
             deceased.date_of_birth = dob_date
             deceased.date_of_death = dod_date
+            deceased.hometown = hometown  # 追加: hometownを更新
 
             case = session.query(Case).get(deceased.case_id)
             if case:
@@ -375,6 +577,19 @@ def update_deceased(
                 )
 
             session.commit()
+
+
+def update_case_folder_path(case_id: int, folder_path: str | None) -> bool:
+    """
+    案件IDに基づいて、Case.folder_path を更新する。
+    """
+    with Session(bind=Engine) as session:
+        case = session.query(Case).filter(Case.case_id == case_id).first()
+        if case:
+            case.folder_path = folder_path
+            session.commit()
+            return True
+        return False
 
 
 def add_new_case_for_client_registration(
@@ -421,7 +636,9 @@ def add_new_case_for_client_registration(
             new_case = Case(
                 case_number=case_number,
                 client_name=f"{name_last} {name_first}",  # 契約者名を設定
-                client_name_kana=f"{kana_last} {kana_first}" if kana_last else None,
+                client_name_kana=f"{kana_last} {kana_first}"
+                if kana_last and kana_first
+                else None,
                 contract_date=date.today(),  # 簡易的に今日を受託日とする
                 # 担当者IDを設定 (Noneの場合は未割り当て)
                 manager_id=manager_id,
@@ -432,6 +649,7 @@ def add_new_case_for_client_registration(
             session.flush()  # new_case.case_id を確定させる
 
             # 2. 被相続人 (Deceased) を作成（仮の被相続人情報）
+            # 新規契約者登録モードでは、被相続人情報は空で登録される
             new_deceased = Deceased(
                 case_id=new_case.case_id,
                 name_last="",
@@ -511,6 +729,13 @@ def get_all_heirs():
         return heirs
 
 
+def get_heir_by_id(heir_id: int):  # 追加: 単一のHeirを取得する関数
+    """指定IDの相続人詳細を取得"""
+    with Session(bind=Engine) as session:
+        heir = session.query(Heir).get(heir_id)
+        return heir
+
+
 def add_heir(
     deceased_id: int,
     name: str,
@@ -524,6 +749,8 @@ def add_heir(
     city: str = None,
     street: str = None,
     building: str = None,
+    phone_contacts: list[dict] = None,
+    email_contacts: list[dict] = None,
 ):
     """相続人を追加 (全フィールド対応)"""
 
@@ -532,7 +759,7 @@ def add_heir(
     name_first = parts[1].strip() if len(parts) > 1 else ""
 
     try:
-        dob_date = date.fromisoformat(dob) if dob else None
+        dob_date = parse_all_flexible_date(dob) if dob else None
     except ValueError:
         dob_date = None
 
@@ -566,6 +793,17 @@ def add_heir(
                 building,
             )
 
+        # 💡 連絡先情報の登録
+        if phone_contacts:
+            _create_contact_and_link_to_heir(
+                session, new_heir.id, phone_contacts, "PHONE"
+            )
+
+        if email_contacts:
+            _create_contact_and_link_to_heir(
+                session, new_heir.id, email_contacts, "EMAIL"
+            )
+
         session.commit()
 
 
@@ -575,11 +813,14 @@ def update_heir(
     rel: str,
     kana_last: str = None,
     kana_first: str = None,
+    hometown: str = None,  # 追加: hometownを引数に追加
     zip_code: str = None,
     pref: str = None,
     city: str = None,
     street: str = None,
     building: str = None,
+    phone_contacts: list[dict] = None,
+    email_contacts: list[dict] = None,
 ):
     """相続人の基本情報と最新の住所情報を更新する。"""
 
@@ -597,12 +838,22 @@ def update_heir(
             heir.name_last_kana = kana_last
             heir.name_first_kana = kana_first
             heir.relationship_type = rel
+            heir.hometown = hometown  # 追加: hometownを更新
 
             # 2. 住所情報の更新/作成
             if pref and street:
                 _update_or_create_address(
                     session, heir_id, "heir", zip_code, pref, city, street, building
                 )
+
+            # 💡 3. 連絡先情報の同期
+            # phone_contactsとemail_contactsがNoneで渡された場合でも、空のリストとして処理を続行
+            _sync_heir_contacts(
+                session,
+                heir_id,
+                phone_contacts or [],
+                email_contacts or [],
+            )
 
             session.commit()
 
@@ -678,3 +929,83 @@ def update_case_assignment(
             session.rollback()
             print(f"担当者割り当て更新エラー: {e}")
             return False
+
+
+def get_contact_info(owner_type: str, owner_id: int) -> list[dict]:
+    """
+    指定されたエンティティ（今回は相続人 'heir'）に紐づく全ての連絡先情報を取得する。
+    """
+    if owner_type != "heir":
+        # 被相続人 (deceased) の連絡先はここでは扱わない
+        return []
+
+    with Session(bind=Engine) as session:
+        # H_ContactLink を介して Contact テーブルを結合し、全ての連絡先を取得
+        contact_links = (
+            session.query(H_ContactLink)
+            .options(joinedload(H_ContactLink.contact))  # Contactレコードを結合ロード
+            .filter(H_ContactLink.heir_id == owner_id)
+            .all()
+        )
+
+        contacts = []
+        for link in contact_links:
+            contact = link.contact
+            if contact:
+                contacts.append(
+                    {
+                        "value": contact.value or "N/A",
+                        "type": contact.type or "N/A",
+                        "sub_type": contact.sub_type or "N/A",
+                    }
+                )
+
+        return contacts
+
+
+def get_case_id_by_deceased_id(deceased_id: int) -> int | None:
+    """
+    Deceased ID に紐づく Case ID を取得する。
+    """
+    with Session(bind=Engine) as session:
+        # Deceased モデルから case_id を直接取得
+        deceased = (
+            session.query(Deceased.case_id).filter(Deceased.id == deceased_id).first()
+        )
+        return deceased.case_id if deceased else None
+
+
+def get_contracting_party_name(case_id: int) -> str:
+    """
+    Case IDに紐づく契約者（is_contracting_party=TrueのHeir）の氏名を取得する。
+    """
+    with Session(bind=Engine) as session:
+        # 1. まず Case ID から Deceased を見つける
+        deceased = session.query(Deceased).filter(Deceased.case_id == case_id).first()
+
+        if not deceased:
+            return "案件が見つかりません"
+
+        deceased_id = deceased.id
+
+        # 2. Deceased ID に紐づく契約者（Heir）を取得する
+        contracting_heir = (
+            session.query(Heir)
+            .filter(Heir.deceased_id == deceased_id)
+            .filter(Heir.is_contracting_party == True)
+            .first()
+        )
+
+        if contracting_heir:
+            return f"{contracting_heir.name_last} {contracting_heir.name_first}"
+        else:
+            # 契約者Heirが見つからない場合、Caseテーブルのclient_nameを参照する（フォールバック）
+            return deceased.case.client_name if deceased.case else "契約者情報なし"
+
+
+def is_case_number_duplicate(case_number: str) -> bool:
+    """
+    案件番号がすでに存在するかチェックする。
+    """
+    existing_case = get_case_by_number(case_number)
+    return existing_case is not None  # 案件が見つかれば True (重複) を返す

@@ -1,6 +1,6 @@
 # /components/pages/home.py
 
-import threading  # 👈️ デバウンス用に追加
+import threading
 
 from flet import (
     Colors,
@@ -18,9 +18,12 @@ from flet import (
     TextStyle,
 )
 
+from components.utils.file_system import open_case_folder
+
 # サービス層をインポート
 from services.db_setup import (
     get_all_users,
+    get_case_folder_path,
     get_case_list,
     get_incomplete_tasks,
     get_my_cases,
@@ -191,13 +194,13 @@ class CaseDashboardView(Column):
         search_term = self.search_field.value.strip()
 
         # if not search_term:
-        #     # 💡 初期表示は自分のIDでフィルタ
-        #     list_view.controls = self._get_case_items(
-        #         search_term="", filter_by_user_id=self.current_user_id
-        #     )
+        #    # 💡 初期表示は自分のIDでフィルタ
+        #    list_view.controls = self._get_case_items(
+        #        search_term="", filter_by_user_id=self.current_user_id
+        #    )
         # else:
-        #     # 💡 検索時は全案件から検索 (ここではフィルタを無効)
-        #     list_view.controls = self._get_case_items(search_term=search_term)
+        #    # 💡 検索時は全案件から検索 (ここではフィルタを無効)
+        #    list_view.controls = self._get_case_items(search_term=search_term)
 
         self.update()
 
@@ -251,14 +254,28 @@ class CaseDashboardView(Column):
         items = [Text("あなたの担当案件", weight="bold", color=Colors.BLACK)]
 
         for case in cases:
+            case_id = case["case_id"]
 
             def open_detail(e, case_id=case["case_id"]):
                 self.page.go(f"/detail/{case_id}")
 
+            def open_folder(e, case_id=case_id):
+                open_case_folder(
+                    page=self.page,
+                    case_id=case_id,
+                    # 💡 サービスラッパーを渡す
+                    get_path_service=get_case_folder_path,
+                )
+
+            # 担当ロールの表示 (user_idが設定されている場合のみ)
+            role_text = ""
+            if case.get("role_label"):
+                role_text = f"【{case['role_label']}】"
+
             items.append(
                 ListTile(
                     title=Text(
-                        f"案件: {case['case_number']}",
+                        f"案件:{role_text} {case['case_number']}",
                         color=Colors.BLACK,
                         size=14,
                     ),
@@ -309,11 +326,21 @@ class CaseDashboardView(Column):
 
         items = []
         for case in cases:
+            case_id = case["case_id"]
+
             # 各案件をクリックした際のルーティング
-            def open_detail(e, case_id=case["case_id"]):
+            def open_detail(e, case_id=case_id):
                 self.page.go(f"/detail/{case_id}")
 
-            # 担当ロールの表示
+            def open_folder(e, case_id=case_id):
+                open_case_folder(
+                    page=self.page,
+                    case_id=case_id,
+                    # 💡 サービスラッパーを渡す
+                    get_path_service=get_case_folder_path,
+                )
+
+            # 担当ロールの表示 (user_idが設定されている場合のみ)
             role_text = ""
             if case.get("role_label"):
                 role_text = f"【{case['role_label']}】"
@@ -327,7 +354,7 @@ class CaseDashboardView(Column):
                     subtitle=Text(
                         f" 更新日:{case['last_updated_at']}　　次アクション:{case['description']}"
                     ),
-                    trailing=ElevatedButton("詳細", on_click=open_detail),
+                    trailing=ElevatedButton("フォルダを開く", on_click=open_folder),
                     on_click=open_detail,
                 )
             )
@@ -362,7 +389,7 @@ class CaseDashboardView(Column):
                         color=Colors.BLACK,
                     ),
                     dense=True,
-                    on_click=open_detail,  # 👈️ タスクから詳細へ遷移
+                    on_click=open_detail,
                 )
             )
         return items
@@ -389,7 +416,9 @@ class CaseDashboardView(Column):
                 controls=[
                     self.search_field,
                     ElevatedButton(
-                        "➕ 新規案件登録", on_click=lambda e: self.page.go("/detail/-1")
+                        "➕ 新規案件登録",
+                        on_click=lambda e: self.page.go("/client_register"),
+                        # "➕ 新規案件登録", on_click=lambda e: self.page.go("/detail/-1")
                     ),
                     # ここにステータスフィルターなどのドロップダウンを追加可能
                 ],
