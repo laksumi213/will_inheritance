@@ -48,3 +48,14 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/will_inheritance"]
+
+[tool.flake8]
+ignore = ["E501", "W503", "E203"]
+# E501を無視するように指定
+# ignore = ["E501"]
+
+[tool.ruff]
+# ignore = ["E501"]
+# Ruffの最大行長を100文字に設定する
+line-length = 100
+select = ["E", "F", "I"]

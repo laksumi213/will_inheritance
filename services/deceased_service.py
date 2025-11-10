@@ -83,17 +83,15 @@ def get_financial_asset_by_case(case_id: int) -> list[dict]:
     指定された案件IDに紐づく全ての金融資産を取得する。
     """
     with Session(bind=Engine) as session:
-        assets = (
-            session.query(FinancialAsset)
-            .filter(FinancialAsset.case_id == case_id)
-            .all()
-        )
+        assets = session.query(FinancialAsset).filter(FinancialAsset.case_id == case_id).all()
 
-        # 簡易的な辞書形式に変換して返す
         return [
             {
                 "id": a.asset_id,
                 "bank_name": a.bank_name,
+                "bank_code": a.bank_code,
+                "branch_name": a.branch_name,
+                "branch_code": a.branch_code,
                 "account_number": a.account_number,
                 "balance": a.balance,
                 "status": a.status,
@@ -105,6 +103,9 @@ def get_financial_asset_by_case(case_id: int) -> list[dict]:
 def add_financial_asset(
     case_id: int,
     bank_name: str,
+    bank_code: str,
+    branch_name: str,
+    branch_code: str,
     account_number: str,
     balance: float,
     status: str = "調査中",
@@ -116,6 +117,9 @@ def add_financial_asset(
         new_asset = FinancialAsset(
             case_id=case_id,
             bank_name=bank_name,
+            bank_code=bank_code,
+            branch_name=branch_name,
+            branch_code=branch_code,
             account_number=account_number,
             balance=balance,
             status=status,
@@ -123,6 +127,66 @@ def add_financial_asset(
         session.add(new_asset)
         session.commit()
         return new_asset.asset_id
+
+
+def update_financial_asset(
+    asset_id: int,
+    case_id: int,
+    bank_name: str,
+    bank_code: str,
+    branch_name: str,
+    branch_code: str,
+    account_number: str,
+    balance: float | None = None,
+    status: str = "調査中",
+) -> bool:
+    """
+    既存の金融資産レコードを更新する。
+    """
+    with Session(bind=Engine) as session:
+        asset_to_update = (
+            session.query(FinancialAsset).filter(FinancialAsset.asset_id == asset_id).first()
+        )
+
+        if asset_to_update:
+            # 2. 値を更新
+            asset_to_update.bank_name = bank_name
+            asset_to_update.bank_code = bank_code
+            asset_to_update.branch_name = branch_name
+            asset_to_update.branch_code = branch_code
+            asset_to_update.account_number = account_number
+
+            if balance is not None:
+                asset_to_update.balance = balance
+
+            asset_to_update.status = status
+
+            session.commit()
+            return True
+
+        return False
+
+
+# 💡 追記する関数: delete_financial_asset (削除)
+def delete_financial_asset(asset_id: int) -> bool:
+    """
+    指定された asset_id の金融資産レコードを削除する。
+    """
+    with Session(bind=Engine) as session:
+        # 1. 資産レコードを asset_id で検索
+        asset_to_delete = (
+            session.query(FinancialAsset).filter(FinancialAsset.asset_id == asset_id).first()
+        )
+
+        if asset_to_delete:
+            # 2. 削除
+            session.delete(asset_to_delete)
+
+            # 3. コミット
+            session.commit()
+            return True
+
+        return False  # 対象の資産が見つからなかった場合
 
 
 def delete_case_by_case_number(case_number: str) -> bool:
@@ -235,9 +299,7 @@ def parse_all_flexible_date(date_string):
             try:
                 dt_object_no_year = datetime.strptime(processed_string, fmt)
                 # 今年の年を補完
-                return date(
-                    date.today().year, dt_object_no_year.month, dt_object_no_year.day
-                )
+                return date(date.today().year, dt_object_no_year.month, dt_object_no_year.day)
             except ValueError:
                 continue
 
@@ -277,18 +339,14 @@ def get_case_progress_summary(case_id: int):
         # 2. 「進捗管理の更新日」の取得
         # 全タスクの中で、last_updated_atが最新のものの日付を取得
         last_update_date = (
-            session.query(
-                func.max(Task.last_updated_at)
-            )  # last_updated_atの最大値を取得
+            session.query(func.max(Task.last_updated_at))  # last_updated_atの最大値を取得
             .filter(Task.case_id == case_id)
             .scalar()  # 結果を単一の値として取得
         )
 
         # 結果を辞書形式で返す
         return {
-            "next_action": next_task.description
-            if next_task
-            else "全て完了/未割り当て",
+            "next_action": next_task.description if next_task else "全て完了/未割り当て",
             "next_due_date": next_task.due_date.strftime("%Y-%m-%d")
             if next_task and next_task.due_date
             else "N/A",
@@ -299,11 +357,12 @@ def get_case_progress_summary(case_id: int):
 
 
 def _update_or_create_address(
-    session, owner_id, owner_type, zip_code, pref, city, street, building
+    session, owner_id, owner_type, zip_code, pref, city, street, building, is_last: bool = True
 ):
     """
-    住所リンク/レコードを検索し、存在すれば更新、なければ新規作成する。
-    is_last_address (deceased) または is_current_address (heir) がTrueのレコードを操作する。
+    住所リンク/レコードを作成し、is_last/is_currentフラグを管理する。
+
+    owner_type='deceased'かつis_last=Trueの場合、既存の is_last_address=True を False に更新する。
     """
 
     # 1. 依存するテーブルとカラムの特定
@@ -311,50 +370,44 @@ def _update_or_create_address(
         AddressHistory = D_AddressHistory
         owner_id_col = AddressHistory.deceased_id
         is_flag_col = AddressHistory.is_last_address
+        is_flag_value = is_last
     else:  # 'heir'
         AddressHistory = H_AddressHistory
         owner_id_col = AddressHistory.heir_id
         is_flag_col = AddressHistory.is_current_address
+        is_flag_value = True  # 相続人は常に現在の住所として扱う
 
-    # 2. 既存の住所リンクを検索
-    address_link = (
-        session.query(AddressHistory)
-        .filter(owner_id_col == owner_id)
-        .filter(is_flag_col == True)
-        .first()
-    )
-
-    if address_link:
-        # 3. 既存のAddressレコードを更新
-        address_to_update = session.query(Address).get(address_link.address_id)
-        if address_to_update:
-            address_to_update.zip_code = zip_code
-            address_to_update.prefecture = pref
-            address_to_update.city_ward_town = city
-            address_to_update.street_address = street
-            address_to_update.building_name = building
-    else:
-        # 4. 既存のリンクがない場合、新規Addressレコードを作成し、リンクを作成
-        new_address = Address(
-            zip_code=zip_code,
-            prefecture=pref,
-            city_ward_town=city,
-            street_address=street,
-            building_name=building,
+    # 2. 【Deceased & 最後の住所の場合のみ】既存の is_last_address=True のフラグを False にリセット
+    if owner_type == "deceased" and is_flag_value is True:
+        # 既存の最後の住所のフラグを全て解除する
+        session.query(AddressHistory).filter(owner_id_col == owner_id, is_flag_col == True).update(
+            {is_flag_col: False},
+            synchronize_session=False,  # 更新が効率的になるように設定
         )
-        session.add(new_address)
-        session.flush()  # ID確定
 
-        # 新しいリンクを作成
-        if owner_type == "deceased":
-            new_link = D_AddressHistory(
-                deceased_id=owner_id, address_id=new_address.id, is_last_address=True
-            )
-        else:
-            new_link = H_AddressHistory(
-                heir_id=owner_id, address_id=new_address.id, is_current_address=True
-            )
-        session.add(new_link)
+    # 3. 新規Addressレコードを作成 (常に新しい住所レコードを作成する方式)
+    new_address = Address(
+        zip_code=zip_code,
+        prefecture=pref,
+        city_ward_town=city,
+        street_address=street,
+        building_name=building,
+    )
+    session.add(new_address)
+    session.flush()  # new_address.id を確定させる
+
+    # 4. 新しいリンクを作成
+    if owner_type == "deceased":
+        new_link = D_AddressHistory(
+            deceased_id=owner_id,
+            address_id=new_address.id,
+            is_last_address=is_flag_value,  # True (最後の住所) または False (過去の住所)
+        )
+    else:
+        new_link = H_AddressHistory(
+            heir_id=owner_id, address_id=new_address.id, is_current_address=is_flag_value
+        )
+    session.add(new_link)
 
 
 # 連絡先登録ヘルパー関数の追加
@@ -396,9 +449,7 @@ def _sync_heir_contacts(
     """
 
     # 1. 既存の H_ContactLink を取得・削除
-    existing_links = (
-        db.query(H_ContactLink).filter(H_ContactLink.heir_id == heir_id).all()
-    )
+    existing_links = db.query(H_ContactLink).filter(H_ContactLink.heir_id == heir_id).all()
 
     # 削除対象の Contact ID を収集
     contact_ids_to_delete = [link.contact_id for link in existing_links]
@@ -443,9 +494,7 @@ def get_deceased_by_id(identifier_id: int):  # 💡 変数名を identifier_id �
         # 共通のオプション定義
         options_load = (
             joinedload(Deceased.heirs),  # 相続人リスト
-            joinedload(Deceased.case).joinedload(
-                Case.manager
-            ),  # Case.manager/operatorも取得
+            joinedload(Deceased.case).joinedload(Case.manager),  # Case.manager/operatorも取得
             joinedload(Deceased.case).joinedload(Case.operator),
             joinedload(Deceased.case).joinedload(Case.status_ref),  # CaseStatusも取得
         )
@@ -522,12 +571,13 @@ def update_deceased(
     dod: str = None,
     kana_last: str = None,
     kana_first: str = None,
-    hometown: str = None,  # 追加: hometownを引数に追加
-    zip_code: str = None,
-    pref: str = None,
-    city: str = None,
-    street: str = None,
-    building: str = None,
+    hometown: str = None,
+    last_zip_code: str = None,
+    last_pref: str = None,
+    last_city: str = None,
+    last_street: str = None,
+    last_building: str = None,
+    past_addresses: list[dict] = None,
 ):
     """被相続人の基本情報と最新の住所情報を更新する。"""
 
@@ -575,6 +625,62 @@ def update_deceased(
                     street,
                     building,
                 )
+
+            # 2-0. 💡【重要】既存の過去の住所履歴を全て削除（更新は行わず、再登録する方式）
+            # *既存の D_AddressHistory レコードを全て取得*
+            existing_links = (
+                session.query(D_AddressHistory)
+                .filter(D_AddressHistory.deceased_id == deceased_id)
+                .all()
+            )
+
+            # *紐づく Address ID を収集*
+            address_ids_to_delete = [link.address_id for link in existing_links]
+
+            # *リンクを全て削除* (カスケード削除により Address レコードも削除されると良いが、ここでは手動で Address も削除する方針を維持)
+            session.query(D_AddressHistory).filter(
+                D_AddressHistory.deceased_id == deceased_id
+            ).delete(synchronize_session=False)
+
+            # *Address レコードを削除*
+            # 💡 注意: Address モデルが他のテーブルから参照されていないことを確認する必要があります。
+            # 今回は D_AddressHistory が Address を参照する唯一のテーブルだと仮定します。
+            session.query(Address).filter(Address.id.in_(address_ids_to_delete)).delete(
+                synchronize_session=False
+            )
+
+            session.flush()  # 削除を確定
+
+            # 2-1. 最後の住所の登録 (住所が存在すれば、is_last=True で登録)
+            if last_pref and last_street:
+                _update_or_create_address(
+                    session,
+                    deceased_id,
+                    "deceased",
+                    last_zip_code,
+                    last_pref,
+                    last_city,
+                    last_street,
+                    last_building,
+                    is_last=True,  # 最後の住所として登録
+                )
+
+            # 2-2. 過去の住所の登録 (過去の住所リストがあれば、is_last=False で登録)
+            if past_addresses:
+                for addr in past_addresses:
+                    # 必須フィールドが空でないか確認
+                    if addr.get("prefecture") and addr.get("street_address"):
+                        _update_or_create_address(
+                            session,
+                            deceased_id,
+                            "deceased",
+                            addr.get("zip_code"),
+                            addr.get("prefecture"),
+                            addr.get("city_ward_town"),
+                            addr.get("street_address"),
+                            addr.get("building_name"),
+                            is_last=False,  # 過去の住所として登録
+                        )
 
             session.commit()
 
@@ -636,9 +742,7 @@ def add_new_case_for_client_registration(
             new_case = Case(
                 case_number=case_number,
                 client_name=f"{name_last} {name_first}",  # 契約者名を設定
-                client_name_kana=f"{kana_last} {kana_first}"
-                if kana_last and kana_first
-                else None,
+                client_name_kana=f"{kana_last} {kana_first}" if kana_last and kana_first else None,
                 contract_date=date.today(),  # 簡易的に今日を受託日とする
                 # 担当者IDを設定 (Noneの場合は未割り当て)
                 manager_id=manager_id,
@@ -722,9 +826,7 @@ def get_all_heirs():
     with Session(bind=Engine) as session:
         # 相続人(Heir)と被相続人(Deceased)を結合して取得
         heirs = (
-            session.query(Heir)
-            .options(joinedload(Heir.deceased).joinedload(Deceased.case))
-            .all()
+            session.query(Heir).options(joinedload(Heir.deceased).joinedload(Deceased.case)).all()
         )
         return heirs
 
@@ -795,14 +897,10 @@ def add_heir(
 
         # 💡 連絡先情報の登録
         if phone_contacts:
-            _create_contact_and_link_to_heir(
-                session, new_heir.id, phone_contacts, "PHONE"
-            )
+            _create_contact_and_link_to_heir(session, new_heir.id, phone_contacts, "PHONE")
 
         if email_contacts:
-            _create_contact_and_link_to_heir(
-                session, new_heir.id, email_contacts, "EMAIL"
-            )
+            _create_contact_and_link_to_heir(session, new_heir.id, email_contacts, "EMAIL")
 
         session.commit()
 
@@ -908,10 +1006,39 @@ def get_address_info(owner_type: str, owner_id: int):
         return {}
 
 
+def get_deceased_address_history(deceased_id: int) -> list[dict]:
+    """
+    指定された被相続人の住所履歴を全て取得する。
+    is_last_address の降順（Trueが先）でソートされる。
+    """
+    with Session(bind=Engine) as session:
+        # D_AddressHistory と Address を結合して、全履歴を取得
+        history = (
+            session.query(D_AddressHistory, Address)
+            .join(Address, D_AddressHistory.address_id == Address.id)
+            .filter(D_AddressHistory.deceased_id == deceased_id)
+            .order_by(D_AddressHistory.is_last_address.desc())  # 最後の住所を最上位にする
+            .all()
+        )
+
+        results = []
+        for link, address in history:
+            results.append(
+                {
+                    "address_id": address.id,
+                    "is_last_address": link.is_last_address,
+                    "zip_code": address.zip_code or "",
+                    "prefecture": address.prefecture or "",
+                    "city_ward_town": address.city_ward_town or "",
+                    "street_address": address.street_address or "",
+                    "building_name": address.building_name or "",
+                }
+            )
+        return results
+
+
 # --- 案件の担当者情報を更新する関数 ---
-def update_case_assignment(
-    case_id: int, manager_id: int | None, operator_id: int | None
-):
+def update_case_assignment(case_id: int, manager_id: int | None, operator_id: int | None):
     """案件の担当者1 (manager_id) と担当者2 (operator_id) を更新する"""
 
     # Session() は db_setup.py で定義されたセッションメーカーを使用
@@ -969,9 +1096,7 @@ def get_case_id_by_deceased_id(deceased_id: int) -> int | None:
     """
     with Session(bind=Engine) as session:
         # Deceased モデルから case_id を直接取得
-        deceased = (
-            session.query(Deceased.case_id).filter(Deceased.id == deceased_id).first()
-        )
+        deceased = session.query(Deceased.case_id).filter(Deceased.id == deceased_id).first()
         return deceased.case_id if deceased else None
 
 

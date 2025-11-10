@@ -109,9 +109,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int):
     if not is_new_heir:
         data = get_heir_by_id(heir_id)
         if not data:
-            return View(
-                f"/heir_edit/{heir_id}", [Text("相続人データが見つかりません。")]
-            )
+            return View(f"/heir_edit/{heir_id}", [Text("相続人データが見つかりません。")])
 
         deceased_id = data.deceased_id
         address_info = get_address_info("heir", heir_id)
@@ -145,11 +143,9 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int):
         width=150,
         value=data.name_first_kana if data and data.name_first_kana else "",
     )
-    rel_field = TextField(
-        label="続柄", width=200, value=data.relationship_type if data else ""
-    )
+    rel_field = TextField(label="続柄", width=200, value=data.relationship_type if data else "")
     hometown_field = TextField(
-        label="本籍地 (全体)", value=data.hometown if data and data.hometown else ""
+        label="本籍地", value=data.hometown if data and data.hometown else ""
     )
 
     # 日付フィールドと和暦表示のセットアップ
@@ -174,18 +170,12 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int):
     )
 
     # 住所フィールド
-    zip_field = TextField(
-        label="郵便番号", width=150, value=address_info.get("zip_code", "")
-    )
-    pref_field = TextField(
-        label="都道府県", width=150, value=address_info.get("prefecture", "")
-    )
+    zip_field = TextField(label="郵便番号", width=150, value=address_info.get("zip_code", ""))
+    pref_field = TextField(label="都道府県", width=150, value=address_info.get("prefecture", ""))
     city_field = TextField(
         label="市区町村", width=200, value=address_info.get("city_ward_town", "")
     )
-    street_field = TextField(
-        label="番地", width=150, value=address_info.get("street_address", "")
-    )
+    street_field = TextField(label="番地", width=150, value=address_info.get("street_address", ""))
     building_field = TextField(
         label="建物名・部屋番号", value=address_info.get("building_name", "")
     )
@@ -201,9 +191,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int):
         column.controls.clear()
 
         filtered_contacts = [
-            c
-            for c in contact_list
-            if c.get("type") == ("EMAIL" if is_email else "PHONE")
+            c for c in contact_list if c.get("type") == ("EMAIL" if is_email else "PHONE")
         ]
 
         if filtered_contacts:
@@ -269,12 +257,8 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int):
             "city": city_field.value.strip(),
             "street": street_field.value.strip(),
             "building": building_field.value.strip(),
-            "phone_contacts": collect_contacts(
-                phone_inputs_column
-            ),  # 💡 共通関数を使用
-            "email_contacts": collect_contacts(
-                email_inputs_column
-            ),  # 💡 共通関数を使用
+            "phone_contacts": collect_contacts(phone_inputs_column),  # 💡 共通関数を使用
+            "email_contacts": collect_contacts(email_inputs_column),  # 💡 共通関数を使用
         }
 
         # 2. サービス層呼び出し
@@ -330,9 +314,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int):
             print(f"保存エラー: {ex}")
             page.open(
                 SnackBar(
-                    content=Text(
-                        f"保存中にエラーが発生しました: {ex}", color=Colors.WHITE
-                    ),
+                    content=Text(f"保存中にエラーが発生しました: {ex}", color=Colors.WHITE),
                     bgcolor=Colors.RED_700,
                     duration=3000,
                 )
@@ -350,9 +332,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int):
             AppBar(
                 title=Text(title_text),
                 bgcolor=Colors.BLUE_GREY_700,
-                leading=IconButton(
-                    Icons.ARROW_BACK, on_click=lambda e: page.go(back_route)
-                ),
+                leading=IconButton(Icons.ARROW_BACK, on_click=lambda e: page.go(back_route)),
             ),
             Container(
                 padding=30,
@@ -390,9 +370,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int):
                         phone_inputs_column,
                         Row(
                             [
-                                Text(
-                                    "メールアドレス", size=14, weight=FontWeight.W_500
-                                ),
+                                Text("メールアドレス", size=14, weight=FontWeight.W_500),
                                 ElevatedButton(
                                     "追加",
                                     icon=Icons.ADD,
@@ -407,10 +385,12 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int):
                         email_inputs_column,
                         Divider(),
                         # 住所情報セクション
-                        Text("🏠 住所・本籍地", weight=FontWeight.BOLD, size=16),
+                        Text("🏠 住所", weight=FontWeight.BOLD, size=16),
+                        Row([zip_field, pref_field, city_field, street_field, building_field]),
+                        # Row([street_field, building_field]),
+                        Divider(),
+                        Text("🏠 本籍地", weight=FontWeight.BOLD, size=16),
                         hometown_field,
-                        Row([zip_field, pref_field, city_field]),
-                        Row([street_field, building_field]),
                         Divider(),
                         # 保存・キャンセルボタン
                         Row(

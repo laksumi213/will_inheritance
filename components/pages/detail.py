@@ -1,6 +1,5 @@
 # /components/pages/detail.py
 
-
 from flet import (
     AlertDialog,
     AppBar,
@@ -45,9 +44,7 @@ from services.deceased_service import (
 # 💡 担当者情報フィールドの定義 (モーダル内で使用していたため、このファイルに残す)
 USER_MAP = get_all_users()
 USER_OPTIONS = [dropdown.Option(str(id), name) for id, name in USER_MAP.items()]
-USER_OPTIONS.insert(
-    0, dropdown.Option("", "未割当")
-)  # 値がNone/空文字の場合は未割定とする
+USER_OPTIONS.insert(0, dropdown.Option("", "未割当"))  # 値がNone/空文字の場合は未割定とする
 
 # 案件担当者ドロップダウン（Assignment Modal用）
 dialog_manager_field = Dropdown(
@@ -107,7 +104,7 @@ dialog_kana_first_field = TextField(label="ふりがな (名)", width=150)
 dialog_rel_field = TextField(label="続柄", width=200)
 
 # 住所・本籍地
-dialog_hometown_field = TextField(label="本籍地 (全体)")
+dialog_hometown_field = TextField(label="本籍地")
 dialog_zip_field = TextField(label="郵便番号", width=150)
 dialog_pref_field = TextField(label="都道府県", width=150)
 dialog_city_field = TextField(label="市区町村", width=200)
@@ -123,18 +120,14 @@ dialog_dob_field = TextField(
     label="生年月日 (YYYY-MM-DD)",
     width=180,
 )
-wareki_dob_text = Text(
-    value="", width=250, color=Colors.BLUE_GREY_600, weight=FontWeight.W_500
-)
+wareki_dob_text = Text(value="", width=250, color=Colors.BLUE_GREY_600, weight=FontWeight.W_500)
 dialog_dob_field.on_blur = lambda e: on_date_blur_handler(e, wareki_dob_text)
 
 dialog_dod_field = TextField(
     label="死亡日 (YYYY-MM-DD)",
     width=180,
 )
-wareki_dod_text = Text(
-    value="", width=250, color=Colors.BLUE_GREY_600, weight=FontWeight.W_500
-)
+wareki_dod_text = Text(value="", width=250, color=Colors.BLUE_GREY_600, weight=FontWeight.W_500)
 dialog_dod_field.on_blur = lambda e: on_date_blur_handler(e, wareki_dod_text)
 
 # タイトルコントロール
@@ -201,9 +194,7 @@ def DeceasedDetailView(page: Page, case_id: int):
     if deceased and deceased_id > 0:
         # deceased_id > 0 の場合のみ、住所情報を取得する
         deceased_address_info = {}
-        deceased_address_info = deceased_service.get_address_info(
-            "deceased", deceased_id
-        )
+        deceased_address_info = deceased_service.get_address_info("deceased", deceased_id)
 
         # 住所の整形
         address_parts = [
@@ -212,16 +203,29 @@ def DeceasedDetailView(page: Page, case_id: int):
             deceased_address_info.get("street_address", ""),
         ]
         raw_deceased_address = "".join(filter(None, address_parts))
-        display_deceased_address = raw_deceased_address or "未登録"
-
+        # 🎯 建物名を取得
         building = deceased_address_info.get("building_name", "")
+
+        # 🎯 コピー用の完全な住所を作成 (住所 + 建物名)
+        copyable_full_address = raw_deceased_address
+        if building:
+            # 住所と建物名の間にスペースを入れる
+            copyable_full_address += f" {building}"
+
+        # 表示用の住所文字列の生成 (元のロジックを維持)
+        display_deceased_address = raw_deceased_address or "未登録"
         if building:
             if display_deceased_address != "未登録":
                 display_deceased_address += f" ({building})"
             else:
-                display_deceased_address = (
-                    f"建物名: {building}"  # 住所がない場合は建物名のみ表示
-                )
+                display_deceased_address = f"建物名: {building}"
+
+        # building = deceased_address_info.get("building_name", "")
+        # if building:
+        #     if display_deceased_address != "未登録":
+        #         display_deceased_address += f" ({building})"
+        #     else:
+        #         display_deceased_address = f"建物名: {building}"  # 住所がない場合は建物名のみ表示
 
     if deceased and not is_new_client_case:
         full_name = f"{deceased.name_last} {deceased.name_first}"
@@ -296,9 +300,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                 if success:
                     page.open(
                         SnackBar(
-                            content=Text(
-                                "フォルダパスを更新しました。", color=Colors.WHITE
-                            ),
+                            content=Text("フォルダパスを更新しました。", color=Colors.WHITE),
                             bgcolor=Colors.BLUE_700,
                             duration=1500,
                         )
@@ -371,9 +373,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                 print(f"削除処理中に予期せぬエラー: {ex}")
                 page.oepn(
                     SnackBar(
-                        content=Text(
-                            f"削除中にエラーが発生しました: {ex}", color=Colors.WHITE
-                        ),
+                        content=Text(f"削除中にエラーが発生しました: {ex}", color=Colors.WHITE),
                         bgcolor=Colors.RED_700,
                         duration=2000,
                     )
@@ -433,9 +433,7 @@ def DeceasedDetailView(page: Page, case_id: int):
             ),
             actions=[
                 TextButton("キャンセル", on_click=lambda e: close_dialog()),
-                ElevatedButton(
-                    "保存", on_click=lambda e: save_assignment_dialog(), data="submit"
-                ),
+                ElevatedButton("保存", on_click=lambda e: save_assignment_dialog(), data="submit"),
             ],
             actions_alignment=MainAxisAlignment.END,
         )
@@ -443,9 +441,7 @@ def DeceasedDetailView(page: Page, case_id: int):
     assignment_edit_dialog = create_assignment_dialog()
 
     # 💡 案件削除確認ダイアログを生成
-    delete_confirm_dialog = create_delete_confirm_dialog(
-        case.case_number if case else "N/A"
-    )
+    delete_confirm_dialog = create_delete_confirm_dialog(case.case_number if case else "N/A")
 
     # --- モーダル制御関数 (担当者編集のみ有効) ---
     def close_dialog():
@@ -580,9 +576,7 @@ def DeceasedDetailView(page: Page, case_id: int):
             heir_full_name = f"{heir.name_last} {heir.name_first}"
 
             # 契約者マークを追加するロジック
-            is_contracting = getattr(
-                heir, "is_contracting_party", False
-            )  # 💡 契約者フラグを取得
+            is_contracting = getattr(heir, "is_contracting_party", False)  # 💡 契約者フラグを取得
             contract_mark = "【契約者】" if is_contracting else ""
 
             # 連絡先情報を取得
@@ -610,9 +604,7 @@ def DeceasedDetailView(page: Page, case_id: int):
 
             # 優先度の高いものがなければ、最初に見つかった電話番号を採用
             if primary_phone == "N/A":
-                found_any_phone = next(
-                    (c["value"] for c in contacts if c["type"] == "PHONE"), None
-                )
+                found_any_phone = next((c["value"] for c in contacts if c["type"] == "PHONE"), None)
                 if found_any_phone:
                     primary_phone = found_any_phone
 
@@ -634,9 +626,7 @@ def DeceasedDetailView(page: Page, case_id: int):
             if building:
                 primary_address += f" ({building})"
 
-            display_relationship = (
-                heir.relationship_type.strip() if heir.relationship_type else ""
-            )
+            display_relationship = heir.relationship_type.strip() if heir.relationship_type else ""
             if not display_relationship:
                 display_relationship = "未登録"
 
@@ -657,8 +647,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                                 # else Colors.BLACK,
                             ),
                             # 氏名に on_click を設定
-                            on_click=lambda e,
-                            name=heir_full_name: copy_to_clipboard_and_notify(
+                            on_click=lambda e, name=heir_full_name: copy_to_clipboard_and_notify(
                                 e, page, name.strip()
                             ),
                             data=heir_full_name.strip(),
@@ -673,8 +662,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                                 size=12,
                                 # color=Colors.BLUE_GREY_600,
                             ),
-                            on_click=lambda e,
-                            phone=primary_phone: copy_to_clipboard_and_notify(
+                            on_click=lambda e, phone=primary_phone: copy_to_clipboard_and_notify(
                                 e, page, phone
                             ),
                             data=primary_phone,
@@ -690,8 +678,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                                 size=12,
                                 # color=Colors.BLUE_GREY_600,
                             ),
-                            on_click=lambda e,
-                            addr=raw_address: copy_to_clipboard_and_notify(
+                            on_click=lambda e, addr=raw_address: copy_to_clipboard_and_notify(
                                 e, page, addr
                             ),
                             data=raw_address,
@@ -708,8 +695,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                             Icons.DELETE,
                             icon_color=Colors.RED_500,
                             data=heir.id,
-                            on_click=lambda e,
-                            name=heir_full_name: open_heir_delete_confirm(
+                            on_click=lambda e, name=heir_full_name: open_heir_delete_confirm(
                                 e, heir.id, name
                             ),
                         ),
@@ -742,9 +728,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                 print(f"相続人削除エラー: {ex}")
                 page.open(
                     SnackBar(
-                        content=Text(
-                            f"削除中にエラーが発生しました: {ex}", color=Colors.WHITE
-                        ),
+                        content=Text(f"削除中にエラーが発生しました: {ex}", color=Colors.WHITE),
                         bgcolor=Colors.RED_700,
                         duration=3000,
                     )
@@ -807,9 +791,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                                         ),
                                         ElevatedButton(
                                             "案件を完全に削除",
-                                            on_click=lambda e: page.open(
-                                                delete_confirm_dialog
-                                            ),
+                                            on_click=lambda e: page.open(delete_confirm_dialog),
                                             icon=Icons.DELETE_FOREVER,
                                             icon_color=Colors.RED,
                                             style=ButtonStyle(bgcolor=Colors.RED_100),
@@ -869,14 +851,10 @@ def DeceasedDetailView(page: Page, case_id: int):
                             ]
                         ),
                         # 新規案件モード（-1）または単独新規被相続人モード（0）以外で、case情報がある場合に表示
-                        visible=not is_new_client_case
-                        and not is_new_deceased
-                        and case is not None,
+                        visible=not is_new_client_case and not is_new_deceased and case is not None,
                     ),
                     Divider(
-                        visible=not is_new_client_case
-                        and not is_new_deceased
-                        and case is not None
+                        visible=not is_new_client_case and not is_new_deceased and case is not None
                     ),
                     # 被相続人情報
                     Row(
@@ -910,8 +888,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                                     size=16,
                                     width=200,
                                 ),
-                                on_click=lambda e,
-                                content=full_name: copy_to_clipboard_and_notify(
+                                on_click=lambda e, content=full_name: copy_to_clipboard_and_notify(
                                     e, page, content
                                 ),
                                 tooltip="クリックして氏名をコピー",
@@ -927,12 +904,8 @@ def DeceasedDetailView(page: Page, case_id: int):
                                         ),
                                         on_click=lambda e,
                                         content=(
-                                            dob_date_obj.isoformat()
-                                            if dob_date_obj
-                                            else "未登録"
-                                        ): copy_to_clipboard_and_notify(
-                                            e, page, content
-                                        ),
+                                            dob_date_obj.isoformat() if dob_date_obj else "未登録"
+                                        ): copy_to_clipboard_and_notify(e, page, content),
                                         tooltip="クリックして西暦をコピー",
                                     ),
                                     Text(
@@ -954,12 +927,8 @@ def DeceasedDetailView(page: Page, case_id: int):
                                         ),
                                         on_click=lambda e,
                                         content=(
-                                            dod_date_obj.isoformat()
-                                            if dod_date_obj
-                                            else "未登録"
-                                        ): copy_to_clipboard_and_notify(
-                                            e, page, content
-                                        ),
+                                            dod_date_obj.isoformat() if dod_date_obj else "未登録"
+                                        ): copy_to_clipboard_and_notify(e, page, content),
                                         tooltip="クリックして西暦をコピー",
                                     ),
                                     # 和暦のみ
@@ -978,13 +947,13 @@ def DeceasedDetailView(page: Page, case_id: int):
                         [
                             Container(
                                 content=Text(
-                                    f"現住所: {display_deceased_address}",
+                                    f"最後の住所: {display_deceased_address}",
                                     size=14,
                                     width=600,
                                 ),
                                 # 住所のコピー機能を追加
                                 on_click=lambda e,
-                                content=raw_deceased_address: copy_to_clipboard_and_notify(
+                                content=copyable_full_address: copy_to_clipboard_and_notify(
                                     e, page, content
                                 ),
                                 tooltip="クリックして現住所をコピー",
@@ -1012,7 +981,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                                         on_click=go_to_new_heir_page,  # 関数名を変更
                                     ),
                                 ],
-                                alignment=MainAxisAlignment.SPACE_BETWEEN,
+                                # alignment=MainAxisAlignment.SPACE_BETWEEN,
                                 vertical_alignment=CrossAxisAlignment.CENTER,
                             ),
                             Container(
@@ -1034,9 +1003,6 @@ def DeceasedDetailView(page: Page, case_id: int):
                                     weight=FontWeight.BOLD,
                                     size=18,
                                 ),
-                                # 💡 現在のパスを初期値として設定
-                                # update_heirs_listと同じタイミング (on_view_show) で初期値を設定するのが理想的ですが、
-                                # ここでは view.on_view_show でパスフィールドを更新する処理を追加します。
                                 Row(
                                     [
                                         path_field,
@@ -1060,9 +1026,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                     Divider(),
                     Row(
                         [
-                            ElevatedButton(
-                                "👈 一覧へ戻る", on_click=lambda e: page.go("/")
-                            ),
+                            ElevatedButton("👈 一覧へ戻る", on_click=lambda e: page.go("/")),
                         ],
                         spacing=20,
                     ),

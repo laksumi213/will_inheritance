@@ -1,7 +1,4 @@
 # /components/pages/deceased_edit.py
-from datetime import date
-
-import requests
 from flet import (
     AppBar,
     Colors,
@@ -9,7 +6,6 @@ from flet import (
     Container,
     CrossAxisAlignment,
     Divider,
-    Dropdown,
     ElevatedButton,
     FontWeight,
     IconButton,
@@ -21,548 +17,602 @@ from flet import (
     SnackBar,
     Text,
     TextField,
+    TextStyle,
     View,
-    dropdown,
+    alignment,
 )
 
+from components.utils.date_utils import convert_seireki_to_wareki
 from services import deceased_service
-from services.db_setup import get_all_users, get_next_case_number
 from services.deceased_service import (
-    parse_all_flexible_date,  # 追加: 日付解析のため
+    parse_all_flexible_date,
+    search_address_by_zip_api,
 )
 
-# --- ユーティリティ関数（detail.pyからコピー） ---
+# --- グローバルな UI 定義 ---
+
+# 1. 基本情報フィールド (黒文字設定に変更)
+dialog_name_last_field = TextField(
+    label="氏名 (姓)", width=180, color=Colors.BLACK, label_style=TextStyle(color=Colors.BLACK54)
+)
+dialog_name_first_field = TextField(
+    label="氏名 (名)", width=180, color=Colors.BLACK, label_style=TextStyle(color=Colors.BLACK54)
+)
+dialog_kana_last_field = TextField(
+    label="ふりがな (姓)",
+    width=180,
+    color=Colors.BLACK,
+    label_style=TextStyle(color=Colors.BLACK54),
+)
+dialog_kana_first_field = TextField(
+    label="ふりがな (名)",
+    width=180,
+    color=Colors.BLACK,
+    label_style=TextStyle(color=Colors.BLACK54),
+)
+dialog_hometown_field = TextField(
+    label="本籍地", width=500, color=Colors.BLACK, label_style=TextStyle(color=Colors.BLACK54)
+)
+
+# 2. 日付フィールド
+dialog_dob_field = TextField(
+    label="生年月日 (YYYY-MM-DD)",
+    width=180,
+    color=Colors.BLACK,
+    label_style=TextStyle(color=Colors.BLACK54),
+)
+# 和暦表示は背景色に合わせてColors.BLUE_GREY_800に変更
+wareki_dob_text = Text(value="", width=200, color=Colors.BLUE_GREY_800, weight=FontWeight.W_500)
+
+dialog_dod_field = TextField(
+    label="死亡日 (YYYY-MM-DD)",
+    width=180,
+    color=Colors.BLACK,
+    label_style=TextStyle(color=Colors.BLACK54),
+)
+# 和暦表示は背景色に合わせてColors.BLUE_GREY_800に変更
+wareki_dod_text = Text(value="", width=200, color=Colors.BLUE_GREY_800, weight=FontWeight.W_500)
 
 
-def convert_seireki_to_wareki(date_obj: date) -> str:
-    """西暦の日付オブジェクトを和暦文字列に変換する"""
-    if not date_obj:
-        return ""
+# 3. 最後の住所フィールド (Last Address Fields)
+# フィールドの色を黒文字に変更
+last_zip_field = TextField(
+    label="郵便番号",
+    width=120,
+    max_length=8,
+    color=Colors.BLACK,
+    label_style=TextStyle(color=Colors.BLACK54),
+)
+last_pref_field = TextField(
+    label="都道府県 *",
+    width=150,
+    read_only=True,
+    color=Colors.BLACK,
+    label_style=TextStyle(color=Colors.BLACK54),
+)
+last_city_field = TextField(
+    label="市区町村 *",
+    width=200,
+    read_only=True,
+    color=Colors.BLACK,
+    label_style=TextStyle(color=Colors.BLACK54),
+)
+last_street_field = TextField(
+    label="番地 (丁目/番/号) *",
+    width=250,
+    color=Colors.BLACK,
+    label_style=TextStyle(color=Colors.BLACK54),
+)
+last_building_field = TextField(
+    label="建物名・部屋番号",
+    width=400,
+    color=Colors.BLACK,
+    label_style=TextStyle(color=Colors.BLACK54),
+)
 
-    y, m, d = date_obj.year, date_obj.month, date_obj.day
-    # 令和 (Reiwa)
-    if y > 2019 or (y == 2019 and m >= 5 and d >= 1):
-        gengo = "令和"
-        wareki_year = y - 2018
-    # 平成 (Heisei)
-    elif y > 1989 or (y == 1989 and m >= 1 and d >= 8):
-        gengo = "平成"
-        wareki_year = y - 1988
-    # 昭和 (Showa)
-    elif y > 1926 or (y == 1926 and m >= 12 and d >= 25):
-        gengo = "昭和"
-        wareki_year = y - 1925
-    # 大正 (Taisho)
-    elif y > 1912 or (y == 1912 and m >= 7 and d >= 30):
-        gengo = "大正"
-        wareki_year = y - 1911
-    else:
-        return date_obj.isoformat()
-
-    wareki_year_str = "元年" if wareki_year == 1 else str(wareki_year) + "年"
-    return f"{gengo}{wareki_year_str}{m}月{d}日"
+# 4. 過去の住所履歴コンテナ (動的リスト)
+past_addresses_column = Column(controls=[], spacing=10)
 
 
-def on_date_blur_handler(e, wareki_text: Text):
-    """TextFieldがフォーカスを失ったときに実行されるハンドラー。和暦表示を更新する (heir_edit.pyからコピー)"""
-    input_value = e.control.value
+# ------------------------------------------------------------------
+# UI ヘルパーロジック
+# ------------------------------------------------------------------
+
+
+def update_wareki_display(date_field: TextField, wareki_text: Text):
+    """日付フィールドの値に基づいて和暦表示を更新するヘルパー関数"""
+    input_value = date_field.value.strip()
     wareki_text.value = ""
+    date_field.error_text = None
 
     if not input_value:
-        e.control.error_text = None
-        wareki_text.update()
-        e.control.update()
+        # update() は呼び出し元で行う
         return
 
     try:
-        # parse_all_flexible_date は services.deceased_service からインポート済み
         validated_date = parse_all_flexible_date(input_value)
-        e.control.value = validated_date.isoformat()
-        e.control.error_text = None
+        # TextFieldの値を正規化
+        date_field.value = validated_date.isoformat()
+        # 和暦に変換して表示
         wareki_text.value = convert_seireki_to_wareki(validated_date)
 
     except ValueError:
-        e.control.error_text = "無効な日付形式です"
+        date_field.error_text = "無効な日付形式です"
         wareki_text.value = ""
 
-    wareki_text.update()
+    # update() は呼び出し元で行う
+
+
+# 🎯 on_date_blur_handler はクロージャとして使用されるため、eventオブジェクト e のみを受け取る
+def on_date_blur_handler(e, wareki_text: Text):
+    """TextFieldがフォーカスを失ったときに実行されるハンドラー。和暦表示を更新する。"""
+    update_wareki_display(e.control, wareki_text)
     e.control.update()
+    e.page.update()
 
 
-# --- メインの編集ビュー関数 ---
+def create_address_fields(is_last: bool, data: dict = None):
+    """住所入力フィールドセットを作成するヘルパー関数"""
+    prefix = "最後の住所" if is_last else "過去の住所"
 
-# 💡 担当者リスト (グローバルで一度ロード)
-USER_MAP = get_all_users()
-USER_OPTIONS = [dropdown.Option(str(id), name) for id, name in USER_MAP.items()]
-USER_OPTIONS.insert(0, dropdown.Option("", "未割当"))
+    # データが存在しない場合のデフォルト値
+    data = data if data is not None else {}
 
+    # 💡 is_last=True の場合は、グローバルに定義されたフィールドの参照を返す
+    if is_last:
+        last_zip_field.value = data.get("zip_code", "")
+        last_pref_field.value = data.get("prefecture", "")
+        last_city_field.value = data.get("city_ward_town", "")
+        last_street_field.value = data.get("street_address", "")
+        last_building_field.value = data.get("building_name", "")
 
-def DeceasedEditView(page: Page, deceased_id: int):
-    """
-    被相続人情報（および新規案件登録時の契約者情報）の編集を行う View
-    :param deceased_id: 編集対象の Deceased ID (新規登録時は -1)
-    """
+        return [
+            last_zip_field,
+            last_pref_field,
+            last_city_field,
+            last_street_field,
+            last_building_field,
+        ]
 
-    is_new_client_case = deceased_id == -1  # 新規案件（契約者登録）モード
-    is_edit_mode = deceased_id > 0  # 既存の被相続人編集モード
-
-    # 既存データまたはダミーデータのロード
-    data = None
-    case = None
-    address_info = {}
-    contacts = []
-
-    if is_edit_mode:
-        data = deceased_service.get_deceased_by_id(deceased_id)
-        if not data:
-            return View(
-                f"/deceased_edit/{deceased_id}", [Text("データが見つかりません。")]
-            )
-        case = data.case
-        address_info = deceased_service.get_address_info("deceased", deceased_id)
-        # Deceasedの連絡先は現在サービス層から取得できないため、空のまま
-        contacts = []
-
-    elif is_new_client_case:
-        # 新規契約者登録モード（被相続人データは空、契約者データ（Heir）として入力させる）
-        data = None
-        case = None
-        address_info = {}
-        contacts = []
-
-    else:  # deceased_id == 0 の単独新規被相続人登録は、このルーティングで処理しない想定だが、エラー回避のため
-        return View(f"/deceased_edit/{deceased_id}", [Text("無効なIDです。")])
-
-    # --- フォームコントロールの定義（ローカル変数として） ---
-
-    # 案件・担当者
-    case_number_field = TextField(
-        label="案件番号",
-        value=get_next_case_number()
-        if is_new_client_case
-        else (case.case_number if case else ""),
-        width=250,
-        visible=is_new_client_case,  # 新規登録時のみ表示
-    )
-    manager_field = Dropdown(
-        label="担当者1 (進捗管理)",
-        width=200,
-        options=USER_OPTIONS,
-        value=str(case.manager_id) if case and case.manager_id else "",
-        visible=is_new_client_case,  # 新規登録時のみ表示
-    )
-    operator_field = Dropdown(
-        label="担当者2 (実務担当)",
-        width=200,
-        options=USER_OPTIONS,
-        value=str(case.operator_id) if case and case.operator_id else "",
-        visible=is_new_client_case,  # 新規登録時のみ表示
-    )
-
-    # 基本情報
-    name_last_field = TextField(
-        label="氏名 (姓)",
-        width=150,
-        autofocus=True,
-        value=data.name_last if is_edit_mode and data else "",
-    )
-    name_first_field = TextField(
-        label="氏名 (名)",
-        width=150,
-        value=data.name_first if is_edit_mode and data else "",
-    )
-    kana_last_field = TextField(
-        label="ふりがな (姓)",
-        width=150,
-        value=data.name_last_kana
-        if is_edit_mode and data and data.name_last_kana
-        else "",
-    )
-    kana_first_field = TextField(
-        label="ふりがな (名)",
-        width=150,
-        value=data.name_first_kana
-        if is_edit_mode and data and data.name_first_kana
-        else "",
-    )
-    rel_field = TextField(
-        label="続柄",
-        width=200,
-        value=data.relationship_type
-        if is_edit_mode and data
-        else ("" if is_new_client_case else "本人"),
-        visible=is_new_client_case,  # 新規契約者登録時のみ表示
-    )
-
-    # 日付フィールドと和暦表示のセットアップ
-    dob_date = data.date_of_birth if is_edit_mode and data else None
-    dod_date = data.date_of_death if is_edit_mode and data else None
-
-    wareki_dob_text = Text(
-        value=convert_seireki_to_wareki(dob_date),
-        width=250,
-        color=Colors.BLUE_GREY_600,
-        weight=FontWeight.W_500,
-    )
-
-    def dob_blur(e):
-        on_date_blur_handler(e, wareki_dob_text)
-        page.update()  # on_date_blur_handler 内でも page.update() は必要だが、明示的に呼ぶ
-
-    dob_field = TextField(
-        label="生年月日 (YYYY-MM-DD)",
-        width=180,
-        value=str(dob_date) if dob_date else "",
-        on_blur=dob_blur,  # 💡 ラムダ式をやめて関数参照に
-    )
-
-    wareki_dod_text = Text(
-        value=convert_seireki_to_wareki(dod_date),
-        width=250,
-        color=Colors.BLUE_GREY_600,
-        weight=FontWeight.W_500,
-    )
-    dod_field = TextField(
-        label="死亡日 (YYYY-MM-DD)",
-        width=180,
-        value=str(dod_date) if dod_date else "",
-        on_blur=lambda e: (
-            dod_field.value,
-            wareki_dod_text.value,
-            on_date_blur_handler(e, wareki_dod_text),
-            page.update(),
-        ),
-        visible=not is_new_client_case,  # 新規契約者登録時は死亡日は入力させない
-    )
-
-    # 住所フィールド
-    hometown_field = TextField(
-        label="本籍地 (全体)",
-        value=data.hometown if is_edit_mode and data and data.hometown else "",
-    )
+    # 💡 is_last=False (過去の住所) の場合は、新しいコントロールを動的に作成
     zip_field = TextField(
-        label="郵便番号", width=150, value=address_info.get("zip_code", "")
+        label=f"{prefix} 郵便番号",
+        width=120,
+        max_length=8,
+        value=data.get("zip_code", ""),
+        color=Colors.BLACK,
+        label_style=TextStyle(color=Colors.BLACK54),
     )
     pref_field = TextField(
-        label="都道府県", width=150, value=address_info.get("prefecture", "")
+        label=f"{prefix} 都道府県 *",
+        width=150,
+        # 過去の住所は手動入力も許可するため read_only=False (または省略)
+        value=data.get("prefecture", ""),
+        color=Colors.BLACK,
+        label_style=TextStyle(color=Colors.BLACK54),
     )
     city_field = TextField(
-        label="市区町村", width=200, value=address_info.get("city_ward_town", "")
+        label=f"{prefix} 市区町村 *",
+        width=200,
+        # 過去の住所は手動入力も許可するため read_only=False (または省略)
+        value=data.get("city_ward_town", ""),
+        color=Colors.BLACK,
+        label_style=TextStyle(color=Colors.BLACK54),
     )
     street_field = TextField(
-        label="番地", width=150, value=address_info.get("street_address", "")
+        label=f"{prefix} 番地 *",
+        width=250,
+        value=data.get("street_address", ""),
+        color=Colors.BLACK,
+        label_style=TextStyle(color=Colors.BLACK54),
     )
     building_field = TextField(
-        label="建物名・部屋番号", value=address_info.get("building_name", "")
+        label=f"{prefix} 建物名",
+        width=400,
+        value=data.get("building_name", ""),
+        color=Colors.BLACK,
+        label_style=TextStyle(color=Colors.BLACK54),
     )
 
-    # --- 連絡先動的フォームのセットアップ ---
+    # 過去の住所の削除ボタン
+    delete_button = IconButton(
+        Icons.DELETE_OUTLINE,
+        icon_color=Colors.RED_400,
+        tooltip="この過去の住所を削除",
+    )
 
-    def create_contact_input_row(
-        column_container: Column, initial_value="", is_email=False
-    ):
-        """電話またはメールの入力行と削除ボタンを作成する"""
+    # 住所入力セット全体をColumnでラップし、削除ボタンを含める
+    control_set = Column(
+        controls=[
+            # Row([zip_field, pref_field, city_field], spacing=10),
+            # Row(
+            #     [street_field, building_field, delete_button],
+            #     vertical_alignment=CrossAxisAlignment.END,
+            #     spacing=10,
+            # ),
+            Row(
+                [zip_field, pref_field, city_field, street_field, building_field, delete_button],
+                spacing=10,
+            ),
+            # Divider(height=1, color=Colors.GREY_300),
+        ],
+        data={"is_last": is_last, "id": data.get("address_id", None)},
+        spacing=10,
+    )
 
-        def remove_row(e):
-            if row in column_container.controls:
-                column_container.controls.remove(row)
-                column_container.update()
-                e.page.update()
-
-        value_field = TextField(
-            label="メールアドレス" if is_email else "電話番号",
-            value=initial_value,
-            width=500 if is_email else 350,
-        )
-
-        row = Row(
-            [
-                value_field,
-                IconButton(
-                    icon=Icons.DELETE,
-                    icon_color=Colors.RED_500,
-                    on_click=remove_row,
-                    tooltip="削除",
-                ),
-            ],
-            alignment=MainAxisAlignment.START,
-        )
-
-        return row, value_field
-
-    def add_new_contact_row(e, column_container: Column, is_email: bool):
-        """ボタンクリックで新しい入力行を追加する"""
-        new_row, new_field = create_contact_input_row(
-            column_container, is_email=is_email
-        )
-        column_container.controls.append(new_row)
-        column_container.update()
-        new_field.focus()
+    # 削除ボタンのハンドラを定義
+    def delete_past_address(e):
+        # UIからコントロールを削除
+        past_addresses_column.controls.remove(control_set)
         e.page.update()
 
-    phone_inputs_column = Column(controls=[], spacing=5)
-    email_inputs_column = Column(controls=[], spacing=5)
+    delete_button.on_click = delete_past_address
 
-    # 新規契約者登録の場合、デフォルトで空の連絡先入力行を1つずつ追加
-    if is_new_client_case:
-        new_phone_row, _ = create_contact_input_row(phone_inputs_column, is_email=False)
-        phone_inputs_column.controls.append(new_phone_row)
-        new_email_row, _ = create_contact_input_row(email_inputs_column, is_email=True)
-        email_inputs_column.controls.append(new_email_row)
+    # 過去の住所フィールドにも郵便番号ハンドラを動的に割り当てる
+    zip_field.on_blur = lambda event: address_zip_handler(event, pref_field, city_field)
 
-    # --- 住所自動入力ロジック（detail.pyからコピー） ---
+    return control_set
 
-    def search_address_by_zip(e):
-        zip_code = zip_field.value.replace("-", "").strip()
-        if len(zip_code) == 7 and zip_code.isdigit():
-            try:
-                api_url = f"https://zipcloud.ibsnet.co.jp/api/search?zipcode={zip_code}"
-                response = requests.get(api_url)
-                data_json = response.json()
-                if data_json and data_json.get("results"):
-                    address_data = data_json["results"][0]
-                    pref_field.value = address_data["address1"]
-                    city_field.value = address_data["address2"]
-                    street_field.value = address_data["address3"]
-                    page.update()
+
+def address_zip_handler(e, pref_field: TextField, city_field: TextField):
+    """郵便番号を入力した際の住所自動検索ハンドラ"""
+    zip_code = e.control.value.strip()
+
+    # 郵便番号のフォーマットチェック（ここでは簡易的に桁数のみ）
+    if len(zip_code.replace("-", "")) < 7:
+        # 短い場合は検索しない
+        return
+
+    address_info = search_address_by_zip_api(zip_code)
+
+    if address_info:
+        pref_field.value = address_info.get("prefecture", "")
+        city_field.value = address_info.get("city_ward_town", "")
+        e.control.error_text = None
+    else:
+        # 住所が見つからなかった場合
+        # 最後の住所（都道府県/市区町村がread_only）の場合のみエラー表示とクリア
+        if pref_field.read_only:
+            pref_field.value = ""
+            city_field.value = ""
+            e.control.error_text = "住所が見つかりません"
+        # 過去の住所（read_onlyでない）は手動入力の可能性を残すため、クリアしない
+
+    pref_field.update()
+    city_field.update()
+    e.control.update()
+    e.page.update()
+
+
+# 既存のグローバルフィールドにハンドラを割り当て
+dialog_dob_field.on_blur = lambda e: on_date_blur_handler(e, wareki_dob_text)
+dialog_dod_field.on_blur = lambda e: on_date_blur_handler(e, wareki_dod_text)
+
+
+def DeceasedEditView(page: Page, deceased_id_or_case_id: int):
+    # 編集対象IDを特定 (Deceased ID または Case ID)
+    target_id = deceased_id_or_case_id
+
+    deceased = None
+    if target_id > 0:
+        deceased = deceased_service.get_deceased_by_id(target_id)
+
+    # 💡 case_id -1/0 の場合は新規モードとして扱う
+    is_new_mode = deceased is None or target_id < 1
+    current_deceased_id = deceased.id if deceased else None
+
+    # ----------------------------------------------------
+    # データロード & UI 初期化
+    # ----------------------------------------------------
+
+    def reset_fields(e):
+        """フォームのすべてのフィールドをリセットする"""
+        dialog_name_last_field.value = ""
+        dialog_name_first_field.value = ""
+        dialog_kana_last_field.value = ""
+        dialog_kana_first_field.value = ""
+        dialog_hometown_field.value = ""
+        dialog_dob_field.value = ""
+        dialog_dod_field.value = ""
+        wareki_dob_text.value = ""
+        wareki_dod_text.value = ""
+
+        last_zip_field.value = ""
+        last_pref_field.value = ""
+        last_city_field.value = ""
+        last_street_field.value = ""
+        last_building_field.value = ""
+
+        past_addresses_column.controls.clear()
+        page.update()
+
+    def load_data():
+        """既存の被相続人データをロードする"""
+        if not is_new_mode and current_deceased_id:
+            # 既存データをロード
+            dialog_name_last_field.value = deceased.name_last or ""
+            dialog_name_first_field.value = deceased.name_first or ""
+            dialog_kana_last_field.value = deceased.name_last_kana or ""
+            dialog_kana_first_field.value = deceased.name_first_kana or ""
+            dialog_hometown_field.value = deceased.hometown or ""
+            dialog_dob_field.value = (
+                deceased.date_of_birth.isoformat() if deceased.date_of_birth else ""
+            )
+            dialog_dod_field.value = (
+                deceased.date_of_death.isoformat() if deceased.date_of_death else ""
+            )
+
+            # 和暦表示を更新
+            update_wareki_display(dialog_dob_field, wareki_dob_text)
+            update_wareki_display(dialog_dod_field, wareki_dod_text)
+
+            # 住所履歴を取得
+            address_history = deceased_service.get_deceased_address_history(current_deceased_id)
+
+            past_addresses_column.controls.clear()
+
+            # 最後の住所と過去の住所を分離してロード
+            for addr in address_history:
+                # 💡 create_address_fields を使用してフィールドに値を設定
+                if addr["is_last_address"]:
+                    # 最後の住所はグローバルフィールドに直接値を設定
+                    last_zip_field.value = addr["zip_code"]
+                    last_pref_field.value = addr["prefecture"]
+                    last_city_field.value = addr["city_ward_town"]
+                    last_street_field.value = addr["street_address"]
+                    last_building_field.value = addr["building_name"]
                 else:
-                    pref_field.value = "住所が見つかりません"
-                    city_field.value = ""
-                    street_field.value = ""
-                    page.update()
-            except Exception as ex:
-                print(f"APIエラー: {ex}")
-        street_field.focus()
+                    # 過去の住所を動的リストにロード
+                    control_set = create_address_fields(is_last=False, data=addr)
+                    past_addresses_column.controls.append(control_set)
 
-    zip_field.on_blur = search_address_by_zip
+        # 💡 新規モードの場合はフィールドをクリアしておく
+        elif is_new_mode:
+            # is_new_modeの場合は、reset_fields(None)を呼び出す代わりに、
+            # 必要なフィールドだけをクリアまたは初期設定を保証する
+            reset_fields(None)  # 全フィールドをリセット
 
-    # --- 保存処理 ---
-    def save_and_go_back(e):
-        # 1. データ収集
-        def collect_contacts(column: Column):
-            contacts = []
-            for row in column.controls:
-                # 連絡先入力行であることを確認
-                if (
-                    isinstance(row, Row)
-                    and len(row.controls) >= 2
-                    and isinstance(row.controls[0], TextField)
-                ):
-                    value = row.controls[0].value.strip()
-                    # 種別は「Primary」固定
-                    sub_type = "Primary"
+        page.update()
 
-                    if value:
-                        contacts.append({"value": value, "sub_type": sub_type})
-            return contacts
+    # ----------------------------------------------------
+    # 住所履歴 UI 操作ロジック
+    # ----------------------------------------------------
 
-        # フォーム値の取得
-        collected_data = {
-            "name": f"{name_last_field.value.strip()} {name_first_field.value.strip()}",
-            "kana_last": kana_last_field.value.strip(),
-            "kana_first": kana_first_field.value.strip(),
-            "dob": dob_field.value.strip(),
-            "dod": dod_field.value.strip(),
-            "hometown": hometown_field.value.strip(),
-            "zip_code": zip_field.value.strip(),
-            "pref": pref_field.value.strip(),
-            "city": city_field.value.strip(),
-            "street": street_field.value.strip(),
-            "building": building_field.value.strip(),
-            "phone_contacts": collect_contacts(phone_inputs_column),
-            "email_contacts": collect_contacts(email_inputs_column),
-            "rel": rel_field.value.strip()
-            if is_new_client_case
-            else "本人",  # 新規契約者のみ続柄を保存
-            "case_number": case_number_field.value.strip(),
-            "manager_id": int(manager_field.value) if manager_field.value else None,
-            "operator_id": int(operator_field.value) if operator_field.value else None,
-        }
+    def add_past_address(e):
+        """新しい過去の住所入力フィールドセットを追加する"""
+        new_address_set = create_address_fields(is_last=False, data={})
+        past_addresses_column.controls.append(new_address_set)
+        page.update()
 
-        new_id = deceased_id
+    def save_data(e):
+        """データを収集し、サービス層に渡して保存・更新する"""
 
-        # 2. サービス層呼び出し
-        try:
-            if is_new_client_case:
-                # 案件新規登録
-                new_id = deceased_service.add_new_case_for_client_registration(
-                    case_number=collected_data["case_number"],
-                    name=collected_data["name"],
-                    kana_last=collected_data["kana_last"],
-                    kana_first=collected_data["kana_first"],
-                    rel=collected_data["rel"],
-                    hometown=collected_data["hometown"],
-                    zip_code=collected_data["zip_code"],
-                    pref=collected_data["pref"],
-                    city=collected_data["city"],
-                    street=collected_data["street"],
-                    building=collected_data["building"],
-                    dob=collected_data["dob"],
-                    dod=collected_data["dod"],
-                    manager_id=collected_data["manager_id"],
-                    operator_id=collected_data["operator_id"],
-                    phone_contacts=collected_data["phone_contacts"],
-                    email_contacts=collected_data["email_contacts"],
-                )
-                if new_id < 1:
-                    raise Exception("新規案件登録に失敗しました。")
+        nonlocal current_deceased_id
 
-            elif is_edit_mode:
-                # 既存被相続人情報更新
-                # update_deceased 関数が hometown を受け付けるように services/deceased_service.py を修正済み
-                deceased_service.update_deceased(
-                    deceased_id,
-                    name=collected_data["name"],
-                    kana_last=collected_data["kana_last"],
-                    kana_first=collected_data["kana_first"],
-                    dob=collected_data["dob"],
-                    dod=collected_data["dod"],
-                    hometown=collected_data["hometown"],  # 追加
-                    zip_code=collected_data["zip_code"],
-                    pref=collected_data["pref"],
-                    city=collected_data["city"],
-                    street=collected_data["street"],
-                    building=collected_data["building"],
-                    # 連絡先更新ロジックは update_deceased 側にないため、ここでは除外
-                )
+        # 1. データの収集とバリデーション
+        name_last = dialog_name_last_field.value.strip()
+        name_first = dialog_name_first_field.value.strip()
+        full_name = f"{name_last} {name_first}".strip()
 
-            # 3. 成功通知と画面遷移
+        if not name_last or not dialog_dob_field.value:
             page.open(
                 SnackBar(
-                    content=Text("情報を保存しました。", color=Colors.WHITE),
-                    bgcolor=Colors.GREEN_700,
-                    duration=1500,
+                    content=Text("氏名（姓）と生年月日は必須です。", color=Colors.WHITE),
+                    bgcolor=Colors.RED_700,
                 )
             )
-            # 詳細ページに戻る
-            page.go(f"/detail/{new_id}")
+            page.update()
+            return
+
+        # 2. 過去の住所データを UI コントロールから収集 (is_last=False のみ)
+        collected_past_addresses = []
+        for control_set in past_addresses_column.controls:
+            # Column(Row([zip, pref, city]), Row([street, building, delete])) の構造を仮定
+            addr_row_1 = control_set.controls[0]
+            addr_row_2 = control_set.controls[1]
+
+            zip_code = addr_row_1.controls[0].value.strip()
+            prefecture = addr_row_1.controls[1].value.strip()
+            city_ward_town = addr_row_1.controls[2].value.strip()
+            street_address = addr_row_2.controls[0].value.strip()
+            building_name = addr_row_2.controls[1].value.strip()
+
+            # 過去の住所として有効なデータのみを収集 (都道府県と番地は必須とする)
+            if prefecture and street_address:
+                collected_past_addresses.append(
+                    {
+                        "zip_code": zip_code,
+                        "prefecture": prefecture,
+                        "city_ward_town": city_ward_town,
+                        "street_address": street_address,
+                        "building_name": building_name,
+                        "is_last_address": False,  # 明示的にFalseを設定
+                        "address_id": control_set.data.get("id", None),  # 既存のIDがあれば渡す
+                    }
+                )
+
+        try:
+            # 3. 保存・更新処理
+
+            if is_new_mode:
+                # 新規登録モードでは、まず Deceased と Case を作成
+                new_id = deceased_service.add_deceased(full_name, dialog_dob_field.value)
+                current_deceased_id = new_id
+
+                if current_deceased_id <= 0:
+                    raise Exception("被相続人の登録に失敗しました。")
+
+                # 新規登録時は、最後に update_deceased で残りの情報と住所を登録
+
+            # 既存データ更新、または新規登録後の追加情報登録
+            deceased_service.update_deceased(
+                deceased_id=current_deceased_id,
+                name_last=dialog_name_last_field.value.strip() or None,  # 姓
+                name_first=dialog_name_first_field.value.strip() or None,  # 名
+                dob=dialog_dob_field.value,
+                dod=dialog_dod_field.value or None,
+                kana_last=dialog_kana_last_field.value.strip() or None,
+                kana_first=dialog_kana_first_field.value.strip() or None,
+                hometown=dialog_hometown_field.value.strip() or None,
+                # 最後の住所
+                last_zip_code=last_zip_field.value.strip() or None,
+                last_pref=last_pref_field.value.strip() or None,
+                last_city=last_city_field.value.strip() or None,
+                last_street=last_street_field.value.strip() or None,
+                last_building=last_building_field.value.strip() or None,
+                # 過去の住所リスト
+                past_addresses=collected_past_addresses,
+            )
+
+            # 成功後の遷移
+            page.open(
+                SnackBar(
+                    content=Text("被相続人情報を保存しました。", color=Colors.WHITE),
+                    bgcolor=Colors.GREEN_700,
+                    duration=2000,
+                )
+            )
+            # 詳細画面へ戻る (新規の場合は、新規登録されたIDで遷移)
+            page.go(f"/detail/{current_deceased_id}")
 
         except Exception as ex:
             print(f"保存エラー: {ex}")
             page.open(
                 SnackBar(
-                    content=Text(
-                        f"保存中にエラーが発生しました: {ex}", color=Colors.WHITE
-                    ),
+                    content=Text(f"保存中にエラーが発生しました: {ex}", color=Colors.WHITE),
                     bgcolor=Colors.RED_700,
                     duration=3000,
                 )
             )
             page.update()
 
-    # --- UIレイアウト構築 ---
+    # ----------------------------------------------------
+    # UI レイアウト構築
+    # ----------------------------------------------------
 
-    title_text = (
-        "新規案件登録（契約者情報）" if is_new_client_case else "被相続人情報 編集"
-    )
-    current_deceased_id = deceased_id if is_edit_mode else (data.id if data else -1)
+    # 💡 最後の住所フィールドセット（グローバル変数）
+    last_address_controls = [
+        last_zip_field,
+        last_pref_field,
+        last_city_field,
+        last_street_field,
+        last_building_field,
+    ]
 
-    # 戻るボタンの遷移先
-    back_route = f"/detail/{current_deceased_id}"
+    # 💡 最後の住所の郵便番号フィールドにハンドラを割り当て（View内での定義を推奨）
+    last_zip_field.on_blur = lambda e: address_zip_handler(e, last_pref_field, last_city_field)
 
-    return View(
-        f"/deceased_edit/{deceased_id}",
-        [
-            AppBar(
-                title=Text(title_text),
-                bgcolor=Colors.BLUE_GREY_700,
-                # 戻るボタンを追加
-                leading=IconButton(
-                    Icons.ARROW_BACK, on_click=lambda e: page.go(back_route)
-                ),
+    view_controls = [
+        AppBar(
+            title=Text(f"👤 被相続人情報 {'新規登録' if is_new_mode else '編集'} ({target_id})"),
+            bgcolor=Colors.BLUE_GREY_700,
+        ),
+        Container(
+            content=Column(
+                [
+                    Text("1. 基本情報", size=18, weight=FontWeight.BOLD, color=Colors.BLACK),
+                    Row([dialog_name_last_field, dialog_name_first_field]),
+                    Row([dialog_kana_last_field, dialog_kana_first_field]),
+                    Divider(),
+                    Text(
+                        "2. 生年月日・死亡日", size=18, weight=FontWeight.BOLD, color=Colors.BLACK
+                    ),
+                    Row([dialog_dob_field, wareki_dob_text]),
+                    Row([dialog_dod_field, wareki_dod_text]),
+                    Divider(),
+                    Text(
+                        "3. 住所履歴 (最後の住所)",
+                        size=18,
+                        weight=FontWeight.BOLD,
+                        color=Colors.BLACK,
+                    ),
+                    Text(
+                        "※最後の住所を入力すると、既存の最後の住所は自動で過去の住所に登録されます。",
+                        size=12,
+                        color=Colors.BLUE_GREY_600,
+                    ),
+                    # 最後の住所フィールド
+                    # Row(last_address_controls[0:3], spacing=10),  # Zip, Pref, City
+                    # Row(last_address_controls[3:5], spacing=10),  # Street, Building
+                    Row(last_address_controls, spacing=10),
+                    Divider(),
+                    Row(
+                        [
+                            Text(
+                                "4. 過去の住所履歴",
+                                size=18,
+                                weight=FontWeight.BOLD,
+                                color=Colors.BLACK,
+                            ),
+                            ElevatedButton(
+                                "過去の住所を追加",
+                                icon=Icons.ADD,
+                                on_click=add_past_address,
+                                bgcolor=Colors.BLUE_600,
+                                color=Colors.WHITE,
+                            ),
+                        ],
+                        # alignment=MainAxisAlignment.END,
+                    ),
+                    # Text("4. 過去の住所履歴", size=18, weight=FontWeight.BOLD, color=Colors.BLACK),
+                    # # 過去の住所を追加するボタン
+                    # Row(
+                    #     [
+                    #         ElevatedButton(
+                    #             "過去の住所を追加",
+                    #             icon=Icons.ADD,
+                    #             on_click=add_past_address,
+                    #             bgcolor=Colors.BLUE_600,
+                    #             color=Colors.WHITE,
+                    #         )
+                    #     ],
+                    #     alignment=MainAxisAlignment.END,
+                    # ),
+                    # 過去の住所リストコンテナ
+                    Container(
+                        content=past_addresses_column,
+                        # border=border.all(1, Colors.GREY_300),
+                        padding=10,
+                        alignment=alignment.top_left,
+                    ),
+                    Divider(),
+                    Text("5. 本籍地", size=18, weight=FontWeight.BOLD, color=Colors.BLACK),
+                    Row([dialog_hometown_field]),
+                    Divider(),
+                    Row(
+                        [
+                            ElevatedButton(
+                                "キャンセル",
+                                on_click=lambda e: page.go(
+                                    f"/detail/{target_id}" if target_id > 0 else "/"
+                                ),
+                                bgcolor=Colors.GREY_600,
+                                color=Colors.WHITE,
+                            ),
+                            ElevatedButton(
+                                "保存",
+                                on_click=save_data,
+                                bgcolor=Colors.GREEN_700,
+                                color=Colors.WHITE,
+                            ),
+                        ],
+                        alignment=MainAxisAlignment.END,
+                        spacing=20,
+                    ),
+                ],
+                horizontal_alignment=CrossAxisAlignment.START,
+                scroll=ScrollMode.ADAPTIVE,
             ),
-            Container(
-                padding=30,
-                content=Column(
-                    [
-                        # 案件情報セクション (新規登録時のみ)
-                        Row(
-                            [
-                                Column([case_number_field]),
-                                Column([manager_field, Text("担当者1")]),
-                                Column([operator_field, Text("担当者2")]),
-                            ],
-                            visible=is_new_client_case,
-                        ),
-                        Divider(visible=is_new_client_case),
-                        # 基本情報セクション
-                        Text("👤 基本情報", weight=FontWeight.BOLD, size=16),
-                        Row([name_last_field, name_first_field]),
-                        Row([kana_last_field, kana_first_field]),
-                        Row(
-                            [rel_field], visible=is_new_client_case
-                        ),  # 続柄フィールド（新規契約者のみ）
-                        Divider(),
-                        # 連絡先情報セクション
-                        Text("📞 連絡先情報", weight=FontWeight.BOLD, size=16),
-                        Row(
-                            [
-                                Text("電話番号", size=14, weight=FontWeight.W_500),
-                                ElevatedButton(
-                                    "追加",
-                                    icon=Icons.ADD,
-                                    on_click=lambda e: add_new_contact_row(
-                                        e, phone_inputs_column, is_email=False
-                                    ),
-                                ),
-                            ],
-                            alignment=MainAxisAlignment.SPACE_BETWEEN,
-                        ),
-                        phone_inputs_column,
-                        Row(
-                            [
-                                Text(
-                                    "メールアドレス", size=14, weight=FontWeight.W_500
-                                ),
-                                ElevatedButton(
-                                    "追加",
-                                    icon=Icons.ADD,
-                                    on_click=lambda e: add_new_contact_row(
-                                        e, email_inputs_column, is_email=True
-                                    ),
-                                ),
-                            ],
-                            alignment=MainAxisAlignment.SPACE_BETWEEN,
-                        ),
-                        email_inputs_column,
-                        Divider(),
-                        # 日付情報セクション
-                        Text("📅 日付情報", weight=FontWeight.BOLD, size=16),
-                        Row(
-                            [dob_field, wareki_dob_text],
-                            vertical_alignment=CrossAxisAlignment.END,
-                        ),
-                        Row(
-                            [dod_field, wareki_dod_text],
-                            vertical_alignment=CrossAxisAlignment.END,
-                            visible=not is_new_client_case,
-                        ),
-                        Divider(),
-                        # 住所情報セクション
-                        Text("🏠 住所・本籍地", weight=FontWeight.BOLD, size=16),
-                        hometown_field,
-                        Row([zip_field, pref_field, city_field]),
-                        Row([street_field, building_field]),
-                        Divider(),
-                        # 保存・キャンセルボタン
-                        Row(
-                            [
-                                ElevatedButton(
-                                    "キャンセル", on_click=lambda e: page.go(back_route)
-                                ),
-                                ElevatedButton(
-                                    "保存して戻る",
-                                    on_click=save_and_go_back,
-                                    icon=Icons.SAVE,
-                                    bgcolor=Colors.BLUE_600,
-                                ),
-                            ],
-                            # alignment=MainAxisAlignment.END,
-                            spacing=15,
-                        ),
-                    ]
-                ),
-            ),
-        ],
-        scroll=ScrollMode.AUTO,
-    )
+            padding=20,
+            expand=True,
+            # 背景色を白にして、テキストの視認性を上げる
+            bgcolor=Colors.WHITE,
+        ),
+    ]
+
+    view = View(f"/deceased_edit/{target_id}", view_controls, scroll=ScrollMode.ADAPTIVE)
+
+    # ロード時にフィールドを最新の状態に更新
+    view.on_view_show = lambda e: load_data()
+
+    return view

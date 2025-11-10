@@ -377,6 +377,9 @@ class FinancialAsset(Base):
     inst_id = Column(Integer, ForeignKey("institutions.id"))
 
     bank_name = Column(String)
+    bank_code = Column(String)
+    branch_name = Column(String)
+    branch_code = Column(String)
     account_number = Column(String)
     balance = Column(Float, default=0.0)
     status = Column(String, default="調査中")

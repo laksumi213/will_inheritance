@@ -111,9 +111,7 @@ def main(page: Page):
             page.views.append(HeirEditView(page, heir_id, deceased_id_from_url))
 
         # --- 6. 新規相続人追加ページ (/heir_edit/new?deceased_id=X) ---
-        elif re.match(r"^/heir_edit/new$", e.route) or e.route.startswith(
-            "/heir_edit/new?"
-        ):
+        elif re.match(r"^/heir_edit/new$", e.route) or e.route.startswith("/heir_edit/new?"):
             query_params = {}
             if "?" in e.route:
                 query_string = e.route.split("?", 1)[1]

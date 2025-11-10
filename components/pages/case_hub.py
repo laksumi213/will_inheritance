@@ -17,6 +17,8 @@ from flet import (
     View,
 )
 
+from components.pages.balance_cert_doc import BalanceCertDocView
+from components.pages.bank_balance_doc_edit import BankBalanceDocEditView
 from components.pages.bank_edit import BankEditView
 from components.pages.detail import DeceasedDetailView
 from services.deceased_service import get_contracting_party_name
@@ -30,9 +32,7 @@ def PlaceholderView(page: Page, title: str, content: str):
             Text(title, size=24, weight="bold"),
             Divider(),
             Text(content, size=16),
-            Text(
-                f"現在の案件ID: {page.route.split('/')[-1]}", color=Colors.BLUE_GREY_600
-            ),
+            Text(f"現在の案件ID: {page.route.split('/')[-1]}", color=Colors.BLUE_GREY_600),
         ],
         spacing=20,
         expand=True,
@@ -51,7 +51,7 @@ class CaseHubView:
             "overview": {
                 "icon": Icons.INFO_OUTLINE,
                 "label": "案件概要/相続人",
-                "route": f"/detail/{case_id}",
+                "route": f"/case/{case_id}/overview",
             },
             "bank_reg": {
                 "icon": Icons.ACCOUNT_BALANCE,
@@ -63,20 +63,40 @@ class CaseHubView:
                 "label": "証券登録",
                 "route": f"/case/{case_id}/securities/add",
             },
-            "proc_status": {
-                "icon": Icons.HOW_TO_REG_OUTLINED,
-                "label": "凍結・解約手続き",
-                "route": f"/case/{case_id}/proc/status",
+            "freeze_proc": {
+                "icon": Icons.LOCK_OUTLINED,
+                "label": "凍結手続き",
+                "route": f"/case/{case_id}/proc/freeze",
+            },
+            "balance_cert_doc": {
+                "icon": Icons.DESCRIPTION_OUTLINED,
+                "label": "残証申請書類作成",
+                "route": f"/case/{case_id}/doc/balance_cert",
+            },
+            "visit_reserve": {
+                "icon": Icons.CALENDAR_MONTH_OUTLINED,
+                "label": "来店予約",
+                "route": f"/case/{case_id}/reserve/visit",
             },
             "asset_reg": {
                 "icon": Icons.HOME_WORK_OUTLINED,
-                "label": "財産登録/目録",
+                "label": "財産登録/目録作成",
                 "route": f"/case/{case_id}/asset/register",
             },
             "inheritance_doc": {
-                "icon": Icons.DESCRIPTION_OUTLINED,
-                "label": "遺産分割協議書",
+                "icon": Icons.GAVEL_OUTLINED,  # 遺産分割協議書
+                "label": "遺産分割協議書作成",
                 "route": f"/case/{case_id}/inheritance/doc",
+            },
+            "bank_unfreeze": {
+                "icon": Icons.KEY_OUTLINED,
+                "label": "銀行解約手続き",
+                "route": f"/case/{case_id}/proc/unfreeze",
+            },
+            "securities_transfer": {
+                "icon": Icons.TRANSFER_WITHIN_A_STATION_OUTLINED,
+                "label": "証券移管手続き",
+                "route": f"/case/{case_id}/proc/transfer",
             },
         }
 
@@ -94,27 +114,63 @@ class CaseHubView:
         """ルーティングパスに基づいてメインコンテンツを切り替える"""
         if route.startswith(f"/detail/{self.case_id}"):
             return DeceasedDetailView(self.page, self.case_id)
+
         elif route.endswith("/bank/add"):
             return BankEditView(self.page, self.case_id)
+
         elif route.endswith("/securities/add"):
-            return PlaceholderView(
-                self.page, "📈 証券口座登録", "新しい証券口座を登録します。"
-            )
-        elif route.endswith("/proc/status"):
+            return PlaceholderView(self.page, "📈 証券登録", "新しい証券口座を登録します。")
+
+        elif route.endswith("/proc/freeze"):
             return PlaceholderView(
                 self.page,
-                "⚙️ 口座手続き管理",
-                "口座凍結、残高証明、解約の進捗を管理します。",
+                "🔒 凍結手続き",
+                "口座凍結の進捗を管理します。",
+            )
+        elif route.endswith("/doc/balance_cert"):
+            return BalanceCertDocView(self.page, self.case_id)
+
+        # 💡 残証申請書類編集 (特定の銀行IDを含む場合)
+        # ルート例: /case/1/doc/balance_cert/101
+        elif (
+            route.startswith(f"/case/{self.case_id}/doc/balance_cert/")
+            and len(route.split("/")) == 6
+        ):
+            try:
+                # bank_id をルートの末尾から抽出
+                bank_id = int(route.split("/")[-1])
+                return BankBalanceDocEditView(self.page, self.case_id, bank_id)
+            except ValueError:
+                # bank_id が数値でない場合はエラーとして銀行選択画面に戻る
+                return BalanceCertDocView(self.page, self.case_id)
+
+        elif route.endswith("/reserve/visit"):
+            return PlaceholderView(
+                self.page,
+                "📅 来店予約",
+                "金融機関や関係者との来店・訪問予約を管理します。",
             )
         elif route.endswith("/asset/register"):
             return PlaceholderView(
                 self.page,
-                "💰 財産登録と目録作成",
+                "💰 財産登録/目録作成",
                 "不動産やその他財産の登録、目録作成を行います。",
             )
         elif route.endswith("/inheritance/doc"):
             return PlaceholderView(
-                self.page, "📄 遺産分割協議書作成", "遺産分割の決定と文書化を行います。"
+                self.page, "📝 遺産分割協議書作成", "遺産分割の決定と文書化を行います。"
+            )
+        elif route.endswith("/proc/unfreeze"):
+            return PlaceholderView(
+                self.page,
+                "🔑 銀行解約手続き",
+                "凍結解除後の銀行口座解約手続きの進捗を管理します。",
+            )
+        elif route.endswith("/proc/transfer"):
+            return PlaceholderView(
+                self.page,
+                "➡️ 証券移管手続き",
+                "証券口座の有価証券移管手続きの進捗を管理します。",
             )
         else:
             # デフォルトで概要ページを返す
@@ -194,9 +250,7 @@ class CaseHubView:
             if len(self.main_content.controls) > 1 and hasattr(
                 self.main_content.controls[1], "content"
             ):
-                initial_content_controls = self.main_content.controls[
-                    1
-                ].content.controls
+                initial_content_controls = self.main_content.controls[1].content.controls
             else:
                 initial_content_controls = self.main_content.controls
         else:
@@ -240,9 +294,7 @@ class CaseHubView:
             AppBar(
                 title=Text(f"{self.client_name}の詳細画面"),
                 bgcolor=Colors.BLUE_GREY_700,
-                leading=IconButton(
-                    Icons.ARROW_BACK, on_click=lambda e: self.page.go("/")
-                ),
+                leading=IconButton(Icons.ARROW_BACK, on_click=lambda e: self.page.go("/")),
             ),
             Row(
                 [
