@@ -12,15 +12,12 @@ from flet import (
     Text,
 )
 
-# from services import bank_service # 必要に応じて銀行詳細情報を取得するサービスをインポート
-
 
 def BankBalanceDocEditView(page: Page, case_id: int, bank_id: int):
     """
     特定の銀行 (bank_id) の残高証明申請書類を編集する画面ビュー。
     """
 
-    # 💡 ここで bank_id を使って銀行名などの詳細情報を取得する（ここでは省略）
     bank_name = f"銀行ID: {bank_id}"
 
     view_controls = [
@@ -39,7 +36,7 @@ def BankBalanceDocEditView(page: Page, case_id: int, bank_id: int):
                 Text(
                     "ここに残高証明申請に必要な情報（申請日、支店名、口座情報など）を入力するフォームを実装します。",
                     size=14,
-                    color=Colors.BLACK87,
+                    color=Colors.WHITE,
                 ),
                 Container(height=20),
                 Row(
