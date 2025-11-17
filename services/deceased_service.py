@@ -29,11 +29,80 @@ from services.db_setup import (
 # --- 内部ヘルパー関数 ---
 
 
+def get_bank_cert_document_data(case_id: int, bank_code: str) -> dict | None:
+    """
+    指定された銀行コードの残高証明書申請に必要な、案件、被相続人、契約者の詳細情報を統合して取得する。
+    """
+
+    with Session(bind=Engine) as session:
+        # 1. Case, Deceased, 契約者Heir の統合取得
+
+        # Case -> Deceased
+        deceased = session.query(Deceased).filter(Deceased.case_id == case_id).first()
+        if not deceased:
+            return None
+
+        # 契約者 Heir (is_contracting_party=True) を取得
+        contracting_heir = (
+            session.query(Heir)
+            .filter(Heir.deceased_id == deceased.id)
+            .filter(Heir.is_contracting_party == True)
+            .first()
+        )
+
+        # 2. 被相続人住所情報の取得 (最新の住所)
+        deceased_address_info = get_address_info("deceased", deceased.id)
+
+        # 3. 契約者情報、住所、連絡先の取得
+        heir_info = {}
+        if contracting_heir:
+            # 契約者住所の取得 (最新の住所)
+            heir_address_info = get_address_info("heir", contracting_heir.id)
+            # 契約者連絡先の取得
+            heir_contacts = get_contact_info("heir", contracting_heir.id)
+
+            # 電話番号の抽出 (Primary/携帯などを優先)
+            heir_phone = next((c["value"] for c in heir_contacts if c["type"] == "PHONE"), None)
+
+            heir_info = {
+                "last_name": contracting_heir.name_last,
+                "first_name": contracting_heir.name_first,
+                "last_kana": contracting_heir.name_last_kana,
+                "first_kana": contracting_heir.name_first_kana,
+                "phone": heir_phone,
+                "address": heir_address_info,  # 住所情報全体
+            }
+
+        # 4. 銀行情報（指定された bank_code）の取得
+        # 💡 任意の bank_code を使用
+        target_bank_assets = get_financial_assets_by_bank_code(case_id, bank_code)
+
+        # 5. 結果の構築
+        result = {
+            "case_number": deceased.case.case_number if deceased.case else "N/A",
+            # 被相続人情報
+            "deceased": {
+                "last_name": deceased.name_last,
+                "first_name": deceased.name_first,
+                "last_kana": deceased.name_last_kana,
+                "first_kana": deceased.name_first_kana,
+                "address": deceased_address_info,  # 住所情報全体
+            },
+            # 契約者情報
+            "contracting_party": heir_info,
+            # 銀行情報
+            # 💡 キー名を smbc_assets から bank_assets に変更し、汎用性を持たせる
+            "bank_assets": target_bank_assets,
+        }
+
+        return result
+
+
 def get_case_folder_path_service(case_id: int) -> str | None:
     """
     Case ID に紐づくフォルダパス (Case.folder_path) を取得する。
     """
-    return get_case_folder_path()
+    return get_case_folder_path(case_id)
 
     # with Session(bind=Engine) as session:
     #     case = session.query(Case).filter(Case.case_id == case_id).first()
@@ -84,6 +153,34 @@ def get_financial_asset_by_case(case_id: int) -> list[dict]:
     """
     with Session(bind=Engine) as session:
         assets = session.query(FinancialAsset).filter(FinancialAsset.case_id == case_id).all()
+
+        return [
+            {
+                "id": a.asset_id,
+                "bank_name": a.bank_name,
+                "bank_code": a.bank_code,
+                "branch_name": a.branch_name,
+                "branch_code": a.branch_code,
+                "account_number": a.account_number,
+                "balance": a.balance,
+                "status": a.status,
+            }
+            for a in assets
+        ]
+
+
+# 銀行コードによる金融資産の取得
+def get_financial_assets_by_bank_code(case_id: int, bank_code: str) -> list[dict]:
+    """
+    指定された案件IDと銀行コードに紐づく全ての金融資産を取得する。
+    """
+    with Session(bind=Engine) as session:
+        assets = (
+            session.query(FinancialAsset)
+            .filter(FinancialAsset.case_id == case_id)
+            .filter(FinancialAsset.bank_code == bank_code)
+            .all()
+        )
 
         return [
             {

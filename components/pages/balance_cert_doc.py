@@ -1,6 +1,5 @@
 # /components/pages/balance_cert_doc.py
 from flet import (
-    # 💡 ButtonStyleをインポート
     Colors,
     Column,
     Container,
@@ -23,12 +22,30 @@ from services.deceased_service import get_financial_asset_by_case
 def BalanceCertDocView(page: Page, case_id: int):
     """
     残高証明申請書類作成の選択画面ビュー。
-    案件に紐づく FinancialAsset (銀行) リストを表示し、銀行ごとの詳細編集画面へ遷移させる。
+    案件に紐づく FinancialAsset (銀行) リストを銀行コードでグループ化して表示する。
     """
 
-    # --- サービス層から銀行リスト (FinancialAssetリスト) を取得 ---
-    # 💡 既存の get_financial_asset_by_case を呼び出す
+    # --- サービス層から金融資産リストを取得 ---
     financial_assets = get_financial_asset_by_case(case_id)
+
+    # 💡【重要】銀行コードごとに口座情報をグループ化する
+    grouped_banks = {}
+    for asset in financial_assets:
+        bank_code = asset.get("bank_code")
+        bank_name = asset.get("bank_name")
+        account_number = asset.get("account_number")
+
+        if bank_code and bank_name:
+            if bank_code not in grouped_banks:
+                grouped_banks[bank_code] = {
+                    "bank_name": bank_name,
+                    # その銀行に紐づくすべての口座IDを格納
+                    "asset_ids": [asset["id"]],
+                    "account_numbers": [account_number],
+                }
+            else:
+                grouped_banks[bank_code]["asset_ids"].append(asset["id"])
+                grouped_banks[bank_code]["account_numbers"].append(account_number)
 
     # 案件に銀行が登録されていない場合のコントロール
     no_banks_content = Container(
@@ -38,6 +55,7 @@ def BalanceCertDocView(page: Page, case_id: int):
                 Text(
                     "先に「銀行登録」画面で銀行口座情報を登録してください。",
                     size=14,
+                    # 💡 文字色を黒に修正
                     color=Colors.BLACK,
                 ),
             ],
@@ -52,23 +70,37 @@ def BalanceCertDocView(page: Page, case_id: int):
     # 銀行リスト表示用のコントロールを生成
     bank_list_controls = Column(spacing=10)
 
-    # 銀行ごとの編集ボタンを作成する関数
-    # 💡 asset_id を bank_id として使用
-    def create_bank_button(bank_name: str, branch_name: str, account_number: str, asset_id: int):
-        # 💡 銀行ごとの残証申請書類編集画面への遷移関数
-        # ルート例: /case/{case_id}/doc/balance_cert/{asset_id}
+    # 銀行ごとの編集ボタンを作成する関数 (グループ化されたボタン)
+    def create_bank_group_button(
+        bank_name: str, bank_code: str, asset_ids: list[int], account_numbers: list[str]
+    ):
+        # 💡 遷移先を銀行コードベースの新しいルートに変更
+        # 例: /case/{case_id}/doc/balance_cert/bank_code/{bank_code}
         def go_to_edit_page(e):
-            page.go(f"/case/{case_id}/doc/balance_cert/{asset_id}")
+            # 💡 銀行コードに基づいて遷移先のパスを決定
+            if bank_code == "0001":
+                # みずほ銀行専用ルート
+                target_route = f"/case/{case_id}/doc/balance_cert/mizuho/{bank_code}"
+            elif bank_code == "0009":
+                # 三井住友銀行専用ルート
+                target_route = f"/case/{case_id}/doc/balance_cert/smbc/{bank_code}"
+            else:
+                # 標準フォーム（現在の BankBalanceDocEditView を標準として流用）
+                target_route = f"/case/{case_id}/doc/balance_cert/standard/{bank_code}"
 
-        # 支店名がない場合は金融機関名のみを表示
-        is_branch_info = branch_name and branch_name != "支店不明" and branch_name.strip()
-        display_name = f"{bank_name} ({branch_name})" if is_branch_info else bank_name
+            page.go(target_route)
+
+        # 口座番号の表示を、複数の場合は「複数口座」などにする
+        account_summary = (
+            f"({len(asset_ids)}口座)" if len(asset_ids) > 1 else f"/ 口座番号: {account_numbers[0]}"
+        )
 
         return Container(
             content=Row(
                 [
                     Text(
-                        f"{display_name} / 口座番号: {account_number}",
+                        # 💡 表示名を銀行名と口座数のサマリーに変更
+                        f"🏦 {bank_name} {account_summary}",
                         size=14,
                         weight=FontWeight.W_500,
                         width=350,
@@ -78,7 +110,7 @@ def BalanceCertDocView(page: Page, case_id: int):
                         "📄 申請書類を作成・編集",
                         icon=Icons.EDIT_DOCUMENT,
                         on_click=go_to_edit_page,
-                        # 💡 修正箇所: ButtonStyle を直接使用
+                        # # 💡 ButtonStyle を直接使用に修正
                         # style=ButtonStyle(
                         #     bgcolor=Colors.BLUE_500,
                         #     padding={"vertical": 15, "horizontal": 20},
@@ -95,16 +127,15 @@ def BalanceCertDocView(page: Page, case_id: int):
             width=600,
         )
 
-    if financial_assets:
-        # 銀行リストが存在する場合、ボタンを生成
-        for asset in financial_assets:
-            # asset は get_financial_asset_by_case の辞書形式
+    if grouped_banks:
+        # 💡 修正: グループ化された銀行データでボタンを生成
+        for bank_code, bank_data in grouped_banks.items():
             bank_list_controls.controls.append(
-                create_bank_button(
-                    asset["bank_name"],
-                    asset.get("branch_name") or "支店不明",
-                    asset["account_number"],
-                    asset["id"],  # asset_id
+                create_bank_group_button(
+                    bank_data["bank_name"],
+                    bank_code,
+                    bank_data["asset_ids"],
+                    bank_data["account_numbers"],
                 )
             )
     else:
@@ -114,11 +145,13 @@ def BalanceCertDocView(page: Page, case_id: int):
     # --- メインコンテンツの定義 ---
     return Column(
         controls=[
+            # 💡 文字色を黒に修正 (App Barの背景色に合わせて)
             Text("📄 残証申請書類作成", size=24, weight=FontWeight.BOLD, color=Colors.WHITE),
             Divider(),
             Text(
                 f"案件ID {case_id} に登録されている金融資産（銀行口座）を選択してください。",
                 size=16,
+                # 💡 文字色を黒に修正
                 color=Colors.WHITE,
             ),
             Container(height=10),  # スペーサー

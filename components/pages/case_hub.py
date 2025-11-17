@@ -21,7 +21,11 @@ from components.pages.balance_cert_doc import BalanceCertDocView
 from components.pages.bank_balance_doc_edit import BankBalanceDocEditView
 from components.pages.bank_edit import BankEditView
 from components.pages.detail import DeceasedDetailView
-from services.deceased_service import get_contracting_party_name
+from components.pages.mizuho_balance_doc_view import MizuhoBalanceDocView
+from components.pages.smbc_balance_doc_view import SmbcBalanceDocView
+from services.deceased_service import (
+    get_contracting_party_name,
+)
 
 
 # 💡 メインコンテンツのダミービュー（後で実装）
@@ -111,70 +115,126 @@ class CaseHubView:
         self.nav_rail = None
 
     def _get_main_content_for_route(self, route):
-        """ルーティングパスに基づいてメインコンテンツを切り替える"""
-        if route.startswith(f"/detail/{self.case_id}"):
+        """
+        現在のルートに基づいて、表示すべきメインコンテンツのFletコントロールを返す。
+        """
+
+        # --- 1. 案件概要 / 相続人 (detail.py) ---
+        if (
+            route.endswith(f"/case/{self.case_id}")
+            or route.endswith(f"/case/{self.case_id}/overview")
+            or route.startswith(f"/detail/{self.case_id}")
+        ):
             return DeceasedDetailView(self.page, self.case_id)
 
+        # --- 2. 銀行口座登録・編集 (bank_edit.py) ---
         elif route.endswith("/bank/add"):
             return BankEditView(self.page, self.case_id)
 
-        elif route.endswith("/securities/add"):
-            return PlaceholderView(self.page, "📈 証券登録", "新しい証券口座を登録します。")
-
-        elif route.endswith("/proc/freeze"):
-            return PlaceholderView(
-                self.page,
-                "🔒 凍結手続き",
-                "口座凍結の進捗を管理します。",
-            )
+        # --- 3. 残高証明申請書類（選択画面） (balance_cert_doc.py) ---
         elif route.endswith("/doc/balance_cert"):
             return BalanceCertDocView(self.page, self.case_id)
 
-        # 💡 残証申請書類編集 (特定の銀行IDを含む場合)
-        # ルート例: /case/1/doc/balance_cert/101
-        elif (
-            route.startswith(f"/case/{self.case_id}/doc/balance_cert/")
-            and len(route.split("/")) == 6
-        ):
-            try:
-                # bank_id をルートの末尾から抽出
-                bank_id = int(route.split("/")[-1])
-                return BankBalanceDocEditView(self.page, self.case_id, bank_id)
-            except ValueError:
-                # bank_id が数値でない場合はエラーとして銀行選択画面に戻る
-                return BalanceCertDocView(self.page, self.case_id)
+        # --- 4. 残高証明申請書類（編集画面 - 銀行別フォーム） ---
 
-        elif route.endswith("/reserve/visit"):
-            return PlaceholderView(
-                self.page,
-                "📅 来店予約",
-                "金融機関や関係者との来店・訪問予約を管理します。",
-            )
-        elif route.endswith("/asset/register"):
-            return PlaceholderView(
-                self.page,
-                "💰 財産登録/目録作成",
-                "不動産やその他財産の登録、目録作成を行います。",
-            )
-        elif route.endswith("/inheritance/doc"):
-            return PlaceholderView(
-                self.page, "📝 遺産分割協議書作成", "遺産分割の決定と文書化を行います。"
-            )
-        elif route.endswith("/proc/unfreeze"):
-            return PlaceholderView(
-                self.page,
-                "🔑 銀行解約手続き",
-                "凍結解除後の銀行口座解約手続きの進捗を管理します。",
-            )
-        elif route.endswith("/proc/transfer"):
-            return PlaceholderView(
-                self.page,
-                "➡️ 証券移管手続き",
-                "証券口座の有価証券移管手続きの進捗を管理します。",
-            )
-        else:
-            # デフォルトで概要ページを返す
-            return DeceasedDetailView(self.page, self.case_id)
+        # URLの最後のセグメント（銀行コード）を取得するための共通処理
+        route_parts = route.split("/")
+        bank_code = route_parts[-1]
+
+        # 4-1. みずほ銀行 (コード: 0001) 専用ルート
+        if route.startswith(f"/case/{self.case_id}/doc/balance_cert/mizuho/"):
+            return MizuhoBalanceDocView(self.page, self.case_id, bank_code)
+            # return PlaceholderView(
+            #     self.page,
+            #     "みずほ銀行 (0001) 専用フォーム",
+            #     f"案件ID: {self.case_id} / 銀行コード: {bank_code}",
+            # )
+
+        # 4-2. 三井住友銀行 (コード: 0009) 専用ルート
+        elif route.startswith(f"/case/{self.case_id}/doc/balance_cert/smbc/"):
+            return SmbcBalanceDocView(self.page, self.case_id, bank_code)
+            # return PlaceholderView(
+            #     self.page,
+            #     "三井住友銀行 (0009) 専用フォーム",
+            #     f"案件ID: {self.case_id} / 銀行コード: {bank_code}",
+            # )
+
+        # 4-3. 標準フォーム（上記以外の銀行）ルート
+        elif route.startswith(f"/case/{self.case_id}/doc/balance_cert/standard/"):
+            # 💡 銀行コードを引数として渡し、BankBalanceDocEditView を標準フォームとして利用
+            return BankBalanceDocEditView(self.page, self.case_id, bank_code)
+
+        # --- 5. その他のプレースホルダー/フォールバック ---
+        # (ここでは、元のコードになかったタスクや資料のルーティングは省略し、デフォルトを返します)
+
+        # 💡 デフォルト / ルートエラー
+        return PlaceholderView(self.page, "ページが見つかりません", f"ルート: {route}")
+
+    # def _get_main_content_for_route(self, route):
+    #     """ルーティングパスに基づいてメインコンテンツを切り替える"""
+    #     if route.startswith(f"/detail/{self.case_id}"):
+    #         return DeceasedDetailView(self.page, self.case_id)
+
+    #     elif route.endswith("/bank/add"):
+    #         return BankEditView(self.page, self.case_id)
+
+    #     elif route.endswith("/securities/add"):
+    #         return PlaceholderView(self.page, "📈 証券登録", "新しい証券口座を登録します。")
+
+    #     elif route.endswith("/proc/freeze"):
+    #         return PlaceholderView(
+    #             self.page,
+    #             "🔒 凍結手続き",
+    #             "口座凍結の進捗を管理します。",
+    #         )
+    #     elif route.endswith("/doc/balance_cert"):
+    #         return BalanceCertDocView(self.page, self.case_id)
+
+    #     # 💡 残証申請書類編集 (特定の銀行IDを含む場合)
+    #     # ルート例: /case/1/doc/balance_cert/101
+    #     elif (
+    #         route.startswith(f"/case/{self.case_id}/doc/balance_cert/")
+    #         and len(route.split("/")) == 6
+    #     ):
+    #         try:
+    #             # bank_id をルートの末尾から抽出
+    #             bank_id = int(route.split("/")[-1])
+    #             return BankBalanceDocEditView(self.page, self.case_id, bank_id)
+    #         except ValueError:
+    #             # bank_id が数値でない場合はエラーとして銀行選択画面に戻る
+    #             return BalanceCertDocView(self.page, self.case_id)
+
+    #     elif route.endswith("/reserve/visit"):
+    #         return PlaceholderView(
+    #             self.page,
+    #             "📅 来店予約",
+    #             "金融機関や関係者との来店・訪問予約を管理します。",
+    #         )
+    #     elif route.endswith("/asset/register"):
+    #         return PlaceholderView(
+    #             self.page,
+    #             "💰 財産登録/目録作成",
+    #             "不動産やその他財産の登録、目録作成を行います。",
+    #         )
+    #     elif route.endswith("/inheritance/doc"):
+    #         return PlaceholderView(
+    #             self.page, "📝 遺産分割協議書作成", "遺産分割の決定と文書化を行います。"
+    #         )
+    #     elif route.endswith("/proc/unfreeze"):
+    #         return PlaceholderView(
+    #             self.page,
+    #             "🔑 銀行解約手続き",
+    #             "凍結解除後の銀行口座解約手続きの進捗を管理します。",
+    #         )
+    #     elif route.endswith("/proc/transfer"):
+    #         return PlaceholderView(
+    #             self.page,
+    #             "➡️ 証券移管手続き",
+    #             "証券口座の有価証券移管手続きの進捗を管理します。",
+    #         )
+    #     else:
+    #         # デフォルトで概要ページを返す
+    #         return DeceasedDetailView(self.page, self.case_id)
 
     def _get_index_from_route(self, route):
         """ルートURLから対応するナビゲーションインデックスを計算する"""
