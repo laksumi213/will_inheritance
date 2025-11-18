@@ -22,7 +22,7 @@ from services.deceased_service import get_financial_asset_by_case
 def BalanceCertDocView(page: Page, case_id: int):
     """
     残高証明申請書類作成の選択画面ビュー。
-    案件に紐づく FinancialAsset (銀行) リストを銀行コードでグループ化して表示する。
+    案件に紐づく FinancialAsset (銀行) リストを銀行コードでグループ化して表示
     """
 
     # --- サービス層から金融資産リストを取得 ---
