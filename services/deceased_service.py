@@ -663,9 +663,9 @@ def delete_deceased(deceased_id: int):
 
 def update_deceased(
     deceased_id: int,
-    name_last: str,
-    name_first: str,
-    dob: str,
+    name_last: str = None,
+    name_first: str = None,
+    dob: str = None,
     dod: str = None,
     kana_last: str = None,
     kana_first: str = None,

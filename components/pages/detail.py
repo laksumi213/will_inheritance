@@ -55,10 +55,7 @@ dialog_manager_field = Dropdown(
     autofocus=True,
 )
 dialog_operator_field = Dropdown(
-    label="担当者2 (実務担当)",
-    width=200,
-    options=USER_OPTIONS,
-    value="",
+    label="担当者2 (実務担当)", width=200, options=USER_OPTIONS, value=""
 )
 
 

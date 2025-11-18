@@ -1,4 +1,5 @@
 # /components/pages/case_hub.py
+
 from flet import (
     AppBar,
     Colors,

@@ -19,8 +19,6 @@ from flet import (
 )
 
 from components.utils.file_system import open_case_folder
-
-# サービス層をインポート
 from services.db_setup import (
     get_all_users,
     get_case_folder_path,
@@ -142,9 +140,7 @@ class CaseDashboardView(Column):
             self.search_timer.cancel()
 
         # 300ms後に _run_search_action を実行するタイマーを設定
-        self.search_timer = threading.Timer(
-            0.3, self._run_search_action, [e.control.value]
-        )
+        self.search_timer = threading.Timer(0.3, self._run_search_action, [e.control.value])
         self.search_timer.start()
 
     # デバウンスから呼ばれる実際の検索処理
@@ -152,9 +148,7 @@ class CaseDashboardView(Column):
         """デバウンス後に実行される検索処理"""
         list_view = self.main_list_view_column.controls[-1]
         list_view.controls = self._get_case_items(search_term)
-        self.page.run_thread(
-            self.update
-        )  # FletのUI更新はメインスレッドで行う必要がある
+        self.page.run_thread(self.update)  # FletのUI更新はメインスレッドで行う必要がある
 
     # on_submit 削除に伴い _run_search の定義を調整（デバウンス版を優先）
     # 元の on_submit 処理を、デバウンス版の _run_search_action に置き換えるか、
@@ -215,9 +209,7 @@ class CaseDashboardView(Column):
 
             items.append(
                 ListTile(
-                    title=Text(
-                        f"{d['name']} ({d['role']})", weight="bold", color=color
-                    ),
+                    title=Text(f"{d['name']} ({d['role']})", weight="bold", color=color),
                     subtitle=Text(
                         f"未完了タスク: {d['total_incomplete_tasks']} 件 | 担当案件数: {d['total_cases_handled']} 件"
                     ),
