@@ -23,9 +23,7 @@ from components.pages.bank_edit import BankEditView
 from components.pages.detail import DeceasedDetailView
 from components.pages.mizuho_balance_doc_view import MizuhoBalanceDocView
 from components.pages.smbc_balance_doc_view import SmbcBalanceDocView
-from services.deceased_service import (
-    get_contracting_party_name,
-)
+from services.deceased_service import get_contracting_party_name
 
 
 # 💡 メインコンテンツのダミービュー（後で実装）

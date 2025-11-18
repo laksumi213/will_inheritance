@@ -663,7 +663,8 @@ def delete_deceased(deceased_id: int):
 
 def update_deceased(
     deceased_id: int,
-    name: str,
+    name_last: str,
+    name_first: str,
     dob: str,
     dod: str = None,
     kana_last: str = None,
@@ -679,9 +680,9 @@ def update_deceased(
     """被相続人の基本情報と最新の住所情報を更新する。"""
 
     # 基本情報処理
-    parts = name.split(" ", 1)
-    name_last = parts[0].strip()
-    name_first = parts[1].strip() if len(parts) > 1 else ""
+    # parts = name.split(" ", 1)
+    # name_last = parts[0].strip()
+    # name_first = parts[1].strip() if len(parts) > 1 else ""
     try:
         dob_date = parse_all_flexible_date(dob) if dob else None
     except ValueError:
