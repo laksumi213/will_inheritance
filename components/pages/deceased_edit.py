@@ -160,13 +160,16 @@ def create_address_fields(is_last: bool, data: dict = None):
 
     # 💡 is_last=True の場合は、グローバルに定義されたフィールドの参照を返す
     if is_last:
+        # グローバルフィールドの値を更新
         last_zip_field.value = data.get("zip_code", "")
         last_pref_field.value = data.get("prefecture", "")
         last_city_field.value = data.get("city_ward_town", "")
         last_street_field.value = data.get("street_address", "")
         last_building_field.value = data.get("building_name", "")
 
-        return [
+        # 💡 ここで field のリストを返すだけで、Viewにコントロールを追加する処理は不要。
+        #    メインのレイアウトで既に last_address_controls が参照されているため。
+        return [ 
             last_zip_field,
             last_pref_field,
             last_city_field,
@@ -355,16 +358,36 @@ def DeceasedEditView(page: Page, deceased_id_or_case_id: int):
             for addr in address_history:
                 # 💡 create_address_fields を使用してフィールドに値を設定
                 if addr["is_last_address"]:
-                    # 最後の住所はグローバルフィールドに直接値を設定
-                    last_zip_field.value = addr["zip_code"]
-                    last_pref_field.value = addr["prefecture"]
-                    last_city_field.value = addr["city_ward_town"]
-                    last_street_field.value = addr["street_address"]
-                    last_building_field.value = addr["building_name"]
+                    # 最後の住所はグローバルフィールドに直接値を設定 (create_address_fields で値設定の処理を一本化)
+                    # 💡 create_address_fields(is_last=True, data=addr) を呼び出すことで、
+                    #    グローバルフィールドに値が設定され、かつ冗長なコードを避ける。
+                    create_address_fields(is_last=True, data=addr) # <- これを呼び出す
+                    
+                    # ↓ 冗長な直接代入は削除またはコメントアウト
+                    # last_zip_field.value = addr["zip_code"]
+                    # last_pref_field.value = addr["prefecture"]
+                    # last_city_field.value = addr["city_ward_town"]
+                    # last_street_field.value = addr["street_address"]
+                    # last_building_field.value = addr["building_name"]
                 else:
                     # 過去の住所を動的リストにロード
                     control_set = create_address_fields(is_last=False, data=addr)
                     past_addresses_column.controls.append(control_set)
+
+            # # 最後の住所と過去の住所を分離してロード
+            # for addr in address_history:
+            #     # 💡 create_address_fields を使用してフィールドに値を設定
+            #     if addr["is_last_address"]:
+            #         # 最後の住所はグローバルフィールドに直接値を設定
+            #         last_zip_field.value = addr["zip_code"]
+            #         last_pref_field.value = addr["prefecture"]
+            #         last_city_field.value = addr["city_ward_town"]
+            #         last_street_field.value = addr["street_address"]
+            #         last_building_field.value = addr["building_name"]
+            #     else:
+            #         # 過去の住所を動的リストにロード
+            #         control_set = create_address_fields(is_last=False, data=addr)
+            #         past_addresses_column.controls.append(control_set)
 
         # 💡 新規モードの場合はフィールドをクリアしておく
         elif is_new_mode:
@@ -394,10 +417,10 @@ def DeceasedEditView(page: Page, deceased_id_or_case_id: int):
         name_first = dialog_name_first_field.value.strip()
         full_name = f"{name_last} {name_first}".strip()
 
-        if not name_last or not dialog_dob_field.value:
+        if not name_last or not name_first:
             page.open(
                 SnackBar(
-                    content=Text("氏名（姓）と生年月日は必須です。", color=Colors.WHITE),
+                    content=Text("氏名（姓）と氏名（名）は必須項目です。", color=Colors.WHITE),
                     bgcolor=Colors.RED_700,
                 )
             )
@@ -407,15 +430,24 @@ def DeceasedEditView(page: Page, deceased_id_or_case_id: int):
         # 2. 過去の住所データを UI コントロールから収集 (is_last=False のみ)
         collected_past_addresses = []
         for control_set in past_addresses_column.controls:
-            # Column(Row([zip, pref, city]), Row([street, building, delete])) の構造を仮定
-            addr_row_1 = control_set.controls[0]
-            addr_row_2 = control_set.controls[1]
+            # control_set は Column。その controls[0] が Row 
+            
+            # UIからのデータが空の Column でなければ処理を継続
+            if not control_set.controls:
+                continue
 
-            zip_code = addr_row_1.controls[0].value.strip()
-            prefecture = addr_row_1.controls[1].value.strip()
-            city_ward_town = addr_row_1.controls[2].value.strip()
-            street_address = addr_row_2.controls[0].value.strip()
-            building_name = addr_row_2.controls[1].value.strip()
+            addr_row = control_set.controls[0] 
+            
+            # 💡 コントロールのインデックスを新しいRow構成で確認
+            # [0]zip, [1]pref, [2]city, [3]street, [4]building, [5]delete_button (削除ボタンがある場合)
+            if len(addr_row.controls) < 5: 
+                continue # 最低限のコントロール数チェック
+
+            zip_code = addr_row.controls[0].value.strip() 
+            prefecture = addr_row.controls[1].value.strip() 
+            city_ward_town = addr_row.controls[2].value.strip() 
+            street_address = addr_row.controls[3].value.strip() 
+            building_name = addr_row.controls[4].value.strip() 
 
             # 過去の住所として有効なデータのみを収集 (都道府県と番地は必須とする)
             if prefecture and street_address:
@@ -426,25 +458,14 @@ def DeceasedEditView(page: Page, deceased_id_or_case_id: int):
                         "city_ward_town": city_ward_town,
                         "street_address": street_address,
                         "building_name": building_name,
-                        "is_last_address": False,  # 明示的にFalseを設定
-                        "address_id": control_set.data.get("id", None),  # 既存のIDがあれば渡す
+                        "is_last_address": False,
+                        "address_id": control_set.data.get("id", None),  # 既存のAddress IDを渡す
                     }
                 )
 
         try:
             # 3. 保存・更新処理
-
-            if is_new_mode:
-                # 新規登録モードでは、まず Deceased と Case を作成
-                new_id = deceased_service.add_deceased(full_name, dialog_dob_field.value)
-                current_deceased_id = new_id
-
-                if current_deceased_id <= 0:
-                    raise Exception("被相続人の登録に失敗しました。")
-
-                # 新規登録時は、最後に update_deceased で残りの情報と住所を登録
-
-            # 既存データ更新、または新規登録後の追加情報登録
+            # ... (中略：引数を渡し、サービス関数を呼び出す) ...
             deceased_service.update_deceased(
                 deceased_id=current_deceased_id,
                 name_last=dialog_name_last_field.value.strip() or None,  # 姓
@@ -463,6 +484,63 @@ def DeceasedEditView(page: Page, deceased_id_or_case_id: int):
                 # 過去の住所リスト
                 past_addresses=collected_past_addresses,
             )
+        # for control_set in past_addresses_column.controls:
+        #     # Column(Row([zip, pref, city]), Row([street, building, delete])) の構造を仮定
+        #     addr_row_1 = control_set.controls[0]
+        #     addr_row_2 = control_set.controls[1]
+
+        #     zip_code = addr_row_1.controls[0].value.strip()
+        #     prefecture = addr_row_1.controls[1].value.strip()
+        #     city_ward_town = addr_row_1.controls[2].value.strip()
+        #     street_address = addr_row_2.controls[0].value.strip()
+        #     building_name = addr_row_2.controls[1].value.strip()
+
+        #     # 過去の住所として有効なデータのみを収集 (都道府県と番地は必須とする)
+        #     if prefecture and street_address:
+        #         collected_past_addresses.append(
+        #             {
+        #                 "zip_code": zip_code,
+        #                 "prefecture": prefecture,
+        #                 "city_ward_town": city_ward_town,
+        #                 "street_address": street_address,
+        #                 "building_name": building_name,
+        #                 "is_last_address": False,  # 明示的にFalseを設定
+        #                 "address_id": control_set.data.get("id", None),  # 既存のIDがあれば渡す
+        #             }
+        #         )
+
+        # try:
+        #     # 3. 保存・更新処理
+
+        #     if is_new_mode:
+        #         # 新規登録モードでは、まず Deceased と Case を作成
+        #         new_id = deceased_service.add_deceased(full_name, dialog_dob_field.value)
+        #         current_deceased_id = new_id
+
+        #         if current_deceased_id <= 0:
+        #             raise Exception("被相続人の登録に失敗しました。")
+
+        #         # 新規登録時は、最後に update_deceased で残りの情報と住所を登録
+
+        #     # 既存データ更新、または新規登録後の追加情報登録
+        #     deceased_service.update_deceased(
+        #         deceased_id=current_deceased_id,
+        #         name_last=dialog_name_last_field.value.strip() or None,  # 姓
+        #         name_first=dialog_name_first_field.value.strip() or None,  # 名
+        #         dob=dialog_dob_field.value,
+        #         dod=dialog_dod_field.value or None,
+        #         kana_last=dialog_kana_last_field.value.strip() or None,
+        #         kana_first=dialog_kana_first_field.value.strip() or None,
+        #         hometown=dialog_hometown_field.value.strip() or None,
+        #         # 最後の住所
+        #         last_zip_code=last_zip_field.value.strip() or None,
+        #         last_pref=last_pref_field.value.strip() or None,
+        #         last_city=last_city_field.value.strip() or None,
+        #         last_street=last_street_field.value.strip() or None,
+        #         last_building=last_building_field.value.strip() or None,
+        #         # 過去の住所リスト
+        #         past_addresses=collected_past_addresses,
+        #     )
 
             # 成功後の遷移
             page.open(
@@ -527,7 +605,6 @@ def DeceasedEditView(page: Page, deceased_id_or_case_id: int):
                         color=Colors.BLACK,
                     ),
                     Text(
-                        "※最後の住所を入力すると、既存の最後の住所は自動で過去の住所に登録されます。",
                         size=12,
                         color=Colors.BLUE_GREY_600,
                     ),

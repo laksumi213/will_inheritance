@@ -313,6 +313,7 @@ class Deceased(Base):
     date_of_birth = Column(Date)
     date_of_death = Column(Date)
     relationship_type = Column(String)  # 続柄 (通常は「本人」)
+    last_address_id = Column(Integer, ForeignKey("address.id"), nullable=True)
 
     heirs = relationship("Heir", back_populates="deceased", cascade="all, delete-orphan")
     address_links = relationship(
@@ -322,6 +323,7 @@ class Deceased(Base):
         "D_ContactLink", back_populates="deceased", cascade="all, delete-orphan"
     )
     case = relationship("Case", back_populates="deceased_ref")
+    last_address = relationship("Address", foreign_keys=[last_address_id])
 
 
 class Heir(Base):

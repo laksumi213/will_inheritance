@@ -18,6 +18,7 @@ from flet import (
     TextStyle,
 )
 
+from components.pages.client_register import reset_all_global_fields
 from components.utils.file_system import open_case_folder
 from services.db_setup import (
     get_all_users,
@@ -409,7 +410,8 @@ class CaseDashboardView(Column):
                     self.search_field,
                     ElevatedButton(
                         "➕ 新規案件登録",
-                        on_click=lambda e: self.page.go("/client_register"),
+                        # on_click=lambda e: self.page.go("/client_register"),
+                        on_click=lambda e: self._handle_new_case_register(),
                         # "➕ 新規案件登録", on_click=lambda e: self.page.go("/detail/-1")
                     ),
                     # ここにステータスフィルターなどのドロップダウンを追加可能
@@ -422,6 +424,15 @@ class CaseDashboardView(Column):
             border_radius=5,
             width=None,
         )
+    
+    def _handle_new_case_register(self):
+        """新規案件登録前にフィールドをリセットし、遷移する"""
+        
+        # 1. 遷移先（client_register.py）のグローバルフィールドをリセット
+        reset_all_global_fields()
+        
+        # 2. 新規登録モードのルートに遷移
+        self.page.go("/client_register") # /client_register は /detail/-1 と異なり、単独のルート
 
     def _create_main_list_view_column(self):
         """3. メイン一覧エリア（案件リスト表示）のUI"""

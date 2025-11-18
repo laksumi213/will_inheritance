@@ -452,6 +452,36 @@ def get_case_progress_summary(case_id: int):
             else "N/A",
         }
 
+def _update_address(db: Session, address_data: dict, existing_address_id: int | None = None) -> int | None:
+    """住所データを更新または新規作成し、Address ID を返す。"""
+    zip_code = address_data.get("zip_code")
+    prefecture = address_data.get("prefecture")
+    city_ward_town = address_data.get("city_ward_town")
+    street_address = address_data.get("street_address")
+    building_name = address_data.get("building_name")
+
+    # 住所データが不完全な場合は処理をスキップ (都道府県と番地は必須と仮定)
+    if not prefecture or not street_address:
+        return None
+
+    address_args = {
+        "zip_code": zip_code,
+        "prefecture": prefecture,
+        "city_ward_town": city_ward_town,
+        "street_address": street_address,
+        "building_name": building_name,
+    }
+
+    if existing_address_id:
+        # 既存の Address レコードを更新 (last_address_id から参照される Address を更新)
+        db.query(Address).filter(Address.id == existing_address_id).update(address_args)
+        return existing_address_id
+    else:
+        # 新しい Address レコードを作成
+        new_address = Address(**address_args)
+        db.add(new_address)
+        db.flush() # IDを生成させる
+        return new_address.id
 
 def _update_or_create_address(
     session, owner_id, owner_type, zip_code, pref, city, street, building, is_last: bool = True
@@ -677,110 +707,212 @@ def update_deceased(
     last_building: str = None,
     past_addresses: list[dict] = None,
 ):
-    """被相続人の基本情報と最新の住所情報を更新する。"""
-
-    # 基本情報処理
-    # parts = name.split(" ", 1)
-    # name_last = parts[0].strip()
-    # name_first = parts[1].strip() if len(parts) > 1 else ""
+    """被相続人データを更新し、住所情報を登録・更新する。"""
+    
+    # 日付の解析
     try:
         dob_date = parse_all_flexible_date(dob) if dob else None
-    except ValueError:
-        dob_date = None
-
-    try:
         dod_date = parse_all_flexible_date(dod) if dod else None
     except ValueError:
-        dod_date = None
+        dob_date, dod_date = None, None
 
-    with Session(bind=Engine) as session:
-        deceased = session.query(Deceased).get(deceased_id)
-        if deceased:
-            # 1. 基本情報の更新
+    with Session(bind=Engine) as db:
+        try:
+            # 1. Deceased の基本情報を更新
+            deceased = db.query(Deceased).filter(Deceased.id == deceased_id).first()
+            if not deceased:
+                raise ValueError(f"Deceased ID {deceased_id} not found.")
+
             deceased.name_last = name_last
             deceased.name_first = name_first
             deceased.name_last_kana = kana_last
             deceased.name_first_kana = kana_first
             deceased.date_of_birth = dob_date
             deceased.date_of_death = dod_date
-            deceased.hometown = hometown  # 追加: hometownを更新
+            deceased.hometown = hometown
 
-            case = session.query(Case).get(deceased.case_id)
-            if case:
-                # Caseモデルに deceased_name はないので client_name は更新しない
-                # case.deceased_name = name
-                pass
+            # 2. 最後の住所 (Last Address) の処理
+            last_address_data = {
+                "zip_code": last_zip_code,
+                "prefecture": last_pref,
+                "city_ward_town": last_city,
+                "street_address": last_street,
+                "building_name": last_building,
+            }
+            last_address_id = deceased.last_address_id
+            
+            # last_address_id が指す Address レコードを更新または新規作成
+            new_last_address_id = _update_address(db, last_address_data, last_address_id)
+            
+            # Deceased の last_address_id を更新 (AttributeErrorの発生箇所を修正)
+            # 💡 _update_address が None を返す可能性があるため、Noneが返された場合も正しく処理できるようにする
+            deceased.last_address_id = new_last_address_id
 
-            # 2. 住所情報の更新/作成
-            if pref and street:
-                _update_or_create_address(
-                    session,
-                    deceased_id,
-                    "deceased",
-                    zip_code,
-                    pref,
-                    city,
-                    street,
-                    building,
-                )
 
-            # 2-0. 💡【重要】既存の過去の住所履歴を全て削除（更新は行わず、再登録する方式）
-            # *既存の D_AddressHistory レコードを全て取得*
-            existing_links = (
-                session.query(D_AddressHistory)
-                .filter(D_AddressHistory.deceased_id == deceased_id)
-                .all()
-            )
-
-            # *紐づく Address ID を収集*
-            address_ids_to_delete = [link.address_id for link in existing_links]
-
-            # *リンクを全て削除* (カスケード削除により Address レコードも削除されると良いが、ここでは手動で Address も削除する方針を維持)
-            session.query(D_AddressHistory).filter(
+            # 3. 過去の住所履歴 (D_AddressHistory) の処理
+            if not past_addresses:
+                past_addresses = []
+                
+            # UIから渡された Address ID リスト (既存の履歴をUIで保持している場合)
+            ui_past_address_ids = [addr.get("address_id") for addr in past_addresses if addr.get("address_id") is not None]
+            
+            # 3.1. 削除処理: UIに存在しない古い履歴を削除
+            existing_history = db.query(D_AddressHistory).filter(
                 D_AddressHistory.deceased_id == deceased_id
-            ).delete(synchronize_session=False)
+            ).all()
 
-            # *Address レコードを削除*
-            # 💡 注意: Address モデルが他のテーブルから参照されていないことを確認する必要があります。
-            # 今回は D_AddressHistory が Address を参照する唯一のテーブルだと仮定します。
-            session.query(Address).filter(Address.id.in_(address_ids_to_delete)).delete(
-                synchronize_session=False
-            )
+            address_ids_to_delete = []
+            
+            for history in existing_history:
+                # 削除対象: 最後の住所でもなく、UIから送られてきた過去の住所リストにも含まれない履歴
+                if (history.address_id != new_last_address_id and 
+                    history.address_id not in ui_past_address_ids):
+                    address_ids_to_delete.append(history.address_id)
 
-            session.flush()  # 削除を確定
+            if address_ids_to_delete:
+                # D_AddressHistory レコードを削除
+                db.query(D_AddressHistory).filter(
+                    D_AddressHistory.address_id.in_(address_ids_to_delete),
+                    D_AddressHistory.deceased_id == deceased_id
+                ).delete(synchronize_session=False)
 
-            # 2-1. 最後の住所の登録 (住所が存在すれば、is_last=True で登録)
-            if last_pref and last_street:
-                _update_or_create_address(
-                    session,
-                    deceased_id,
-                    "deceased",
-                    last_zip_code,
-                    last_pref,
-                    last_city,
-                    last_street,
-                    last_building,
-                    is_last=True,  # 最後の住所として登録
-                )
+                # 孤立した Address レコードを削除
+                db.query(Address).filter(
+                    Address.id.in_(address_ids_to_delete)
+                ).delete(synchronize_session=False)
 
-            # 2-2. 過去の住所の登録 (過去の住所リストがあれば、is_last=False で登録)
-            if past_addresses:
-                for addr in past_addresses:
-                    # 必須フィールドが空でないか確認
-                    if addr.get("prefecture") and addr.get("street_address"):
-                        _update_or_create_address(
-                            session,
-                            deceased_id,
-                            "deceased",
-                            addr.get("zip_code"),
-                            addr.get("prefecture"),
-                            addr.get("city_ward_town"),
-                            addr.get("street_address"),
-                            addr.get("building_name"),
-                            is_last=False,  # 過去の住所として登録
+            
+            # 3.2. 新規/更新処理: UIから渡された過去の住所を処理
+            for addr_data in past_addresses:
+                existing_addr_id = addr_data.get("address_id")
+                
+                # Address レコードの更新または新規作成
+                address_id = _update_address(db, addr_data, existing_addr_id)
+
+                if address_id:
+                    # D_AddressHistory のリンクレコードを検索/作成
+                    d_history = db.query(D_AddressHistory).filter(
+                        D_AddressHistory.deceased_id == deceased_id,
+                        D_AddressHistory.address_id == address_id,
+                    ).first()
+                    
+                    if not d_history:
+                        # D_AddressHistory が存在しない場合は新規作成
+                        d_history = D_AddressHistory(
+                            deceased_id=deceased_id,
+                            address_id=address_id,
+                            is_last_address=False # 過去の住所なので常に False
                         )
+                        db.add(d_history)
+                    
+            db.commit()
 
-            session.commit()
+        except Exception as e:
+            db.rollback()
+            raise e
+
+    # # 基本情報処理
+    # # parts = name.split(" ", 1)
+    # # name_last = parts[0].strip()
+    # # name_first = parts[1].strip() if len(parts) > 1 else ""
+    # try:
+    #     dob_date = parse_all_flexible_date(dob) if dob else None
+    # except ValueError:
+    #     dob_date = None
+
+    # try:
+    #     dod_date = parse_all_flexible_date(dod) if dod else None
+    # except ValueError:
+    #     dod_date = None
+
+    # with Session(bind=Engine) as session:
+    #     deceased = session.query(Deceased).get(deceased_id)
+    #     if deceased:
+    #         # 1. 基本情報の更新
+    #         deceased.name_last = name_last
+    #         deceased.name_first = name_first
+    #         deceased.name_last_kana = kana_last
+    #         deceased.name_first_kana = kana_first
+    #         deceased.date_of_birth = dob_date
+    #         deceased.date_of_death = dod_date
+    #         deceased.hometown = hometown  # 追加: hometownを更新
+
+    #         case = session.query(Case).get(deceased.case_id)
+    #         if case:
+    #             # Caseモデルに deceased_name はないので client_name は更新しない
+    #             # case.deceased_name = name
+    #             pass
+
+    #         # 2. 住所情報の更新/作成
+    #         if pref and street:
+    #             _update_or_create_address(
+    #                 session,
+    #                 deceased_id,
+    #                 "deceased",
+    #                 zip_code,
+    #                 pref,
+    #                 city,
+    #                 street,
+    #                 building,
+    #             )
+
+    #         # 2-0. 💡【重要】既存の過去の住所履歴を全て削除（更新は行わず、再登録する方式）
+    #         # *既存の D_AddressHistory レコードを全て取得*
+    #         existing_links = (
+    #             session.query(D_AddressHistory)
+    #             .filter(D_AddressHistory.deceased_id == deceased_id)
+    #             .all()
+    #         )
+
+    #         # *紐づく Address ID を収集*
+    #         address_ids_to_delete = [link.address_id for link in existing_links]
+
+    #         # *リンクを全て削除* (カスケード削除により Address レコードも削除されると良いが、ここでは手動で Address も削除する方針を維持)
+    #         session.query(D_AddressHistory).filter(
+    #             D_AddressHistory.deceased_id == deceased_id
+    #         ).delete(synchronize_session=False)
+
+    #         # *Address レコードを削除*
+    #         # 💡 注意: Address モデルが他のテーブルから参照されていないことを確認する必要があります。
+    #         # 今回は D_AddressHistory が Address を参照する唯一のテーブルだと仮定します。
+    #         session.query(Address).filter(Address.id.in_(address_ids_to_delete)).delete(
+    #             synchronize_session=False
+    #         )
+
+    #         session.flush()  # 削除を確定
+
+    #         # 2-1. 最後の住所の登録 (住所が存在すれば、is_last=True で登録)
+    #         if last_pref and last_street:
+    #             _update_or_create_address(
+    #                 session,
+    #                 deceased_id,
+    #                 "deceased",
+    #                 last_zip_code,
+    #                 last_pref,
+    #                 last_city,
+    #                 last_street,
+    #                 last_building,
+    #                 is_last=True,  # 最後の住所として登録
+    #             )
+
+    #         # 2-2. 過去の住所の登録 (過去の住所リストがあれば、is_last=False で登録)
+    #         if past_addresses:
+    #             for addr in past_addresses:
+    #                 # 必須フィールドが空でないか確認
+    #                 if addr.get("prefecture") and addr.get("street_address"):
+    #                     _update_or_create_address(
+    #                         session,
+    #                         deceased_id,
+    #                         "deceased",
+    #                         addr.get("zip_code"),
+    #                         addr.get("prefecture"),
+    #                         addr.get("city_ward_town"),
+    #                         addr.get("street_address"),
+    #                         addr.get("building_name"),
+    #                         is_last=False,  # 過去の住所として登録
+    #                     )
+
+    #         session.commit()
 
 
 def update_case_folder_path(case_id: int, folder_path: str | None) -> bool:

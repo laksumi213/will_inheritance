@@ -353,3 +353,42 @@ def ClientRegisterView(page: Page):
         ],
         scroll=ScrollMode.AUTO,
     )
+
+def reset_all_global_fields():
+    """ホーム画面からの遷移時に、全てのグローバルな入力フィールドとリストをクリアする"""
+    
+    # 案件情報フィールドのリセット (案件番号はサービスから最新のものを再取得)
+    case_number_field.value = get_next_case_number_service()
+    manager_field.value = ""
+    operator_field.value = ""
+    
+    # 契約者情報フィールドのリセット
+    name_last_field.value = ""
+    name_first_field.value = ""
+    kana_last_field.value = ""
+    kana_first_field.value = ""
+    rel_field.value = ""
+    hometown_field.value = ""
+    
+    # 住所情報フィールドのリセット
+    zip_field.value = ""
+    pref_field.value = ""
+    city_field.value = ""
+    street_field.value = ""
+    building_field.value = ""
+    
+    # フォルダパスのリセット
+    path_field.value = ""
+    
+    # 連絡先リストをクリアし、デフォルトの空の行を1つ再追加
+    # NOTE: UI上から controls を削除するだけでは、リストをきれいに初期化できないため、
+    # 既存の initialize_contact_column ロジックを流用し、リストを再構築します。
+    
+    # 既存の Column オブジェクト自体をクリアし、新しいコントロールで上書き
+    phone_inputs_column.controls.clear()
+    new_row_p, _ = create_contact_input_row(phone_inputs_column, initial_value="", is_email=False)
+    phone_inputs_column.controls.append(new_row_p)
+    
+    email_inputs_column.controls.clear()
+    new_row_e, _ = create_contact_input_row(email_inputs_column, initial_value="", is_email=True)
+    email_inputs_column.controls.append(new_row_e)
