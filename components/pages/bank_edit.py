@@ -436,6 +436,13 @@ def BankEditView(page: Page, case_id: int):
     # 自動補完ヘルパー関数 (zengin_codeの Bank/Branch オブジェクトを検索)
     # ----------------------------------------------------
 
+    def get_bank_master_id_by_code(bank_code: str):
+        """銀行コードから BankMaster ID を取得する (DBアクセス)"""
+        with Session(bind=Engine) as db:
+            # BankMaster と BankCode で検索
+            bank = db.query(BankMaster.id).filter(BankMaster.bank_code == bank_code).first()
+            return bank.id if bank else None
+    
     def find_bank_data(name=None, code=None):
         """銀行名または銀行コードで Bank オブジェクトを検索する"""
         if code and code in Bank.all:
@@ -472,59 +479,102 @@ def BankEditView(page: Page, case_id: int):
     def handle_bank_change(e):
         """銀行名/コードの変更時に相互補完を行う"""
 
-        bank_name = bank_name_field.value.strip()
+        # bank_name = bank_name_field.value.strip()
         bank_code = bank_code_field.value.strip()
         needs_update = False
 
-        if e.control == bank_name_field and bank_name:
-            # 銀行名入力 -> コードを検索
-            bank = find_bank_data(name=bank_name)
-            if bank and bank.code != bank_code_field.value:
-                bank_code_field.value = bank.code
-                needs_update = True
-
-        elif e.control == bank_code_field and bank_code and len(bank_code) == 4:
-            # 銀行コード入力 -> 名前を検索
+        if e.control == bank_code_field and bank_code and len(bank_code) == 4:
+            # 銀行コード入力 -> 銀行名(zengin_code)を検索
             bank = find_bank_data(code=bank_code)
-            if bank and bank.name != bank_name_field.value:
-                bank_name_field.value = bank.name
+            
+            if bank:
+                # 1. zengin_codeで見つかった銀行名から、DBの BankMaster ID を検索
+                #    (このロジックは簡略化のため、ここでは銀行コードで直接DBのIDを検索します)
+                bank_master_id = get_bank_master_id_by_code(bank_code)
+                
+                # 2. マスターIDが見つかった場合
+                if bank_master_id:
+                    # Dropdownの値をマスターIDに設定
+                    bank_name_field.value = str(bank_master_id)
+                    # 銀行コードは既にセットされている
+                    
+                    # 3. Dropdownの on_change と同様の処理を実行し、支店リストをロードする
+                    update_bank_details(e.page) 
+                    
+                    # 変更があったので画面を更新
+                    needs_update = True
+                    
+            elif bank_name_field.value:
+                # コードが見つからない場合、Dropdownの選択を解除する
+                bank_name_field.value = None
+                bank_code_field.error_text = "該当する銀行コードがマスターに見つかりません。"
                 needs_update = True
 
-        if needs_update:
-            page.update()
+        # if needs_update:
+        #     page.update() # update_bank_detailsでpage.update()を呼んでいるため不要な場合がある
 
         # 支店コードの検索のために銀行コードが必須なので、支店フィールドも更新
         handle_branch_change(e)
 
+
     def handle_branch_change(e):
         """支店名/コードの変更時に相互補完を行う"""
+    # ... (前略: bank_code, branch_name, branch_code の取得と銀行コードチェック) ...
+    
+    bank_code = bank_code_field.value.strip()
+    # branch_name = branch_name_field.value.strip()
+    branch_code = branch_code_field.value.strip()
+    
+    
+    # 💡 BranchMaster ID を取得するためのヘルパー関数
+    def get_branch_master_id_by_code(bank_code: str, branch_code: str):
+        with Session(bind=Engine) as db:
+            # 銀行コードから bank_id を取得
+            bank_id = db.query(BankMaster.id).filter(BankMaster.bank_code == bank_code).scalar()
+            if not bank_id:
+                return None
+            # 支店コードと bank_id で検索
+            branch = db.query(BranchMaster.id).filter(
+                BranchMaster.bank_id == bank_id,
+                BranchMaster.branch_code == branch_code
+            ).first()
+            return branch.id if branch else None
 
-        bank_code = bank_code_field.value.strip()
-        branch_name = branch_name_field.value.strip()
-        branch_code = branch_code_field.value.strip()
 
-        if not bank_code or len(bank_code) != 4:
-            # 銀行コードがないと支店は特定できない
-            return
+    if not bank_code or len(bank_code) != 4:
+        # 銀行コードがないと支店は特定できない
+        return
 
-        needs_update = False
+    # needs_update はローカル変数として定義
 
-        if e.control == branch_name_field and branch_name:
-            # 支店名入力 -> コードを検索
-            branch = find_branch_data(bank_code=bank_code, name=branch_name)
-            if branch and branch.code != branch_code_field.value:
-                branch_code_field.value = branch.code
+    # elif e.control == branch_code_field and branch_code and len(branch_code) == 3:
+    if e.control == branch_code_field and branch_code and len(branch_code) == 3:
+        # 支店コード入力 -> 名前を検索
+        branch = find_branch_data(bank_code=bank_code, code=branch_code)
+        
+        if branch:
+            # 1. DBの BranchMaster ID を検索
+            branch_master_id = get_branch_master_id_by_code(bank_code, branch_code)
+            
+            # 2. マスターIDが見つかった場合
+            if branch_master_id:
+                # Dropdownの値をマスターIDに設定
+                branch_name_field.value = str(branch_master_id)
+                # 支店名を表示
+                branch_name_field.options = [
+                     dropdown.Option(str(branch_master_id), text=f"{branch.name} ({branch_code})")
+                ]
+                branch_name_field.update()
                 needs_update = True
+        
+        elif branch_name_field.value:
+            # コードが見つからない場合、Dropdownの選択を解除する
+            branch_name_field.value = None
+            branch_code_field.error_text = "該当する支店コードがマスターに見つかりません。"
+            needs_update = True
 
-        elif e.control == branch_code_field and branch_code and len(branch_code) == 3:
-            # 支店コード入力 -> 名前を検索
-            branch = find_branch_data(bank_code=bank_code, code=branch_code)
-            if branch and branch.name != branch_name_field.value:
-                branch_name_field.value = branch.name
-                needs_update = True
-
-        if needs_update:
-            page.update()
+    if needs_update:
+        e.page.update()
 
     # フォームの on_blur ハンドラを設定 (フォーカスが外れた時に実行)
     bank_name_field.on_blur = handle_bank_change
