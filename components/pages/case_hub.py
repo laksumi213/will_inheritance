@@ -23,6 +23,7 @@ from components.pages.bank_balance_doc_edit import BankBalanceDocEditView
 from components.pages.bank_edit import BankEditView
 from components.pages.detail import DeceasedDetailView
 from components.pages.mizuho_balance_doc_view import MizuhoBalanceDocView
+from components.pages.visit_reserve_select_bank_view import VisitReserveSelectBankView
 from components.pages.smbc_balance_doc_view import SmbcBalanceDocView
 from services.deceased_service import get_contracting_party_name
 
@@ -163,12 +164,44 @@ class CaseHubView:
             # 💡 銀行コードを引数として渡し、BankBalanceDocEditView を標準フォームとして利用
             return BankBalanceDocEditView(self.page, self.case_id, bank_code)
 
-        # --- 5. その他のプレースホルダー/フォールバック ---
-        # (ここでは、元のコードになかったタスクや資料のルーティングは省略し、デフォルトを返します)
+        # --- 5. 来店予約（銀行選択画面） ---
+        elif route.endswith("/reserve/visit"):
+            return VisitReserveSelectBankView(self.page, self.case_id)
 
+        route_parts = route.split("/")
+        bank_code = route_parts[-1]
+        
+        # 6-1. みずほ銀行 (コード: 0001) 専用ルート
+        if route.startswith(f"/case/{self.case_id}/reserve/mizuho"):
+            # 💡 ここに MizuhoVisitReserveView(self.page, self.case_id) を配置
+            # (例として、前のターンで作成したPlaceholderViewを再利用します)
+            return PlaceholderView(
+                 self.page,
+                 "みずほ銀行 (0001) 来店予約フォーム",
+                 f"案件ID: {self.case_id} のみずほ銀行予約資料を作成。",
+            )
+
+        # 6-2. 三井住友銀行 (コード: 0009) 専用ルート
+        elif route.startswith(f"/case/{self.case_id}/reserve/smbc"):
+            # 💡 ここに SmbcVisitReserveView を配置
+            return PlaceholderView(
+                 self.page,
+                 "三井住友銀行 (0009) 来店予約フォーム",
+                 f"案件ID: {self.case_id} の三井住友銀行予約資料を作成。",
+            )
+
+        # 6-3. 標準予約フォーム（上記以外の銀行）ルート
+        elif route.startswith(f"/case/{self.case_id}/reserve/standard/"):
+            # 💡 標準来店予約編集ビューを配置
+            return PlaceholderView(
+                 self.page,
+                 f"標準フォーム ({bank_code}) 来店予約",
+                 f"案件ID: {self.case_id} / 銀行コード: {bank_code} の標準予約資料を作成。",
+            )
+        
         # 💡 デフォルト / ルートエラー
         return PlaceholderView(self.page, "ページが見つかりません", f"ルート: {route}")
-
+    
     # def _get_main_content_for_route(self, route):
     #     """ルーティングパスに基づいてメインコンテンツを切り替える"""
     #     if route.startswith(f"/detail/{self.case_id}"):

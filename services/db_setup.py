@@ -2,7 +2,6 @@
 
 import json
 from datetime import date, datetime
-
 from sqlalchemy import (
     Boolean,
     Column,
@@ -14,6 +13,7 @@ from sqlalchemy import (
     String,
     create_engine,
     func,
+    UniqueConstraint
 )
 from sqlalchemy.orm import (
     Session,
@@ -23,8 +23,6 @@ from sqlalchemy.orm import (
     sessionmaker,
 )
 
-# サービス層内のインポートは、相対パスまたはsys.pathの調整が必要ですが、
-# ここでは同じディレクトリに存在すると仮定して記述します。
 from services.task_generation_logic import (
     generate_case_tasks,
     seed_db_users_and_cases,
@@ -68,10 +66,47 @@ class CaseStatus(Base):
     order_num = Column(Integer)  # ステータスの表示/処理順序
 
 
-class FinancialInstitution(Base):
-    __tablename__ = "institutions"  # 金融機関名のマスター
-    id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True, nullable=False)  # 金融機関名
+# class FinancialInstitution(Base):
+#     __tablename__ = "institutions"  # 金融機関名のマスター
+#     id = Column(Integer, primary_key=True)
+#     name = Column(String, unique=True, nullable=False)  # 金融機関名
+
+# 1. 口座種類マスタ (AccountTypeMaster)
+class AccountTypeMaster(Base):
+    __tablename__ = "account_type_master"
+    id = Column(Integer, primary_key=True, index=True)
+    type_name = Column(String, unique=True, nullable=False) # 例: 普通預金, 定期預金
+    
+    financial_assets = relationship("FinancialAsset", back_populates="account_type_ref")
+
+# 2. 銀行マスタ (BankMaster)
+class BankMaster(Base):
+    __tablename__ = "bank_master"
+    id = Column(Integer, primary_key=True, index=True)
+    bank_name = Column(String, nullable=False)
+    bank_code = Column(String, nullable=False)
+    
+    # 複合ユニーク制約: 銀行名または銀行コードで一意
+    __table_args__ = (UniqueConstraint('bank_name', name='_bank_name_uc'),
+                      UniqueConstraint('bank_code', name='_bank_code_uc'))
+    
+    # 支店と金融資産へのリレーション
+    branches = relationship("BranchMaster", back_populates="bank_ref", cascade="all, delete-orphan")
+    financial_assets = relationship("FinancialAsset", back_populates="bank_ref")
+
+# 3. 支店マスタ (BranchMaster)
+class BranchMaster(Base):
+    __tablename__ = "branch_master"
+    id = Column(Integer, primary_key=True, index=True)
+    bank_id = Column(Integer, ForeignKey("bank_master.id", ondelete="CASCADE"), nullable=False)
+    branch_name = Column(String, nullable=False)
+    branch_code = Column(String, nullable=False)
+    
+    # 複合ユニーク制約 (同じ銀行内で支店コードは一意)
+    __table_args__ = (UniqueConstraint('bank_id', 'branch_code', name='_bank_branch_code_uc'),)
+
+    bank_ref = relationship("BankMaster", back_populates="branches")
+    financial_assets = relationship("FinancialAsset", back_populates="branch_ref")
 
 
 class DocumentType(Base):
@@ -313,7 +348,7 @@ class Deceased(Base):
     date_of_birth = Column(Date)
     date_of_death = Column(Date)
     relationship_type = Column(String)  # 続柄 (通常は「本人」)
-    last_address_id = Column(Integer, ForeignKey("address.id"), nullable=True)
+    last_address_id = Column(Integer, ForeignKey("address.id"))
 
     heirs = relationship("Heir", back_populates="deceased", cascade="all, delete-orphan")
     address_links = relationship(
@@ -353,20 +388,26 @@ class Heir(Base):
 
 
 class FinancialAsset(Base):
-    __tablename__ = "financial_assets"
-    asset_id = Column(Integer, primary_key=True)
-    case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
-    inst_id = Column(Integer, ForeignKey("institutions.id"))
+    __tablename__ = "financial_asset"
+    
+    id = Column(Integer, primary_key=True, index=True) 
+    case_id = Column(Integer, ForeignKey("cases.case_id", ondelete="CASCADE"), nullable=False)
+    asset_type = Column(String, default="BANK") 
 
-    bank_name = Column(String)
-    bank_code = Column(String)
-    branch_name = Column(String)
-    branch_code = Column(String)
+    # --- 💡 マスタID参照に置き換え ---
+    bank_id = Column(Integer, ForeignKey("bank_master.id"), nullable=False)
+    branch_id = Column(Integer, ForeignKey("branch_master.id")) 
+    account_type_id = Column(Integer, ForeignKey("account_type_master.id"), nullable=False)
+    # ---------------------------------
+    
     account_number = Column(String)
-    balance = Column(Float, default=0.0)
-    status = Column(String, default="調査中")
-
+    balance = Column(Float, default=0.0) 
+    status = Column(String, default="未確認")
+    
     case_ref = relationship("Case", back_populates="financial_assets")
+    bank_ref = relationship("BankMaster", back_populates="financial_assets")
+    branch_ref = relationship("BranchMaster", back_populates="financial_assets")
+    account_type_ref = relationship("AccountTypeMaster", back_populates="financial_assets")
 
 
 class RealEstateAsset(Base):
@@ -722,86 +763,135 @@ def init_db():
 
 
 # --- DB操作関数 ---
-
-
 def add_initial_data():
     session = Session()
     if session.query(Case).count() == 0:
+        # 1. 担当者とステータスの初期登録
         user1 = User(windows_id="admin01", name="管理者 太郎", role="Manager")
         status1 = CaseStatus(name="受託", order_num=3)
-        # 💡 修正7: FinancialInstitutionを初期データに追加
-        inst1 = FinancialInstitution(name="みずほ銀行")
-        session.add_all([user1, status1, inst1])
+        session.add_all([user1, status1])
+        session.flush() # IDを確定させる
+
+        # 2. 銀行マスタと口座種類マスタの初期登録
+        
+        # 2-1. 銀行マスタ (みずほ銀行)
+        bank_master = BankMaster(bank_name="みずほ銀行", bank_code="0001")
+        session.add(bank_master)
+        session.flush()
+        
+        # 2-2. 支店マスタ (銀座中央支店)
+        branch_master = BranchMaster(
+            bank_id=bank_master.id,
+            branch_name="銀座中央",
+            branch_code="050"
+        )
+        session.add(branch_master)
+        
+        # 2-3. 口座種類マスタ (普通預金)
+        account_type_master = AccountTypeMaster(type_name="普通預金")
+        session.add(account_type_master)
         session.flush()
 
+        # 3. 案件 (Case: G2103) の登録
         case1 = Case(
-            case_number="G0001",
-            client_name="山田 花子",
-            client_name_kana="やまだ　はなこ",
-            # 💡 修正5: Caseモデルから deceased_name は削除されたため、初期データからも削除
+            case_number="G2103",
+            client_name="水谷 昌代",
+            client_name_kana="みずたに　まさよ",
             manager_id=user1.id,
             current_status_id=status1.id,
             contract_date=date(2025, 10, 1),
             fee_contract_amount=500000.0,
+            folder_path=r"\\192.168.11.20\行政書士法人チェスター\01.個別ＪＯＢ\G2103水谷昌代様（スタンダードプラン）"
         )
         session.add(case1)
         session.flush()
 
+        # 4. 被相続人 (Deceased: 水谷 弘) の登録
+        
+        # 4-1. 被相続人の住所 (共通住所)
+        addr_deceased = Address(
+            zip_code="104-0053",
+            prefecture="東京都",
+            city_ward_town="中央区晴海",
+            street_address="二丁目5番16号",
+            building_name="1101号",
+        )
+        session.add(addr_deceased)
+        session.flush()
+        
+        # 4-2. 被相続人の最終住所IDをAddressに設定し、基本情報を登録
         d1 = Deceased(
             case_id=case1.case_id,
-            name_last="山田",
-            name_first="太郎",
-            date_of_birth=date(1950, 1, 1),
-            date_of_death=date(2020, 3, 15),
-            hometown="東京都港区",
+            name_last="水谷",
+            name_first="弘",
+            name_last_kana="みずたに",
+            name_first_kana="ひろし",
+            date_of_birth=date(1935, 1, 12),
+            date_of_death=date(2025, 5, 16),
+            hometown="東京都台東区東上野一丁目1番地",
             relationship_type="本人",
+            last_address_id=addr_deceased.id
         )
         session.add(d1)
         session.flush()
+        
+        # # 4-3. 住所履歴 (D_AddressHistory) の登録
+        # d1_addr_link = D_AddressHistory(
+        #     deceased_id=d1.id, 
+        #     address_id=addr_deceased.id, 
+        #     is_last_address=True
+        # )
+        # session.add(d1_addr_link)
+        
+        # 4-4. 連絡先登録 (被相続人の連絡先は D_ContactLink を経由するが、ここでは簡略化のため省略または契約者に一本化)
 
-        addr1 = Address(
-            zip_code="100-0001",
-            prefecture="東京都",
-            city_ward_town="千代田区",
-            street_address="丸の内1-1",
-            building_name="中央ビル101",
-        )
-        session.add(addr1)
-        session.flush()
-
-        d1_addr_link = D_AddressHistory(
-            deceased_id=d1.id, address_id=addr1.id, is_last_address=True
-        )
-        session.add(d1_addr_link)
-
+        # 5. 契約者 (Heir: 水谷 昌代, 妻) の登録
         h1 = Heir(
             deceased_id=d1.id,
-            name_last="山田",
-            name_first="一郎",
-            relationship_type="長男",
-            date_of_birth=date(1980, 5, 10),
+            name_last="水谷",
+            name_first="昌代",
+            name_last_kana="みずたに",
+            name_first_kana="まさよ",
+            relationship_type="妻",
+            date_of_birth=date(1946, 11, 29),
+            hometown="東京都台東区東上野1-1",
+            is_contracting_party=True, # 契約者フラグ
         )
         session.add(h1)
-
-        contact_mobile = Contact(value="090-1111-2222", type="PHONE", sub_type="携帯")
-        session.add(contact_mobile)
         session.flush()
-
-        h1_contact_link = H_ContactLink(heir_id=h1.id, contact_id=contact_mobile.id)
+        
+        # 5-1. 契約者の住所は被相続人と同一の Address を参照（H_AddressHistory経由）
+        h1_addr_link = H_AddressHistory(
+            heir_id=h1.id, 
+            address_id=addr_deceased.id, 
+            is_current_address=True
+        )
+        session.add(h1_addr_link)
+        
+        # 5-2. 契約者の連絡先 (電話番号: 03-3533-1675)
+        contact_phone = Contact(value="03-3533-1675", type="PHONE", sub_type="Primary")
+        session.add(contact_phone)
+        session.flush()
+        
+        h1_contact_link = H_ContactLink(heir_id=h1.id, contact_id=contact_phone.id)
         session.add(h1_contact_link)
 
+        # 6. 金融資産 (FinancialAsset) の登録
         bank1 = FinancialAsset(
             case_id=case1.case_id,
-            inst_id=inst1.id,  # 💡 修正7: inst_idにFinancialInstitutionのIDを設定
-            bank_name="みずほ銀行",
+            bank_id=bank_master.id,       # マスタID
+            branch_id=branch_master.id,   # マスタID
+            account_type_id=account_type_master.id, # マスタID
             account_number="1234567",
             balance=5000000.0,
-            status="手続き中",
+            status="調査中",
         )
+        
+        # 7. 負債/葬儀費用の登録 (既存ロジックを維持)
         liability1 = Liability(
             case_id=case1.case_id,
             is_debt=False,
-            description="葬儀費用",  # 💡 修正6: descriptionカラムが初期データに必要
+            description="葬儀費用",
             amount=2500000.0,
             is_funeral_cost=True,
         )
@@ -810,36 +900,26 @@ def add_initial_data():
         session.commit()
     session.close()
 
+    # ... (既存のタスク生成ロジックの呼び出し部分) ...
     # from services.db_setup import Base, Engine, Session
-    # 💡 クラス: データベースの宣言的ベースクラス (SQLAlchemy)
-    # 💡 クラス: データベース接続エンジン (SQLAlchemy)
-    # 💡 クラス: データベース操作を行うセッションクラス (SQLAlchemy)
-
-    # DBテーブル構造の作成（db_setup.pyで定義した全てのテーブルを作成）
-    # Base.metadata.create_all(Engine)
-
     # DBセッション開始
-    with Session() as db:  # 💡 変数: データベースセッションオブジェクト
-        # ユーザーとテンプレートの初期投入
-        case_id, tanaka_id, sato_id = seed_db_users_and_cases(
-            db
-        )  # 💡 変数: case_id (案件ID), tanaka_id (担当1 ID), sato_id (担当2 ID)
+    with Session() as db:
+        # ユーザーとテンプレートの初期投入 (この関数内ではスキップしても良いが、seed_db_users_and_cases は残す)
+        case_id, tanaka_id, sato_id = seed_db_users_and_cases(db)
         setup_task_templates(db)
 
         # 既存タスクをクリア (テスト再実行用)
         db.query(Task).delete()
         db.commit()
 
-        # 案件ID:1をトリガーにしてタスクを自動生成
+        # 案件ID:1をトリガーにしてタスクを自動生成 (Case G0001のタスク生成を続ける場合はこのまま)
         print("---------------------------------------")
         print(f"案件ID: {case_id} のタスク生成を開始します。")
         generate_case_tasks(db, case_id)
         print("---------------------------------------")
 
         # 結果の確認
-        generated_tasks = db.query(
-            Task
-        ).all()  # 💡 変数: 生成された全てのタスク (Task) のDBレコードリスト
+        generated_tasks = db.query(Task).all()
         print(f"生成されたタスク総数: {len(generated_tasks)} 件")
 
 

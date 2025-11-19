@@ -63,6 +63,7 @@ class CaseDashboardView(Column):
             width=500,
             label_style=TextStyle(color=Colors.BLACK),
             color=Colors.BLACK,
+            autofocus=True,
         )
 
         # 内部で利用するUIコンポーネントを属性として保持

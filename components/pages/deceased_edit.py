@@ -22,11 +22,14 @@ from flet import (
     alignment,
 )
 
+from pprint import pprint
+
 from components.utils.date_utils import convert_seireki_to_wareki
 from services import deceased_service
 from services.deceased_service import (
     parse_all_flexible_date,
     search_address_by_zip_api,
+    get_address_by_id
 )
 
 # --- グローバルな UI 定義 ---
@@ -217,6 +220,8 @@ def create_address_fields(is_last: bool, data: dict = None):
         label_style=TextStyle(color=Colors.BLACK54),
     )
 
+    zip_field.on_blur = lambda event: address_zip_handler(event, pref_field, city_field)
+
     # 過去の住所の削除ボタン
     delete_button = IconButton(
         Icons.DELETE_OUTLINE,
@@ -251,9 +256,6 @@ def create_address_fields(is_last: bool, data: dict = None):
 
     delete_button.on_click = delete_past_address
 
-    # 過去の住所フィールドにも郵便番号ハンドラを動的に割り当てる
-    zip_field.on_blur = lambda event: address_zip_handler(event, pref_field, city_field)
-
     return control_set
 
 
@@ -278,8 +280,8 @@ def address_zip_handler(e, pref_field: TextField, city_field: TextField):
         if pref_field.read_only:
             pref_field.value = ""
             city_field.value = ""
-            e.control.error_text = "住所が見つかりません"
-        # 過去の住所（read_onlyでない）は手動入力の可能性を残すため、クリアしない
+            # e.control.error_text = "住所が見つかりません"
+        e.control.error_text = "住所が見つかりません"
 
     pref_field.update()
     city_field.update()
@@ -299,10 +301,20 @@ def DeceasedEditView(page: Page, deceased_id_or_case_id: int):
     deceased = None
     if target_id > 0:
         deceased = deceased_service.get_deceased_by_id(target_id)
-
+    case = deceased.case if deceased and deceased.case else None
+    
     # 💡 case_id -1/0 の場合は新規モードとして扱う
     is_new_mode = deceased is None or target_id < 1
     current_deceased_id = deceased.id if deceased else None
+    # is_new_mode = case.case_id == -1  # 新規案件（契約者登録）モード
+    # current_deceased_id = case.case_id == 0  # 被相続人単独の新規登録モード
+    # deceased_id = deceased.id if deceased else case.case_id
+
+    # 💡 最後の住所情報を取得
+    last_address = None
+    if deceased and deceased.last_address_id:
+        # last_address_id があれば、それを元に Address オブジェクトを取得
+        last_address = get_address_by_id(deceased.last_address_id)
 
     # ----------------------------------------------------
     # データロード & UI 初期化
@@ -349,51 +361,67 @@ def DeceasedEditView(page: Page, deceased_id_or_case_id: int):
             update_wareki_display(dialog_dob_field, wareki_dob_text)
             update_wareki_display(dialog_dod_field, wareki_dod_text)
 
-            # 住所履歴を取得
+            # 1. 最後の住所を Deceased.last_address_id から直接取得
+            last_address_ref = None
+            if deceased.last_address_id:
+                # 💡 get_address_by_id を使って Address レコードを取得
+                last_address_ref = deceased_service.get_address_by_id(deceased.last_address_id)
+            
+            # 💡 最後の住所のデータ辞書を作成
+            last_address = None
+            db_deceased = deceased_service.get_deceased_by_id(target_id)
+            if db_deceased.last_address_id:
+                # deceased_service の get_address_by_id を使って Address レコードを取得
+                last_address = deceased_service.get_address_by_id(db_deceased.last_address_id)
+            
+            print()
+            pprint(db_deceased)
+            print()
+
+            if last_address:
+                # 💡 取得した Address の値を各グローバルフィールドに設定
+                last_zip_field.value = last_address.zip_code or ""
+                last_pref_field.value = last_address.prefecture or ""
+                last_city_field.value = last_address.city_ward_town or ""
+                last_street_field.value = last_address.street_address or ""
+                last_building_field.value = last_address.building_name or ""
+            else:
+                # 💡 データがない場合はフィールドをクリア
+                last_zip_field.value = ""
+                last_pref_field.value = ""
+                last_city_field.value = ""
+                last_street_field.value = ""
+                last_building_field.value = ""
+
+            # last_address_data = {}
+            # if last_address_ref:
+            #     last_address_data = {
+            #         "address_id": last_address_ref.id,
+            #         "zip_code": last_address_ref.zip_code,
+            #         "prefecture": last_address_ref.prefecture,
+            #         "city_ward_town": last_address_ref.city_ward_town,
+            #         "street_address": last_address_ref.street_address,
+            #         "building_name": last_address_ref.building_name,
+            #     }
+
+            create_address_fields(is_last=True, data=last_address)
+            
+
+            # 2. 過去の住所履歴を取得
+            # 💡 get_deceased_address_history は最後の住所を除いたもののみを返すようになった
             address_history = deceased_service.get_deceased_address_history(current_deceased_id)
 
             past_addresses_column.controls.clear()
 
-            # 最後の住所と過去の住所を分離してロード
+            # 過去の住所を動的リストにロード (全て is_last=False としてロード)
             for addr in address_history:
-                # 💡 create_address_fields を使用してフィールドに値を設定
-                if addr["is_last_address"]:
-                    # 最後の住所はグローバルフィールドに直接値を設定 (create_address_fields で値設定の処理を一本化)
-                    # 💡 create_address_fields(is_last=True, data=addr) を呼び出すことで、
-                    #    グローバルフィールドに値が設定され、かつ冗長なコードを避ける。
-                    create_address_fields(is_last=True, data=addr) # <- これを呼び出す
-                    
-                    # ↓ 冗長な直接代入は削除またはコメントアウト
-                    # last_zip_field.value = addr["zip_code"]
-                    # last_pref_field.value = addr["prefecture"]
-                    # last_city_field.value = addr["city_ward_town"]
-                    # last_street_field.value = addr["street_address"]
-                    # last_building_field.value = addr["building_name"]
-                else:
-                    # 過去の住所を動的リストにロード
-                    control_set = create_address_fields(is_last=False, data=addr)
-                    past_addresses_column.controls.append(control_set)
-
-            # # 最後の住所と過去の住所を分離してロード
-            # for addr in address_history:
-            #     # 💡 create_address_fields を使用してフィールドに値を設定
-            #     if addr["is_last_address"]:
-            #         # 最後の住所はグローバルフィールドに直接値を設定
-            #         last_zip_field.value = addr["zip_code"]
-            #         last_pref_field.value = addr["prefecture"]
-            #         last_city_field.value = addr["city_ward_town"]
-            #         last_street_field.value = addr["street_address"]
-            #         last_building_field.value = addr["building_name"]
-            #     else:
-            #         # 過去の住所を動的リストにロード
-            #         control_set = create_address_fields(is_last=False, data=addr)
-            #         past_addresses_column.controls.append(control_set)
+                # addrは is_last_address=False が確定している
+                control_set = create_address_fields(is_last=False, data=addr)
+                past_addresses_column.controls.append(control_set)
 
         # 💡 新規モードの場合はフィールドをクリアしておく
         elif is_new_mode:
-            # is_new_modeの場合は、reset_fields(None)を呼び出す代わりに、
-            # 必要なフィールドだけをクリアまたは初期設定を保証する
-            reset_fields(None)  # 全フィールドをリセット
+            reset_fields(None) 
 
         page.update()
 
@@ -569,7 +597,14 @@ def DeceasedEditView(page: Page, deceased_id_or_case_id: int):
     # ----------------------------------------------------
 
     # 💡 最後の住所フィールドセット（グローバル変数）
-    last_address_controls = [
+    # last_address_controls = [
+    #     last_zip_field,
+    #     last_pref_field,
+    #     last_city_field,
+    #     last_street_field,
+    #     last_building_field,
+    # ]
+    last_address_row_controls = [
         last_zip_field,
         last_pref_field,
         last_city_field,
@@ -611,7 +646,8 @@ def DeceasedEditView(page: Page, deceased_id_or_case_id: int):
                     # 最後の住所フィールド
                     # Row(last_address_controls[0:3], spacing=10),  # Zip, Pref, City
                     # Row(last_address_controls[3:5], spacing=10),  # Street, Building
-                    Row(last_address_controls, spacing=10),
+                    # Row(last_address_controls, spacing=10),
+                    Row(last_address_row_controls, spacing=10),
                     Divider(),
                     Row(
                         [
@@ -689,7 +725,16 @@ def DeceasedEditView(page: Page, deceased_id_or_case_id: int):
 
     view = View(f"/deceased_edit/{target_id}", view_controls, scroll=ScrollMode.ADAPTIVE)
 
+    # def on_view_show_handler(e):
+        # """ビュー表示時に load_data を実行するハンドラ"""
+        # load_data の中で page.update() を行っているため、
+        # Fletのルールに従い run_thread でメインスレッド経由で実行させる
+        # e.page.run_thread(load_data)
+
     # ロード時にフィールドを最新の状態に更新
-    view.on_view_show = lambda e: load_data()
+    # view.on_view_show = on_view_show_handler
+    # view.on_view_show = lambda e: load_data()
+
+    page.run_thread(load_data)
 
     return view

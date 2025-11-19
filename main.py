@@ -15,7 +15,7 @@ from services.db_setup import add_initial_data, init_db
 
 # データベースの初期化とテストデータの追加（アプリケーション起動時に一度だけ行う）
 init_db()  # テーブル作成
-# add_initial_data()  # 初期データ投入
+add_initial_data()  # 初期データ投入
 
 
 # データベースのセットアップが完了した後で、DBに依存するコンポーネントをインポートする

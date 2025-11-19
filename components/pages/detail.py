@@ -37,6 +37,8 @@ from services.deceased_service import (
     parse_all_flexible_date,
     update_case_assignment,  # 担当者更新
     update_case_folder_path,  # フォルダパス更新
+    get_address_by_id,
+    get_case_by_id,
 )
 
 # --- グローバルな UI 定義 ---
@@ -169,53 +171,84 @@ def DeceasedDetailView(page: Page, case_id: int):
         page.overlay.append(file_picker)
 
     # --- サービス層からデータを取得 ---
+    case = deceased_service.get_case_by_id(case_id)
     deceased = deceased_service.get_deceased_by_id(case_id)
-
+    
     # 新規モードのフラグを定義 (IDの比較を case_id に合わせる)
     is_new_client_case = case_id == -1  # 新規案件（契約者登録）モード
     is_new_deceased = case_id == 0  # 被相続人単独の新規登録モード
-
     deceased_id = deceased.id if deceased else case_id
 
-    # 進捗サマリーを取得 (Case IDが必要)
-    # progress_summary = {}
-    # if deceased and deceased.case:
-    #     case_id_for_progress = deceased.case.case_id
-    #     progress_summary = deceased_service.get_case_progress_summary(
-    #         case_id_for_progress
-    #     )
+    # 💡 最後の住所情報を取得
+    last_address = None
+    if deceased and deceased.last_address_id:
+        last_address = get_address_by_id(deceased.last_address_id)
 
+    display_deceased_address = "未登録"
+    copyable_full_address = "未登録" # 💡 コピー用の変数も初期化
+
+    if last_address:
+        # last_address は Address オブジェクト
+        # 郵便番号、都道府県、市区町村、番地、建物名などを結合して表示用の文字列を作成
+        address_parts = [
+            last_address.prefecture,
+            last_address.city_ward_town,
+            last_address.street_address,
+        ]
+        
+        # 住所本体の整形
+        raw_deceased_address = "".join(filter(None, address_parts))
+        building = last_address.building_name if last_address.building_name else ""
+        zip_code = last_address.zip_code if last_address.zip_code else ""
+        
+        # 1. 表示用の住所文字列の生成: 住所 + (建物名)
+        if raw_deceased_address:
+             display_deceased_address = raw_deceased_address
+             if building:
+                 display_deceased_address += f" ({building})"
+        elif building:
+             display_deceased_address = f"建物名: {building}"
+        else:
+            display_deceased_address = "未登録"
+            
+        # 2. コピー用の完全な住所を作成: 〒 + 住所 + 建物名
+        copyable_full_address = (
+            f"〒{zip_code} {raw_deceased_address} {building}"
+            if raw_deceased_address
+            else "未登録"
+        ).strip()
+    
     # 案件情報を取得
     case = deceased.case if deceased and deceased.case else None
 
-    if deceased and deceased_id > 0:
-        # deceased_id > 0 の場合のみ、住所情報を取得する
-        deceased_address_info = {}
-        deceased_address_info = deceased_service.get_address_info("deceased", deceased_id)
+    # if deceased and deceased_id > 0:
+    #     # deceased_id > 0 の場合のみ、住所情報を取得する
+    #     deceased_address_info = {}
+    #     deceased_address_info = deceased_service.get_address_info("deceased", deceased_id)
 
-        # 住所の整形
-        address_parts = [
-            deceased_address_info.get("prefecture", ""),
-            deceased_address_info.get("city_ward_town", ""),
-            deceased_address_info.get("street_address", ""),
-        ]
-        raw_deceased_address = "".join(filter(None, address_parts))
-        # 🎯 建物名を取得
-        building = deceased_address_info.get("building_name", "")
+    #     # 住所の整形
+    #     address_parts = [
+    #         deceased_address_info.get("prefecture", ""),
+    #         deceased_address_info.get("city_ward_town", ""),
+    #         deceased_address_info.get("street_address", ""),
+    #     ]
+    #     raw_deceased_address = "".join(filter(None, address_parts))
+    #     # 🎯 建物名を取得
+    #     building = deceased_address_info.get("building_name", "")
 
-        # 🎯 コピー用の完全な住所を作成 (住所 + 建物名)
-        copyable_full_address = raw_deceased_address
-        if building:
-            # 住所と建物名の間にスペースを入れる
-            copyable_full_address += f" {building}"
+    #     # 🎯 コピー用の完全な住所を作成 (住所 + 建物名)
+    #     copyable_full_address = raw_deceased_address
+    #     if building:
+    #         # 住所と建物名の間にスペースを入れる
+    #         copyable_full_address += f" {building}"
 
-        # 表示用の住所文字列の生成 (元のロジックを維持)
-        display_deceased_address = raw_deceased_address or "未登録"
-        if building:
-            if display_deceased_address != "未登録":
-                display_deceased_address += f" ({building})"
-            else:
-                display_deceased_address = f"建物名: {building}"
+    #     # 表示用の住所文字列の生成 (元のロジックを維持)
+    #     display_deceased_address = raw_deceased_address or "未登録"
+    #     if building:
+    #         if display_deceased_address != "未登録":
+    #             display_deceased_address += f" ({building})"
+    #         else:
+    #             display_deceased_address = f"建物名: {building}"
 
         # building = deceased_address_info.get("building_name", "")
         # if building:
