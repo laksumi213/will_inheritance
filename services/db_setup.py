@@ -397,7 +397,7 @@ class FinancialAsset(Base):
     # --- 💡 マスタID参照に置き換え ---
     bank_id = Column(Integer, ForeignKey("bank_master.id"), nullable=False)
     branch_id = Column(Integer, ForeignKey("branch_master.id")) 
-    account_type_id = Column(Integer, ForeignKey("account_type_master.id"), nullable=False)
+    account_type_id = Column(Integer, ForeignKey("account_type_master.id"), nullable=True)
     # ---------------------------------
     
     account_number = Column(String)

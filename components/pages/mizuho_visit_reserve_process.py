@@ -103,7 +103,14 @@ class MizuhoReservation:
         # 1. 予約開始ページのオープン
         # ----------------------------------------------------
         # 京橋支店 ※この支店は法人ではなく個人で予約
-        url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA338922&_gl=1*k5k7g4*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTUzMzUkajYwJGwwJGgw'
+        # url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA338922&_gl=1*k5k7g4*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTUzMzUkajYwJGwwJGgw'
+        
+        # 八重洲口支店
+        # url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA338924&_gl=1*1yjvpu4*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTU1MjkkajUxJGwwJGgw'
+        
+        # 東京中央支店 ※この支店は法人ではなく個人で予約
+        url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA339731&_gl=1*1eoo2t1*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTU0MzgkajUyJGwwJGgw'
+        
         self.proc.web_open(url)
         driver = self.proc.driver
 
@@ -144,7 +151,8 @@ class MizuhoReservation:
         # 2. ご相談内容・ご希望など (bt_form_attr_res11)
         # 被相続人情報と口座番号をDBから取得して挿入
         text_content = (
-            f'相続の手続き　残高証明書の発行依頼　被相続人：{self.deceased_name}様　'
+            # f'相続の手続き　残高証明書の発行依頼　被相続人：{self.deceased_name}様　'
+            f'相続の手続き　取引明細の発行依頼　被相続人：{self.deceased_name}様　'
             f'生年月日：{self.deceased_dob[0]}年{self.deceased_dob[1]}月{self.deceased_dob[2]}日　'
             f'口座番号：{mojimoji.zen_to_han(self.bank_branch_code or "")}{mojimoji.zen_to_han(self.bank_account_number or "0")}'
         )
@@ -178,7 +186,7 @@ class MizuhoReservation:
         driver.find_element(By.NAME, "cus_kana").send_keys(self.firm_name_kana)
 
         # ご来店者のお名前【漢字】 (DB情報 + 案件担当者コード)
-        driver.find_element(By.NAME, "attr_org1").send_keys(f'{self.staff_name_kanji}（{self.data['case_id']}）')
+        driver.find_element(By.NAME, "attr_org1").send_keys(f'{self.staff_name_kanji}（{self.data['case_number']}）')
 
         # ご来店者のお名前【全角カナ】 (DB固定値)
         driver.find_element(By.NAME, "attr_org2").send_keys(self.data['staff_name_kana']) # カタカナ変換が必要だが、ここでは仮に漢字の読み仮名を使用
@@ -203,7 +211,7 @@ class MizuhoReservation:
         sleep(1) # 住所自動入力の待機
 
         # 市区町村・番地 (自動入力されるが、念のため)
-        # driver.find_element(By.NAME, 'cus_addr1').send_keys('7-20')
+        driver.find_element(By.NAME, 'cus_addr1').send_keys('7-20')
 
         # 建物名など (法人建物名)
         driver.find_element(By.NAME, 'cus_addr2').send_keys(self.firm_addr2 or "ビル名")

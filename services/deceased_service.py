@@ -235,6 +235,9 @@ def get_financial_asset_by_case(case_id: int) -> list[dict]:
         return [
             {
                 "id": a.id,
+                "bank_id": a.bank_id, # 💡 IDを追加
+                "branch_id": a.branch_id, # 💡 IDを追加
+                "account_type_id": a.account_type_id, # 💡 IDを追加
                 "bank_name": a.bank_ref.bank_name if a.bank_ref else "N/A",
                 "bank_code": a.bank_ref.bank_code if a.bank_ref else "N/A",
                 "branch_name": a.branch_ref.branch_name if a.branch_ref else "N/A",
@@ -312,7 +315,7 @@ def update_financial_asset(
     asset_id: int,
     bank_id: int, 
     branch_id: int | None, 
-    account_type_id: int | None,
+    account_type_id: int,
     account_number: str,
     balance: float | None,
     status: str = "調査中",
@@ -322,15 +325,17 @@ def update_financial_asset(
     """
     with Session(bind=Engine) as session:
         asset_to_update = (
-            session.query(FinancialAsset).filter(FinancialAsset.asset_id == asset_id).first()
+            # ✅ 修正: FinancialAsset.asset_id を FinancialAsset.id に変更
+            session.query(FinancialAsset).filter(FinancialAsset.id == asset_id).first()
         )
 
         if asset_to_update:
             # 2. 値を更新
-            asset_to_update.bank_name = bank_name
-            asset_to_update.bank_code = bank_code
-            asset_to_update.branch_name = branch_name
-            asset_to_update.branch_code = branch_code
+            # ✅ 修正: 名前/コードベースのフィールドをIDベースに変更
+            asset_to_update.bank_id = bank_id
+            asset_to_update.branch_id = branch_id
+            asset_to_update.account_type_id = account_type_id # 新たに追加
+            
             asset_to_update.account_number = account_number
 
             if balance is not None:
@@ -338,8 +343,13 @@ def update_financial_asset(
 
             asset_to_update.status = status
 
-            session.commit()
-            return True
+            try:
+                session.commit()
+                return True
+            except Exception as e:
+                session.rollback()
+                print(f"金融資産の更新中にエラーが発生しました: {e}")
+                return False
 
         return False
 
@@ -352,7 +362,7 @@ def delete_financial_asset(asset_id: int) -> bool:
     with Session(bind=Engine) as session:
         # 1. 資産レコードを asset_id で検索
         asset_to_delete = (
-            session.query(FinancialAsset).filter(FinancialAsset.asset_id == asset_id).first()
+            session.query(FinancialAsset).filter(FinancialAsset.id == asset_id).first()
         )
 
         if asset_to_delete:
@@ -363,7 +373,7 @@ def delete_financial_asset(asset_id: int) -> bool:
             session.commit()
             return True
 
-        return False  # 対象の資産が見つからなかった場合
+        return False
 
 
 def delete_case_by_case_number(case_number: str) -> bool:

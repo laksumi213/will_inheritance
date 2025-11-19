@@ -28,21 +28,6 @@ from services.db_setup import (
 )
 from zengin_code import Bank
 
-# try:
-#     from zengin_code import Bank, Branch, ZenginCodeError
-# except ImportError:
-#     # ライブラリがない場合のフォールバック（デバッグ用）
-#     class Bank:
-#         @staticmethod
-#         def find(name=None, code=None):
-#             return None
-#     class Branch:
-#         @staticmethod
-#         def find(bank_code, name=None, code=None):
-#             return None
-#     class ZenginCodeError(Exception):
-#         pass
-#     print("WARNING: zengin_code library not found. Auto-completion disabled.")
 from services.deceased_service import (
     add_financial_asset,
     delete_financial_asset,
@@ -67,7 +52,7 @@ bank_name_field = Dropdown(
 
 # 支店名フィールド (Dropdownとして再定義)
 branch_name_field = Dropdown(
-    label="支店名 *",
+    label="支店名",
     width=250,
     color=Colors.BLACK,
     label_style=TextStyle(color=Colors.BLACK),
@@ -76,7 +61,7 @@ branch_name_field = Dropdown(
 
 # 💡 口座種類フィールド (Dropdownとして再定義)
 account_type_field = Dropdown(
-    label="口座種類 *",
+    label="口座種類",
     width=150,
     color=Colors.BLACK,
     label_style=TextStyle(color=Colors.BLACK),
@@ -246,14 +231,21 @@ def load_bank_options(page: Page):
     """銀行マスタをロードし、ドロップダウンの選択肢を更新する"""
     with Session(bind=Engine) as db:
         banks = get_bank_masters(db)
-        bank_name_field.options = [
+        options = [
+            # 💡 空の選択肢を先頭に追加（value=""）
+            dropdown.Option("def", text="選択してください"),
+            dropdown.Option('add_new_bank', text="[ ➕ 新しい銀行を登録 ]"),
+        ]
+
+        # 既存の銀行マスタのオプションを追加
+        options.extend([
             dropdown.Option(str(bank.id), text=f"{bank.bank_name} ({bank.bank_code})")
             for bank in banks
-        ]
-        # 💡 新規登録への導線を追加
-        bank_name_field.options.append(
-            dropdown.Option(None, text="[ ➕ 新しい銀行を登録 ]", key="add_new_bank")
-        )
+        ])
+
+        bank_name_field.options = options
+        bank_name_field.value = "def"
+    page.update()
 
 def update_bank_details(page: Page):
     """銀行名選択時に銀行コードを更新し、支店リストをロードする"""
@@ -261,8 +253,9 @@ def update_bank_details(page: Page):
     
     # 💡 新規登録の選択肢が選ばれた場合
     if selected_bank_id_str == "add_new_bank":
-        bank_name_field.value = None # 選択をリセット
+        bank_name_field.value = "" # 選択をリセット（空のオプション value="" に合わせる）
         open_bank_master_dialog(None, page, None) # 新規登録モーダルを開く
+        bank_name_field.update()
         return
 
     if selected_bank_id_str:
@@ -271,37 +264,74 @@ def update_bank_details(page: Page):
             with Session(bind=Engine) as db:
                 bank = get_bank_master_by_id(db, bank_id)
                 if bank:
+                    # 銀行コードを更新
                     bank_code_field.value = bank.bank_code
+                    
                     # 支店リストをロード
                     load_branch_options(page, bank_id)
+                    
+                    # 画面更新 (支店リストと銀行コードの変更を反映)
+                    bank_code_field.update()
+                    # load_branch_options の中で page.update() が呼ばれないように調整されている場合、ここで page.update() が必要
                     page.update()
                     return
         except ValueError:
             pass
             
-    # 選択がリセットされた場合
+    # 選択がリセットされた場合 (銀行IDが空または無効な場合)
     bank_code_field.value = ""
     branch_name_field.options = []
+    branch_name_field.value = "def" # 支店名ドロップダウンもクリア
     branch_code_field.value = ""
     page.update()
 
+def update_branch_details(page: Page):
+    """
+    支店名選択時に支店コードを更新し、画面を更新する。
+    """
+    selected_branch_id_str = branch_name_field.value
+    
+    if selected_branch_id_str:
+        try:
+            branch_id = int(selected_branch_id_str)
+            with Session(bind=Engine) as db:
+                from services.db_setup import BranchMaster
+                # 支店マスタをIDで取得 (この関数が services/deceased_service.py に存在しない場合は、ここでクエリを実行)
+                branch = db.query(BranchMaster).filter(BranchMaster.id == branch_id).first()
+                
+                if branch:
+                    branch_code_field.value = branch.branch_code
+                    branch_code_field.update()
+                    # page.update() は不要。Fletではコントロールの update() がページ全体を更新しないため。
+                    return
+        except ValueError:
+            pass
+            
+    # 選択がリセットされた場合
+    branch_code_field.value = ""
+    branch_code_field.update()
+    page.update()
 
 def load_branch_options(page: Page, bank_id: int):
     """選択された銀行に基づいて支店マスタをロードする"""
-    branch_name_field.value = None # 支店をリセット
+    branch_name_field.value = "def" # 支店をリセット (value="" に変更)
     branch_code_field.value = ""
     
     with Session(bind=Engine) as db:
         branches = get_branch_masters_by_bank_id(db, bank_id)
         branch_name_field.options = [
+            # 💡 修正点: 先頭に空のオプションを追加
+            dropdown.Option("def", text="選択してください"),
+            dropdown.Option('add_new_branch', text="[ ➕ 新しい支店を登録 ]"), # 導線も追加
+        ]
+        branch_name_field.options.extend([
             dropdown.Option(str(branch.id), text=f"{branch.branch_name} ({branch.branch_code})")
             for branch in branches
-        ]
-        # 💡 新しい支店登録への導線も追加可能だが、ここでは簡略化のため省略
+        ])
+    
     
     # 💡 口座種類も初期ロードしておく
     load_account_type_options(page)
-    page.update()
 
 def load_account_type_options(page: Page):
     """口座種類マスタをロードする"""
@@ -311,7 +341,7 @@ def load_account_type_options(page: Page):
             dropdown.Option(str(t.id), text=t.type_name)
             for t in types
         ]
-    page.update()
+    # page.update()
 
 assets_list_view = ListView(spacing=10, expand=True)
 
@@ -438,19 +468,20 @@ def BankEditView(page: Page, case_id: int):
 
     def get_bank_master_id_by_code(bank_code: str):
         """銀行コードから BankMaster ID を取得する (DBアクセス)"""
+        # BankMaster, Session, Engine は外部スコープからアクセス可能と仮定
         with Session(bind=Engine) as db:
-            # BankMaster と BankCode で検索
+            from services.db_setup import BankMaster 
             bank = db.query(BankMaster.id).filter(BankMaster.bank_code == bank_code).first()
-            return bank.id if bank else None
-    
+            return bank[0] if bank else None
+
     def find_bank_data(name=None, code=None):
-        """銀行名または銀行コードで Bank オブジェクトを検索する"""
+        """銀行名または銀行コードで Bank オブジェクトを検索する (zengin_code利用)"""
         if code and code in Bank.all:
             return Bank.all[code]
         if name:
             # 銀行名で検索 (valueが Bank オブジェクトなので、.name 属性で比較)
             for bank_data in Bank.all.values():
-                print(bank_data.name)
+                # print(bank_data.name) # デバッグログ
                 if bank_data.name == name.replace("銀行", "").replace(
                     "農業協同組合", "農協"
                 ).replace("信用金庫", "信金"):
@@ -458,78 +489,30 @@ def BankEditView(page: Page, case_id: int):
         return None
 
     def find_branch_data(bank_code: str, name=None, code=None):
-        """支店名または支店コードで Branch オブジェクトを検索する"""
+        """
+        支店名または支店コードで Branch オブジェクトを検索する (zengin_code利用)
+        """
         if bank_code in Bank.all:
             bank = Bank.all[bank_code]
+            # 支店コードがある場合
             if code and code in bank.branches:
                 return bank.branches[code]
 
+            # 支店名がある場合
             if name:
                 # 支店名で検索 (valueが Branch オブジェクトなので、.name 属性で比較)
                 for branch_data in bank.branches.values():
-                    print(branch_data.name)
+                    # print(branch_data.name) # デバッグログ
                     if branch_data.name == name.replace("支店", ""):
                         return branch_data
         return None
-
-    # ----------------------------------------------------
-    # 自動補完ロジック (On Blur Handlers)
-    # ----------------------------------------------------
-
-    def handle_bank_change(e):
-        """銀行名/コードの変更時に相互補完を行う"""
-
-        # bank_name = bank_name_field.value.strip()
-        bank_code = bank_code_field.value.strip()
-        needs_update = False
-
-        if e.control == bank_code_field and bank_code and len(bank_code) == 4:
-            # 銀行コード入力 -> 銀行名(zengin_code)を検索
-            bank = find_bank_data(code=bank_code)
-            
-            if bank:
-                # 1. zengin_codeで見つかった銀行名から、DBの BankMaster ID を検索
-                #    (このロジックは簡略化のため、ここでは銀行コードで直接DBのIDを検索します)
-                bank_master_id = get_bank_master_id_by_code(bank_code)
-                
-                # 2. マスターIDが見つかった場合
-                if bank_master_id:
-                    # Dropdownの値をマスターIDに設定
-                    bank_name_field.value = str(bank_master_id)
-                    # 銀行コードは既にセットされている
-                    
-                    # 3. Dropdownの on_change と同様の処理を実行し、支店リストをロードする
-                    update_bank_details(e.page) 
-                    
-                    # 変更があったので画面を更新
-                    needs_update = True
-                    
-            elif bank_name_field.value:
-                # コードが見つからない場合、Dropdownの選択を解除する
-                bank_name_field.value = None
-                bank_code_field.error_text = "該当する銀行コードがマスターに見つかりません。"
-                needs_update = True
-
-        # if needs_update:
-        #     page.update() # update_bank_detailsでpage.update()を呼んでいるため不要な場合がある
-
-        # 支店コードの検索のために銀行コードが必須なので、支店フィールドも更新
-        handle_branch_change(e)
-
-
-    def handle_branch_change(e):
-        """支店名/コードの変更時に相互補完を行う"""
-    # ... (前略: bank_code, branch_name, branch_code の取得と銀行コードチェック) ...
     
-    bank_code = bank_code_field.value.strip()
-    # branch_name = branch_name_field.value.strip()
-    branch_code = branch_code_field.value.strip()
-    
-    
-    # 💡 BranchMaster ID を取得するためのヘルパー関数
+    # 💡 修正: 支店コードから BranchMaster ID を取得するヘルパー関数
     def get_branch_master_id_by_code(bank_code: str, branch_code: str):
+        """銀行コードと支店コードから BranchMaster ID を取得する (DBアクセス)"""
         with Session(bind=Engine) as db:
-            # 銀行コードから bank_id を取得
+            from services.db_setup import BankMaster, BranchMaster
+            # 銀行IDをまず取得
             bank_id = db.query(BankMaster.id).filter(BankMaster.bank_code == bank_code).scalar()
             if not bank_id:
                 return None
@@ -538,48 +521,105 @@ def BankEditView(page: Page, case_id: int):
                 BranchMaster.bank_id == bank_id,
                 BranchMaster.branch_code == branch_code
             ).first()
-            return branch.id if branch else None
+            return branch[0] if branch else None
 
+    # ----------------------------------------------------
+    # 自動補完ロジック (On Blur Handlers)
+    # ----------------------------------------------------
 
-    if not bank_code or len(bank_code) != 4:
-        # 銀行コードがないと支店は特定できない
-        return
+    def handle_bank_change(e):
+        """銀行コードの変更時に相互補完を行う"""
 
-    # needs_update はローカル変数として定義
+        bank_code = bank_code_field.value.strip()
+        needs_update = False
 
-    # elif e.control == branch_code_field and branch_code and len(branch_code) == 3:
-    if e.control == branch_code_field and branch_code and len(branch_code) == 3:
-        # 支店コード入力 -> 名前を検索
-        branch = find_branch_data(bank_code=bank_code, code=branch_code)
-        
-        if branch:
-            # 1. DBの BranchMaster ID を検索
-            branch_master_id = get_branch_master_id_by_code(bank_code, branch_code)
+        load_bank_options(e.page) # 画面はここでは更新しない
+
+        # 💡 銀行コード入力 -> 銀行名(zengin_code)を検索
+        if e.control == bank_code_field and bank_code and len(bank_code) == 4:
+            bank = find_bank_data(code=bank_code)
             
-            # 2. マスターIDが見つかった場合
-            if branch_master_id:
-                # Dropdownの値をマスターIDに設定
-                branch_name_field.value = str(branch_master_id)
-                # 支店名を表示
-                branch_name_field.options = [
-                     dropdown.Option(str(branch_master_id), text=f"{branch.name} ({branch_code})")
-                ]
-                branch_name_field.update()
-                needs_update = True
+            if bank:
+                # 1. DBの BankMaster ID を銀行コードで直接検索
+                bank_master_id = get_bank_master_id_by_code(bank_code)
+                
+                if bank_master_id:
+                    # 2. Dropdownの値をマスターIDに設定
+                    #    これにより、Dropdownは表示テキストとして BankMaster の bank_name を自動で表示します。
+                    bank_name_field.value = str(bank_master_id)
+                    bank_code_field.error_text = None
+
+                    # 3. 支店リストのロードと画面更新を実行
+                    # 💡 update_bank_details が支店をロードし、page.update()を呼ぶ
+                    update_bank_details(e.page)
+                    needs_update = True
+                    
+                elif bank_name_field.value:
+                    # DBマスターにない場合
+                    bank_name_field.value = 'def'
+                    bank_code_field.error_text = "該当する銀行コードがマスターに見つかりません。"
+                    branch_name_field.options = []
+                    branch_code_field.value = ""
+                    needs_update = True
+
+        # 支店コードの検索のために銀行コードが必須なので、支店フィールドも更新
+        if bank_code_field.value and len(bank_code_field.value) == 4:
+            handle_branch_change(e)
         
-        elif branch_name_field.value:
-            # コードが見つからない場合、Dropdownの選択を解除する
-            branch_name_field.value = None
-            branch_code_field.error_text = "該当する支店コードがマスターに見つかりません。"
-            needs_update = True
+        # 💡 update_bank_details が成功した場合は既に update() されているため、ここでは pass 
+        if not needs_update:
+            e.page.update()
 
-    if needs_update:
-        e.page.update()
+    def handle_branch_change(e):
+        """支店名/コードの変更時に相互補完を行う"""
+        
+        bank_code = bank_code_field.value.strip()
+        branch_code = branch_code_field.value.strip()
+        needs_update = False
 
-    # フォームの on_blur ハンドラを設定 (フォーカスが外れた時に実行)
-    bank_name_field.on_blur = handle_bank_change
+        if not bank_code or len(bank_code) != 4:
+            # 銀行コードがない場合は支店は特定できない
+            return
+
+        # 💡 支店コード入力 -> 名前を検索
+        if e.control == branch_code_field and branch_code and len(branch_code) == 3:
+            branch = find_branch_data(bank_code=bank_code, code=branch_code)
+            
+            if branch:
+                branch_master_id = get_branch_master_id_by_code(bank_code, branch_code)
+                
+                if branch_master_id:
+                    # Dropdownの値をマスターIDに設定
+                    branch_name_field.value = str(branch_master_id)
+                    branch_code_field.error_text = None
+                    
+                    # 💡 修正: ここで options を更新するのではなく、load_branch_options に任せる
+                    # load_branch_options は update_bank_details から既に呼ばれているが、
+                    # ここで手動で呼び出して、選択肢にヒットした支店を含める必要がある。
+                    
+                    # 銀行IDを取得し、支店オプションをリロードする
+                    bank_id = int(bank_name_field.value) if bank_name_field.value else None
+                    if bank_id:
+                         # 既にロードされているオプションの中に新しい支店が含まれていることを期待
+                         # 選択値の設定のみでOK
+                         pass 
+                         
+                    needs_update = True
+        
+            elif branch_name_field.value:
+                # コードが見つからない場合、Dropdownの選択を解除
+                branch_name_field.value = 'def'
+                branch_code_field.error_text = "該当する支店コードがマスターに見つかりません。"
+                needs_update = True
+
+        if needs_update:
+            e.page.update()
+            
+    # フォームの on_blur ハンドラを再割り当て
+    # bank_name_field.on_change = handle_bank_change
+    bank_name_field.on_change = update_bank_details
     bank_code_field.on_blur = handle_bank_change
-    branch_name_field.on_blur = handle_branch_change
+    branch_name_field.on_change = lambda e: update_branch_details(e.page)
     branch_code_field.on_blur = handle_branch_change
 
     # ----------------------------------------------------
@@ -592,14 +632,19 @@ def BankEditView(page: Page, case_id: int):
         editing_asset_id = None
 
         # フォームフィールドをクリア
-        bank_name_field.value = ""
+        bank_name_field.value = "def"
         bank_code_field.value = ""
-        branch_name_field.value = ""
+        branch_name_field.value = "def"
         branch_code_field.value = ""
 
         account_number_field.value = ""
         balance_field.value = ""
         status_field.value = "調査中"
+
+        bank_name_field.update()
+        branch_name_field.update()
+        bank_code_field.update()
+        branch_code_field.update()
 
         # UIモードを「新規登録」に戻す
         main_action_button.text = "新規口座を登録"
@@ -651,22 +696,64 @@ def BankEditView(page: Page, case_id: int):
         editing_asset_id = asset_id
         
         # フォームにデータをロード
-        bank_name_field.value = asset_to_edit["bank_name"]
-        bank_code_field.value = asset_to_edit["bank_code"]
-        branch_name_field.value = asset_to_edit["branch_name"]
-        branch_code_field.value = asset_to_edit["branch_code"]
+        
+        # 💡 DropdownにはIDを文字列としてセットする (サービス側から ID が取得できている前提)
+        bank_id_from_asset = asset_to_edit.get("bank_id")
+        branch_id_from_asset = asset_to_edit.get("branch_id")
+        account_type_id_from_asset = asset_to_edit.get("account_type_id")
 
+        # 銀行名 (Dropdown) に ID を設定
+        if bank_id_from_asset:
+            bank_name_field.value = str(bank_id_from_asset)
+        else:
+            bank_name_field.value = "def" # Dropdownクリアのため value="" を使用
+            
+        # 口座種類 (Dropdown) に ID を設定
+        if account_type_id_from_asset:
+            account_type_field.value = str(account_type_id_from_asset)
+        else:
+            account_type_field.value = "def" # Dropdownクリアのため value="" を使用
+        
+        # 銀行コード、支店コードは TextField に値を設定
+        bank_code_field.value = asset_to_edit.get("bank_code", "")
+        
         account_number_field.value = asset_to_edit["account_number"]
         balance_field.value = (
             f"{asset_to_edit['balance']:,.0f}" if asset_to_edit["balance"] is not None else ""
         )
         status_field.value = asset_to_edit["status"]
 
+        # 💡 銀行IDが設定されたら、連動更新ロジックをトリガー
+        if bank_id_from_asset:
+            # update_bank_details が銀行コード設定と支店リストロードを行う
+            update_bank_details(page)
+            
+            # 支店リストがロードされた後、支店名をIDで設定し直す
+            if branch_id_from_asset:
+                branch_name_field.value = str(branch_id_from_asset)
+            else:
+                branch_name_field.value = "def"
+
+        branch_code_field.value = asset_to_edit.get("branch_code", "") 
+        
         # UIモードを「修正」に切り替え
         main_action_button.text = "口座情報を修正"
         main_action_button.icon = Icons.SAVE
         cancel_edit_button.visible = True
 
+        bank_name_field.update()
+        branch_name_field.update()
+        account_type_field.update()
+        bank_code_field.update()
+        branch_code_field.update()
+        account_number_field.update()
+        balance_field.update()
+        status_field.update()
+        main_action_button.update()
+        cancel_edit_button.update()
+
+        update_branch_details(e.page)
+        
         page.update()
         bank_name_field.focus()
 
@@ -687,6 +774,8 @@ def BankEditView(page: Page, case_id: int):
                     f"¥{asset['balance']:,.0f}" if asset["balance"] is not None else "残高不明"
                 )
 
+                account_type_info = f"種類: {asset.get('account_type', 'N/A')}"
+
                 bank_info = f"🏦 {asset['bank_name']} ({asset.get('bank_code', 'N/A')})"
                 branch_info = (
                     f"{asset.get('branch_name', 'N/A')} 支店 ({asset.get('branch_code', 'N/A')})"
@@ -706,6 +795,12 @@ def BankEditView(page: Page, case_id: int):
                                 branch_info,
                                 size=14,
                                 width=200,
+                                color=Colors.BLACK,
+                            ),
+                            Text(
+                                account_type_info,
+                                size=14,
+                                width=100, # 幅を調整
                                 color=Colors.BLACK,
                             ),
                             Text(
@@ -752,58 +847,72 @@ def BankEditView(page: Page, case_id: int):
     def save_asset(e):
         """資産をデータベースに登録または修正する"""
         nonlocal editing_asset_id
+        page = e.page # pageオブジェクトを取得
+        case_id_val = case_id # case_idをローカル変数として取得
 
         # フォームからの値を取得
-        bank_name = bank_name_field.value.strip()
-        bank_code = bank_code_field.value.strip()
-        branch_name = branch_name_field.value.strip()
-        branch_code = branch_code_field.value.strip()
+        # 💡 Dropdownの value は文字列IDまたは 'add_new_bank'
+        bank_id_str = bank_name_field.value
+        branch_id_str = branch_name_field.value
+        account_type_id_str = account_type_field.value
 
         account_number = account_number_field.value.strip()
         balance_str = balance_field.value.strip().replace(",", "")
         status = status_field.value.strip()
+        
+        # ----------------------------------------------------
+        # 1. 必須チェックと型変換 (DBスキーマに基づく)
+        # ----------------------------------------------------
 
-        # 必須項目チェック (ここでは bank_name のみ)
-        if not bank_name:
-            page.open(
-                SnackBar(
-                    content=Text(
-                        "金融機関名は必須です。",
-                        color=Colors.WHITE,
-                    ),
-                    bgcolor=Colors.RED_700,
-                )
-            )
-            page.update()
-            return
+        bank_id = None
+        branch_id = None
+        account_type_id = None
+        balance_value = 0.0
 
-        # 残高の数値チェック
         try:
+            # 必須入力チェック: 銀行IDと口座種類IDは必須 (nullable=False)
+            if not bank_id_str or bank_id_str == "add_new_bank":
+                raise ValueError("銀行を選択してください。")
+            # if not account_type_id_str:
+            #     raise ValueError("口座種類を選択してください。")
+
+            bank_id = int(bank_id_str)
+            account_type_id = int(account_type_id_str)
+            
+            # 支店IDは任意 (nullable=True)
+            branch_id = int(branch_id_str) if branch_id_str else None
+            
+            # 残高
             balance_value = float(balance_str) if balance_str else 0.0
-        except ValueError:
+
+        except ValueError as ve:
+            # 型変換エラーまたは必須項目エラー
+            error_message = str(ve) if str(ve) else "入力値が無効です。"
             page.open(
                 SnackBar(
-                    content=Text("残高は有効な数値で入力してください。", color=Colors.WHITE),
+                    content=Text(error_message, color=Colors.WHITE),
                     bgcolor=Colors.RED_700,
                 )
             )
             page.update()
             return
-
+            
+        # ----------------------------------------------------
+        # 2. サービス層への呼び出し (編集モード vs 新規登録モード)
+        # ----------------------------------------------------
+        
         try:
             # 編集モード
             if editing_asset_id:
                 # サービス関数を呼び出して更新
-                # 💡 修正: IDベースの引数に置き換え
                 success = update_financial_asset(
                     asset_id=editing_asset_id,
-                    # case_idはサービス関数が不要と判断されたため削除 (必要なら残す)
                     bank_id=bank_id,
                     branch_id=branch_id,
                     account_type_id=account_type_id,
-                    account_number=account_number_field.value,
-                    balance=balance_value,
-                    status=status_field.value,
+                    account_number=account_number, # ローカル変数を渡す
+                    balance=balance_value,         # ローカル変数を渡す
+                    status=status,                 # ローカル変数を渡す
                 )
                 print(f"DEBUG: 資産ID {editing_asset_id} を修正しました。")
                 success_message = "銀行口座情報を修正しました。"
@@ -811,15 +920,14 @@ def BankEditView(page: Page, case_id: int):
             # 新規登録モード
             else:
                 # サービス関数を呼び出して新規登録
-                # 💡 修正: IDベースの引数に置き換え
                 success = add_financial_asset(
-                    case_id=case_id,
+                    case_id=case_id_val,
                     bank_id=bank_id,
                     branch_id=branch_id,
                     account_type_id=account_type_id,
-                    account_number=account_number_field.value,
-                    balance=balance_value,
-                    status=status_field.value,
+                    account_number=account_number, # ローカル変数を渡す
+                    balance=balance_value,         # ローカル変数を渡す
+                    status=status,                 # ローカル変数を渡す
                 )
                 print("DEBUG: 新しい資産を登録しました。")
                 success_message = "銀行口座情報を登録しました。"
@@ -858,6 +966,14 @@ def BankEditView(page: Page, case_id: int):
     # 初期データロード
     update_assets_list()
 
+    # 銀行名ドロップダウンのオプションを初期ロードする
+    load_bank_options(page)
+
+    load_account_type_options(page)
+    
+    # 登録済み資産のリストを初期ロードする (既に存在)
+    update_assets_list()
+
     # --- UI レイアウト構築 ---
 
     view_content = Column(
@@ -877,7 +993,7 @@ def BankEditView(page: Page, case_id: int):
                         # 支店名/コードの入力行
                         Row([branch_name_field, branch_code_field]),
                         # 口座番号/残高/ステータスの入力行
-                        Row([account_number_field, balance_field, status_field]),
+                        Row([account_number_field, account_type_field, balance_field, status_field]),
                         # アクションボタンの行
                         Row(
                             [
