@@ -75,7 +75,7 @@ building_field = TextField(label="建物名・部屋番号")
 path_field = TextField(
     label="フォルダ保存パス",
     width=500,
-    read_only=True,
+    # read_only=True,
     value="",
 )
 

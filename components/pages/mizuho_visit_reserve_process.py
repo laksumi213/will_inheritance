@@ -1,4 +1,4 @@
-# /components/automation/mizuho_visit_reserve_process.py
+# /components/pages/mizuho_visit_reserve_process.py
 
 import threading
 from time import sleep
@@ -8,18 +8,21 @@ from components.utils.web_operation import Web
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import NoSuchElementException, WebDriverException # 💡 追加: WebDriverExceptionをインポート
 import mojimoji 
 from tkinter import messagebox
 from services.deceased_service import get_financial_asset_automation_data
+
+# 実行中のMizuhoReservationインスタンスを保持する辞書
+_active_reservations = {}
 
 # ----------------------------------------------------------------------------------
 # メインプロセス関数
 # ----------------------------------------------------------------------------------
 
-def start_mizuho_reservation_process(page: Page, case_id: int):
+def start_mizuho_reservation(page: Page, case_id: int, selected_branch: str, selected_procedure: str):
     """
-    みずほ銀行の来店予約Web自動化処理を別スレッドで開始する。
+    みずほ銀行の来店予約Web自動化処理を別スレッドで開始する。（ステップ1：日時選択前まで）
     """
     
     # データベースから必要なデータを取得
@@ -27,41 +30,142 @@ def start_mizuho_reservation_process(page: Page, case_id: int):
     data = get_financial_asset_automation_data(case_id, target_bank_code)
     
     if not data:
-        page.open(SnackBar(
-            content=Text(f"エラー: データベースからみずほ銀行（{target_bank_code}）の予約に必要なデータが見つかりませんでした。", color=Colors.WHITE),
-            bgcolor=Colors.RED_700
-        ))
+        page.open(
+            SnackBar(
+                content=Text(f"エラー: データベースからみずほ銀行（{target_bank_code}）の予約に必要なデータが見つかりませんでした。", color=Colors.WHITE),
+                bgcolor=Colors.RED_700
+            )
+        )
         page.update()
         return
+
+    # 💡 修正: 既に予約プロセスが進行中の場合は、クリーンアップして再開
+    if case_id in _active_reservations:
+        old_instance = _active_reservations[case_id]
+        old_instance.cleanup() # 古いドライバーを強制終了
+        del _active_reservations[case_id]
+        
+        page.open(SnackBar(
+            content=Text("過去のWebセッションを終了しました。新しい予約プロセスを開始します。", color=Colors.WHITE),
+            bgcolor=Colors.AMBER_700
+        ))
+        page.update()
 
     # Web操作は時間がかかるため、別スレッドで実行
     def run_automation():
         try:
-            MizuhoReservation(page, data).reservation()
-            page.open(SnackBar(
-                content=Text("✅ みずほ銀行来店予約のWeb操作が完了しました。", color=Colors.WHITE),
-                bgcolor=Colors.GREEN_700
-            ))
+            # 💡 インスタンスを作成し、グローバル変数に保存
+            reservation_instance = MizuhoReservation(page, data, selected_branch, selected_procedure)
+            _active_reservations[case_id] = reservation_instance
+            
+            # ステップ1を実行（ブラウザを開き、日時選択画面まで遷移）
+            reservation_instance.reservation()
+            
+            # ユーザーに日時選択後の操作を促す
+            page.open(
+                SnackBar(
+                    content = Text("✅ 日時選択画面を表示しました。Webブラウザで日付と時間を選択し、「日時選択後に押す」ボタンをクリックしてください。", color=Colors.WHITE),
+                    bgcolor = Colors.BLUE_700,
+                    duration=600000
+                )
+            )
+            
         except Exception as e:
-            page.open(SnackBar(
-                content=Text(f"Web操作中にエラーが発生しました: {e}", color=Colors.WHITE),
-                bgcolor=Colors.RED_700
-            ))
+            # 💡 エラー発生時はインスタンスを削除
+            if case_id in _active_reservations:
+                _active_reservations[case_id].cleanup()
+                del _active_reservations[case_id]
+            page.open(
+                SnackBar(
+                    content = Text(f"Web操作中にエラーが発生しました: {e}", color=Colors.WHITE),
+                    bgcolor = Colors.RED_700
+                )
+            )
+            
         finally:
             page.update()
 
     threading.Thread(target=run_automation).start()
+
+
+def continue_mizuho_reservation(page: Page, case_id: int):
+    """
+    みずほ銀行の来店予約Web自動化処理を再開する。（ステップ2：お客さま情報入力以降）
+    """
+    if case_id not in _active_reservations:
+        page.open(
+            SnackBar(
+                content=Text("エラー: 予約プロセスが開始されていません。「予約日時選択へ進む」ボタンを先にクリックしてください。", color=Colors.WHITE),
+                bgcolor=Colors.RED_700
+            )
+        )
+        page.update()
+        return
+
+    reservation_instance = _active_reservations[case_id]
+    
+    # 💡 修正: スレッドを再導入し、UIフリーズを回避
+    def run_automation_continue():
+        try:
+            driver = reservation_instance.driver
+
+            # 💡 修正: Web画面が閉じられていないかチェック (WebDriverExceptionもキャッチ)
+            try:
+                _ = driver.title 
+            except (NoSuchElementException, WebDriverException) as e:
+                # ウィンドウが閉じられている場合に発生する例外をキャッチ
+                page.open(SnackBar(
+                    content=Text("エラー: Web画面が閉じられています。予約を最初からやり直してください。", color=Colors.WHITE),
+                    bgcolor=Colors.RED_700
+                ))
+                # インスタンスを削除して終了
+                reservation_instance.cleanup()
+                if case_id in _active_reservations:
+                    del _active_reservations[case_id]
+                page.update()
+                return # 処理を中断
+                        
+            # 💡 ユーザーに最終操作を促す（start_proc()内から移動させ、処理全体が成功した場合のみ表示）
+            page.open(
+                SnackBar(
+                    content = Text("✅ 最終確認画面に遷移しました。Webブラウザで「予約内容を確認」をクリックして予約を完了してください。", color=Colors.WHITE),
+                    bgcolor = Colors.GREEN_700,
+                    duration=300000
+                )
+            )
+            
+            # ステップ2を実行（お客さま情報入力）
+            reservation_instance.start_proc() 
+
+        except Exception as e:
+            page.open(
+                SnackBar(
+                    content = Text(f"Web操作中にエラーが発生しました: {e}", color=Colors.WHITE),
+                    bgcolor = Colors.RED_700
+                )
+            )
+
+        finally:
+            # 💡 完了後、インスタンスを削除
+            if case_id in _active_reservations:
+                del _active_reservations[case_id]
+            page.update()
+
+    run_automation_continue()
+    # threading.Thread(target=run_automation_continue).start()
+
 
 # ----------------------------------------------------------------------------------
 # Web自動化クラス
 # ----------------------------------------------------------------------------------
 
 class MizuhoReservation:
-    def __init__(self, page: Page, data: dict):
+    def __init__(self, page: Page, data: dict, selected_branch, selected_procedure):
         self.page = page
         self.data = data
+        self.selected_branch = selected_branch
+        self.selected_procedure = selected_procedure
         self.proc = Web() # Web操作ヘルパーのインスタンス化
-        
         # データベースから取得したデータを属性に展開
         self.deceased_name = self.data["deceased_name"]
         self.deceased_dob = self.data["deceased_dob"].split('-') if self.data["deceased_dob"] else ["0000", "00", "00"]
@@ -83,11 +187,20 @@ class MizuhoReservation:
         self.firm_dob_month = self.data["firm_dob_month"]
         self.firm_dob_day = self.data["firm_dob_day"]
 
+    # 💡 追加: クリーンアップメソッド
+    def cleanup(self):
+        """Webドライバーを安全に終了させる"""
+        try:
+            if self.driver:
+                self.driver.quit()
+        except Exception:
+            # ドライバーが既に閉じられている場合など
+            pass
 
     def click_button_by_text(self, driver, text):
         """ボタンの表示テキストを使って要素を探し、クリックする関数"""
         xpath_locator = f"//button[text()='{text}']"
-
+        # ... (既存のclick_button_by_text) ...
         try:
             button = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.XPATH, xpath_locator))
@@ -102,39 +215,48 @@ class MizuhoReservation:
         # ----------------------------------------------------
         # 1. 予約開始ページのオープン
         # ----------------------------------------------------
-        # 京橋支店 ※この支店は法人ではなく個人で予約
-        # url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA338922&_gl=1*k5k7g4*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTUzMzUkajYwJGwwJGgw'
+        # ... (既存のreservationロジックは変更なし) ...
+
+        if self.selected_branch == '京橋支店':
+            # 京橋支店 ※この支店は法人ではなく個人で予約
+            url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA338922&_gl=1*k5k7g4*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTUzMzUkajYwJGwwJGgw'
         
-        # 八重洲口支店
-        # url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA338924&_gl=1*1yjvpu4*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTU1MjkkajUxJGwwJGgw'
+        elif self.selected_branch == '八重洲口支店':
+            # 八重洲口支店
+            url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA338924&_gl=1*1yjvpu4*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTU1MjkkajUxJGwwJGgw'
         
-        # 東京中央支店 ※この支店は法人ではなく個人で予約
-        url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA339731&_gl=1*1eoo2t1*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTU0MzgkajUyJGwwJGgw'
-        
+        elif self.selected_branch == '東京中央支店':
+            # 東京中央支店 ※この支店は法人ではなく個人で予約
+            url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA339731&_gl=1*1eoo2t1*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTU0MzgkajUyJGwwJGgw'
+            
         self.proc.web_open(url)
-        driver = self.proc.driver
+        self.driver = self.proc.driver
 
         # --- ステップ 1: どちらかを選択してください。 ---
-        self.click_button_by_text(driver, "個人のお客さま")
+        self.click_button_by_text(self.driver, "個人のお客さま")
 
         # --- ステップ 2: ご来店目的を選択してください。 ---
-        self.click_button_by_text(driver, "各種手続き")
+        self.click_button_by_text(self.driver, "各種手続き")
 
         # --- ステップ 3: 内容を選択してください。 ---
-        self.click_button_by_text(driver, "相続手続")
+        self.click_button_by_text(self.driver, "相続手続")
 
         # --- ステップ 4: 日時・お客さま情報入力へ進む ---
         reservation_link_xpath = '//*[@id="answer-20-3"]/div/div/a'
 
-        reservation_link = WebDriverWait(driver, 5).until(
+        reservation_link = WebDriverWait(self.driver, 5).until(
             EC.element_to_be_clickable((By.XPATH, reservation_link_xpath))
         )
-        driver.execute_script("arguments[0].click();", reservation_link)
+        self.driver.execute_script("arguments[0].click();", reservation_link)
         print("✅ リンク '日時・お客さま情報入力へ' をクリックしました。")
 
         sleep(1)
-        messagebox.showinfo("待機中", "「日付選択後」にOKボタンをクリックしてください。")
 
+    def start_proc(self): # 💡 メソッド名をstart_procに修正
+        # ----------------------------------------------------
+        # 2. 日時選択後の情報入力
+        # ----------------------------------------------------
+        driver = self.driver
         # ユーザーが日付を選択し、画面遷移した後のウィンドウに切り替える
         driver.switch_to.window(driver.window_handles[-1])
         driver.implicitly_wait(10)
@@ -146,17 +268,20 @@ class MizuhoReservation:
         driver.find_element(By.XPATH,
                                       "//*[@id='right-column']/div[1]/form/div[1]/div[2]/div[1]/label/span").click()
         
-        # 残りの2項目（法人・独立予約メニュー）は今回は省略（個人客としての流れを優先）
-        
         # 2. ご相談内容・ご希望など (bt_form_attr_res11)
-        # 被相続人情報と口座番号をDBから取得して挿入
+        # 💡 selected_procedureに基づいて挿入するテキストを変更
+        if self.selected_procedure == "残高証明書の発行依頼":
+            procedure_text = "残高証明書の発行依頼"
+        else: # "取引明細の発行依頼"
+            procedure_text = "取引明細の発行依頼"
+            
         text_content = (
-            # f'相続の手続き　残高証明書の発行依頼　被相続人：{self.deceased_name}様　'
-            f'相続の手続き　取引明細の発行依頼　被相続人：{self.deceased_name}様　'
+            f'相続の手続き　{procedure_text}　被相続人：{self.deceased_name}様　'
             f'生年月日：{self.deceased_dob[0]}年{self.deceased_dob[1]}月{self.deceased_dob[2]}日　'
             f'口座番号：{mojimoji.zen_to_han(self.bank_branch_code or "")}{mojimoji.zen_to_han(self.bank_account_number or "0")}'
         )
         driver.find_element(By.ID, 'bt_form_attr_res11').send_keys(text_content)
+
 
         # 各種証明書発行
         driver.find_element(By.XPATH,
@@ -172,7 +297,7 @@ class MizuhoReservation:
         # 3. お客さま情報入力
         # ----------------------------------------------------
         sleep(2)
-        self.proc.web_operation(driver.current_url) # 画面を手動操作に切り替え
+        self.proc.web_operation(driver.current_url)
         
         driver.implicitly_wait(10)
         WebDriverWait(driver, 10).until(
@@ -189,7 +314,7 @@ class MizuhoReservation:
         driver.find_element(By.NAME, "attr_org1").send_keys(f'{self.staff_name_kanji}（{self.data['case_number']}）')
 
         # ご来店者のお名前【全角カナ】 (DB固定値)
-        driver.find_element(By.NAME, "attr_org2").send_keys(self.data['staff_name_kana']) # カタカナ変換が必要だが、ここでは仮に漢字の読み仮名を使用
+        driver.find_element(By.NAME, "attr_org2").send_keys(self.data['staff_name_kana'])
 
         # 電話番号 (契約者電話番号)
         driver.find_element(By.NAME, "cus_tel").send_keys(self.staff_tel.replace('-', ''))
@@ -239,12 +364,5 @@ class MizuhoReservation:
         # 「次へ進む」ボタンを特定 (type="submit", value="次へ進む")
         driver.find_element(By.NAME, "submit").click()
         
-        # 💡 ユーザーに最終操作を促す
-        self.page.show_snack_bar(SnackBar(
-            content=Text("✅ 最終確認画面に遷移しました。Webブラウザで「予約内容を確認」をクリックして予約を完了してください。", color=Colors.WHITE),
-            bgcolor=Colors.GREEN_700
-        ))
-        self.page.update()
-
         sleep(5)
         self.proc.web_operation(driver.current_url) # 最終画面をユーザーに渡して終了

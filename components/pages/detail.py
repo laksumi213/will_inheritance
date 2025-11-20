@@ -29,6 +29,7 @@ from flet import (
     dropdown,
 )
 
+from components.utils.file_system import open_case_folder
 from components.utils.date_utils import convert_seireki_to_wareki
 from components.utils.ui_utils import show_confirm_dialog
 from services import deceased_service
@@ -399,6 +400,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                         )
                     )
                     print(f"案件 {case_num} の削除に失敗しました。")
+                    
             except Exception as ex:
                 print(f"削除処理中に予期せぬエラー: {ex}")
                 page.oepn(
@@ -813,11 +815,22 @@ def DeceasedDetailView(page: Page, case_id: int):
                             [
                                 Row(
                                     [
-                                        Text(
-                                            f"案件番号: {case.case_number if case and case.case_number else 'N/A (未登録)'}",
-                                            size=18,
-                                            weight=FontWeight.BOLD,
-                                            color=Colors.DEEP_ORANGE_600,  # 案件番号を目立たせる色に変更
+                                        Container(
+                                            content=Text(
+                                                f"案件番号: {case.case_number if case and case.case_number else 'N/A (未登録)'}",
+                                                size=18,
+                                                weight=FontWeight.BOLD,
+                                                color=Colors.DEEP_ORANGE_600,
+                                            ),
+                                            # クリックで案件番号のみをコピー
+                                            on_click=lambda e, content=(
+                                                case.case_number
+                                                if case and case.case_number
+                                                else ""
+                                            ): copy_to_clipboard_and_notify(
+                                                e, page, content
+                                            ),
+                                            tooltip="クリックして案件番号をコピー",
                                         ),
                                         ElevatedButton(
                                             "案件を完全に削除",
@@ -829,6 +842,25 @@ def DeceasedDetailView(page: Page, case_id: int):
                                     ],
                                     alignment=MainAxisAlignment.SPACE_BETWEEN,
                                     vertical_alignment=CrossAxisAlignment.CENTER,
+                                ),
+                                Divider(height=10, color=Colors.TRANSPARENT),
+                                Row(
+                                    [
+                                        ElevatedButton(
+                                            "📂 案件フォルダを開く",
+                                            on_click=lambda e: open_case_folder(
+                                                page=page,
+                                                case_id=case.case_id,
+                                                get_path_service=deceased_service.get_case_folder_path
+                                            ),
+                                            style=ButtonStyle(
+                                                bgcolor=Colors.BLUE_50,
+                                                color=Colors.BLUE_800,
+                                            ),
+                                        )
+                                    ],
+                                    alignment=MainAxisAlignment.START,
+                                    visible=(case is not None and case.case_id is not None) # 案件がある場合のみ表示
                                 ),
                                 Divider(
                                     height=10, color=Colors.TRANSPARENT

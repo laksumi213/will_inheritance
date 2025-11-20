@@ -24,6 +24,7 @@ from components.pages.bank_edit import BankEditView
 from components.pages.detail import DeceasedDetailView
 from components.pages.mizuho_balance_doc_view import MizuhoBalanceDocView
 from components.pages.visit_reserve_select_bank_view import VisitReserveSelectBankView
+from components.pages.visit_reserve_mizuho_view import VisitReserveMizuhoView
 from components.pages.smbc_balance_doc_view import SmbcBalanceDocView
 from services.deceased_service import get_contracting_party_name
 
@@ -161,7 +162,7 @@ class CaseHubView:
             
             # 6-1. みずほ銀行 (コード: 0001) 専用ルート
             if route.startswith(f"/case/{self.case_id}/reserve/mizuho"):
-                return PlaceholderView(self.page, "みずほ予約フォーム", f"案件ID: {self.case_id}")
+                return VisitReserveMizuhoView(self.page, self.case_id)
 
             # 6-2. 三井住友銀行 (コード: 0009) 専用ルート
             elif route.startswith(f"/case/{self.case_id}/reserve/smbc"):

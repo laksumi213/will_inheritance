@@ -17,7 +17,6 @@ from flet import (
 )
 from services.deceased_service import get_financial_asset_by_case
 from services.deceased_service import get_financial_asset_automation_data 
-from components.pages.mizuho_visit_reserve_process import start_mizuho_reservation_process
 
 
 class VisitReserveSelectBankView(Column):
@@ -79,13 +78,9 @@ class VisitReserveSelectBankView(Column):
             # 💡 銀行選択ボタンの作成
             def open_bank_reserve_page(e, code=code):
                 # 銀行コードを付加した固有の来店予約ルートへ遷移
-                # 例: /case/1/reserve/mizuho (みずほの銀行コードは 0001)
-                
-                # 銀行コードに基づいて次のルーティングを決定
                 if code == "0001":
                     # みずほ銀行専用ルート
-                    start_mizuho_reservation_process(self.page, self.case_id)
-                    # self.page.go(f"/case/{self.case_id}/reserve/mizuho")
+                    self.page.go(f"/case/{self.case_id}/reserve/mizuho")
                 elif code == "0009":
                     # 三井住友銀行専用ルート (仮)
                     self.page.go(f"/case/{self.case_id}/reserve/smbc")
@@ -103,7 +98,7 @@ class VisitReserveSelectBankView(Column):
                         on_click=open_bank_reserve_page,
                         data=code
                     ),
-                    on_click=open_bank_reserve_page # リスト全体をクリックでも進める
+                    on_click=open_bank_reserve_page
                 )
             )
         

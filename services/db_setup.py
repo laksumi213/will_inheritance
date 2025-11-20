@@ -898,6 +898,120 @@ def add_initial_data():
         session.add_all([bank1, liability1])
 
         session.commit()
+
+
+        # # 1. 担当者とステータスの初期登録
+        # user1 = User(windows_id="admin01", name="管理者 太郎", role="Manager")
+        # status1 = CaseStatus(name="受託", order_num=3)
+        # session.add_all([user1, status1])
+        # session.flush() # IDを確定させる
+
+        # # 2. 銀行マスタと口座種類マスタの初期登録
+        
+        # # 2-1. 銀行マスタ (みずほ銀行)
+        # bank_master = BankMaster(bank_name="みずほ銀行", bank_code="0001")
+        # session.add(bank_master)
+        # session.flush()
+        
+        # # 2-2. 支店マスタ (銀座中央支店)
+        # branch_master = BranchMaster(
+        #     bank_id=bank_master.id,
+        #     branch_name="銀座中央",
+        #     branch_code="050"
+        # )
+        # session.add(branch_master)
+        
+        # # 2-3. 口座種類マスタ (普通預金)
+        # account_type_master = AccountTypeMaster(type_name="普通預金")
+        # session.add(account_type_master)
+        # session.flush()
+
+        # # 3. 案件 (Case: G2103) の登録
+        # case1 = Case(
+        #     case_number="G2103",
+        #     client_name="水谷 昌代",
+        #     client_name_kana="みずたに　まさよ",
+        #     manager_id=user1.id,
+        #     current_status_id=status1.id,
+        #     contract_date=date(2025, 10, 1),
+        #     fee_contract_amount=500000.0,
+        #     folder_path=r"\\192.168.11.20\行政書士法人チェスター\01.個別ＪＯＢ\G2103水谷昌代様（スタンダードプラン）"
+        # )
+        # session.add(case1)
+        # session.flush()
+
+        # # 4. 被相続人 (Deceased: 水谷 弘) の登録
+        
+        # # 4-1. 被相続人の住所 (共通住所)
+        # addr_deceased = Address(
+        #     zip_code="104-0053",
+        #     prefecture="東京都",
+        #     city_ward_town="中央区晴海",
+        #     street_address="二丁目5番16号",
+        #     building_name="1101号",
+        # )
+        # session.add(addr_deceased)
+        # session.flush()
+        
+        # # 4-2. 被相続人の最終住所IDをAddressに設定し、基本情報を登録
+        # d1 = Deceased(
+        #     case_id=case1.case_id,
+        #     name_last="水谷",
+        #     name_first="弘",
+        #     name_last_kana="みずたに",
+        #     name_first_kana="ひろし",
+        #     date_of_birth=date(1935, 1, 12),
+        #     date_of_death=date(2025, 5, 16),
+        #     hometown="東京都台東区東上野一丁目1番地",
+        #     relationship_type="本人",
+        #     last_address_id=addr_deceased.id
+        # )
+        # session.add(d1)
+        # session.flush()
+        
+        # # 5. 契約者 (Heir: 水谷 昌代, 妻) の登録
+        # h1 = Heir(
+        #     deceased_id=d1.id,
+        #     name_last="水谷",
+        #     name_first="昌代",
+        #     name_last_kana="みずたに",
+        #     name_first_kana="まさよ",
+        #     relationship_type="妻",
+        #     date_of_birth=date(1946, 11, 29),
+        #     hometown="東京都台東区東上野1-1",
+        #     is_contracting_party=True, # 契約者フラグ
+        # )
+        # session.add(h1)
+        # session.flush()
+        
+        # # 5-1. 契約者の住所は被相続人と同一の Address を参照（H_AddressHistory経由）
+        # h1_addr_link = H_AddressHistory(
+        #     heir_id=h1.id, 
+        #     address_id=addr_deceased.id, 
+        #     is_current_address=True
+        # )
+        # session.add(h1_addr_link)
+        
+        # # 5-2. 契約者の連絡先 (電話番号: 03-3533-1675)
+        # contact_phone = Contact(value="03-3533-1675", type="PHONE", sub_type="Primary")
+        # session.add(contact_phone)
+        # session.flush()
+        
+        # h1_contact_link = H_ContactLink(heir_id=h1.id, contact_id=contact_phone.id)
+        # session.add(h1_contact_link)
+
+        # # 6. 金融資産 (FinancialAsset) の登録
+        # bank1 = FinancialAsset(
+        #     case_id=case1.case_id,
+        #     bank_id=bank_master.id,       # マスタID
+        #     branch_id=branch_master.id,   # マスタID
+        #     account_type_id=account_type_master.id, # マスタID
+        #     account_number="1234567",
+        #     balance=5000000.0,
+        #     status="調査中",
+        # )
+        
+        # session.commit()
     session.close()
 
     # ... (既存のタスク生成ロジックの呼び出し部分) ...
@@ -1147,3 +1261,13 @@ def create_contact_and_link_to_heir(
             # 2. H_ContactLink レコードの作成
             link = H_ContactLink(heir_id=heir_id, contact_id=new_contact.id)
             db.add(link)
+
+
+def get_all_case_statuses():
+    """全ての案件ステータスを取得する（ドロップダウン用）"""
+    db = Session()
+    try:
+        statuses = db.query(CaseStatus).order_by(CaseStatus.order_num).all()
+        return statuses
+    finally:
+        db.close()
