@@ -1,19 +1,34 @@
-from google import genai
-from google.genai.errors import APIError
 import os
 import pathlib
 import shutil  # ファイルのコピー/移動に使用
 
-try:
-    # 1. クライアントの初期化
-    # APIキーが環境変数に設定されていれば、引数なしでOK
-    client = genai.Client()
+from google import genai
 
-except Exception as e:
-    print("エラー: Gemini APIキーが正しく設定されていません。")
-    print(f"詳細: {e}")
-    # プログラムを終了
+# --- 1. APIキーの読み込みとクライアント初期化 ---
+api_key = os.environ.get("GEMINI_API_KEY")
+
+if not api_key:
+    print("エラー: 環境変数 'GEMINI_API_KEY' が見つかりません。")
+    print("ターミナルで 'export GEMINI_API_KEY=...' を設定したか、~/.zshrc を確認してください。")
     exit()
+
+try:
+    # 環境変数から取得したキーで初期化
+    client = genai.Client(api_key=api_key)
+except Exception as e:
+    print(f"クライアント初期化エラー: {e}")
+    exit()
+
+# try:
+#     # 1. クライアントの初期化
+#     # APIキーが環境変数に設定されていれば、引数なしでOK
+#     client = genai.Client()
+
+# except Exception as e:
+#     print("エラー: Gemini APIキーが正しく設定されていません。")
+#     print(f"詳細: {e}")
+#     # プログラムを終了
+#     exit()
 
 # 処理するファイル名
 ORIGINAL_FILE_PATH = r"C:\Users\Gy488chester-PC\souzoku\G2203【飯野紀一様】横浜市青葉区すみよし台９－３３不動産登記（土地全部事項）2025110500538755.PDF"
@@ -46,8 +61,7 @@ def upload_and_extract_info(original_path: str, temp_path: pathlib.Path, prompt:
         # --- ステップ C: AIモデルによる情報抽出 ---
         # ... (以前の generate_content 処理を続ける) ...
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[uploaded_file, prompt]
+            model="gemini-2.5-flash", contents=[uploaded_file, prompt]
         )
 
         print("\n--- 抽出結果 ---")
