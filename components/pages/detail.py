@@ -605,7 +605,7 @@ def DeceasedDetailView(page: Page, case_id: int):
             path_field.value = ""
 
         for heir in current_deceased.heirs:
-            heir_full_name = f"{heir.name_last} {heir.name_first}"
+            heir_full_name = f"{heir.name_last}　{heir.name_first}"
 
             # 契約者マークを追加するロジック
             is_contracting = getattr(heir, "is_contracting_party", False)  # 💡 契約者フラグを取得

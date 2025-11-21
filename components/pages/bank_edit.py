@@ -156,12 +156,25 @@ bank_master_edit_dialog = AlertDialog(
     modal=True,
 )
 
+# alert_dialog = AlertDialog(
+#     modal=True,
+#     title=Text("確認"),
+#     content=Text("操作を実行しますか？"),
+#     actions=[
+#         TextButton("はい", on_click=lambda e: print("はいがクリックされました")),
+#         TextButton("いいえ", on_click=lambda e: print("いいえがクリックされました")),
+#     ],
+#     actions_alignment=MainAxisAlignment.END,
+# )
+
 # ---------------------------------------------
 # 💡 マスターデータ関連のロジック
 # ---------------------------------------------
 
-def open_bank_master_dialog(e, page: Page, bank_id: int | None = None):
+# def open_bank_master_dialog(e, page: Page, bank_id: int | None = None):
+def open_bank_master_dialog(page: Page, bank_id: int):
     """銀行マスタの登録/編集モーダルを開く"""
+    global my_page
     global current_editing_bank_id
     current_editing_bank_id = bank_id
     
@@ -186,9 +199,10 @@ def open_bank_master_dialog(e, page: Page, bank_id: int | None = None):
         ElevatedButton("保存", on_click=lambda e: save_bank_master(e, page)),
     ]
     
-    page.dialog = bank_master_edit_dialog
-    bank_master_edit_dialog.open = True
-    page.update()
+    my_page.open(bank_master_edit_dialog)
+    # page.dialog = bank_master_edit_dialog
+    # bank_master_edit_dialog.open = True
+    my_page.update()
 
 def close_bank_master_dialog(e, page: Page):
     """銀行マスタの登録/編集モーダルを閉じる"""
@@ -254,7 +268,8 @@ def update_bank_details(page: Page):
     # 💡 新規登録の選択肢が選ばれた場合
     if selected_bank_id_str == "add_new_bank":
         bank_name_field.value = "" # 選択をリセット（空のオプション value="" に合わせる）
-        open_bank_master_dialog(None, page, None) # 新規登録モーダルを開く
+        # open_bank_master_dialog(None, page, None) # 新規登録モーダルを開く
+        open_bank_master_dialog(page, None) # 新規登録モーダルを開く
         bank_name_field.update()
         return
 
@@ -459,8 +474,10 @@ def save_data(e, case_id: int):
     page.update()
     
 def BankEditView(page: Page, case_id: int):
+    global my_page
     # 💡 編集モードの判定に利用するローカル変数
     editing_asset_id = None
+    my_page = page
 
     # ----------------------------------------------------
     # 自動補完ヘルパー関数 (zengin_codeの Bank/Branch オブジェクトを検索)
