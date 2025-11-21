@@ -23,9 +23,8 @@ from components.pages.bank_balance_doc_edit import BankBalanceDocEditView
 from components.pages.bank_edit import BankEditView
 from components.pages.detail import DeceasedDetailView
 from components.pages.mizuho_balance_doc_view import MizuhoBalanceDocView
-from components.pages.visit_reserve_select_bank_view import VisitReserveSelectBankView
-from components.pages.visit_reserve_mizuho_view import VisitReserveMizuhoView
 from components.pages.smbc_balance_doc_view import SmbcBalanceDocView
+from components.pages.visit_reserve_select_bank_view import VisitReserveSelectBankView
 from services.deceased_service import get_contracting_party_name
 
 
@@ -136,16 +135,16 @@ class CaseHubView:
         # --- 3. 残高証明申請書類（選択画面） (balance_cert_doc.py) ---
         elif route.endswith("/doc/balance_cert"):
             return BalanceCertDocView(self.page, self.case_id)
-        
+
         # --- 4. 来店予約（銀行選択画面） ---
         elif route.endswith("/reserve/visit"):
             return VisitReserveSelectBankView(self.page, self.case_id)
 
         # --- 5. 銀行コードに基づく専用フォーム (残証申請 / 来店予約) ---
-        
+
         route_parts = route.split("/")
-        bank_code = route_parts[-1] # 最後のセグメントを抽出
-        
+        bank_code = route_parts[-1]  # 最後のセグメントを抽出
+
         # 5-1. 残証申請書類（編集画面 - 銀行別フォーム）
         if route.startswith(f"/case/{self.case_id}/doc/balance_cert/"):
             if route.startswith(f"/case/{self.case_id}/doc/balance_cert/mizuho/"):
@@ -159,10 +158,9 @@ class CaseHubView:
 
         # 5-2. 銀行別 来店予約ページ
         elif route.startswith(f"/case/{self.case_id}/reserve/"):
-            
             # 6-1. みずほ銀行 (コード: 0001) 専用ルート
             if route.startswith(f"/case/{self.case_id}/reserve/mizuho"):
-                return VisitReserveMizuhoView(self.page, self.case_id)
+                return PlaceholderView(self.page, "みずほ予約フォーム", f"案件ID: {self.case_id}")
 
             # 6-2. 三井住友銀行 (コード: 0009) 専用ルート
             elif route.startswith(f"/case/{self.case_id}/reserve/smbc"):
@@ -171,14 +169,13 @@ class CaseHubView:
             # 6-3. 標準予約フォーム
             elif route.startswith(f"/case/{self.case_id}/reserve/standard/"):
                 return PlaceholderView(
-                     self.page,
-                     f"標準フォーム ({bank_code}) 来店予約",
-                     f"案件ID: {self.case_id} / 銀行コード: {bank_code} の予約資料を作成。",
+                    self.page,
+                    f"標準フォーム ({bank_code}) 来店予約",
+                    f"案件ID: {self.case_id} / 銀行コード: {bank_code} の予約資料を作成。",
                 )
-        
+
         # --- 99. デフォルト / ルートエラー ---
         return PlaceholderView(self.page, "ページが見つかりません", f"ルート: {route}")
-    
 
     def _get_index_from_route(self, route):
         """ルートURLから対応するナビゲーションインデックスを計算する"""
@@ -199,7 +196,9 @@ class CaseHubView:
         new_content_candidate = self._get_main_content_for_route(route)
 
         if new_content_candidate is None:
-             new_content_candidate = PlaceholderView(self.page, "エラー", f"無効なルートが指定されました: {route}")
+            new_content_candidate = PlaceholderView(
+                self.page, "エラー", f"無効なルートが指定されました: {route}"
+            )
 
         # 3. self.main_content (Columnコントロール) の controls を更新
         self.main_content.controls.clear()
