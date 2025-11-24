@@ -9,14 +9,13 @@ from flet import (
     FontWeight,
     Icon,
     Icons,
-    Page,
-    Row,
-    Text,
     ListTile,
     ListView,
+    Page,
+    Text,
 )
+
 from services.deceased_service import get_financial_asset_by_case
-from services.deceased_service import get_financial_asset_automation_data 
 
 
 class VisitReserveSelectBankView(Column):
@@ -33,7 +32,7 @@ class VisitReserveSelectBankView(Column):
         )
         self.page = page
         self.case_id = case_id
-        
+
         self.controls = [
             Text(
                 "📅 来店予約 - 銀行選択",
@@ -50,28 +49,33 @@ class VisitReserveSelectBankView(Column):
                 padding=10,
                 border_radius=10,
                 bgcolor=Colors.WHITE,
-                height=400, # 一覧表示用の高さを設定
-            )
+                # height=400, # 一覧表示用の高さを設定
+            ),
         ]
 
     def _create_bank_list_controls(self):
         """登録済みの銀行リストを生成する"""
-        
+
         # 1. 案件の金融資産リストを取得
         assets = get_financial_asset_by_case(self.case_id)
-        
+
         # 2. 銀行名とコードのユニークなセットを作成
         unique_banks = {}
         for asset in assets:
-            bank_code = asset.get('bank_code')
-            bank_name = asset.get('bank_name')
+            bank_code = asset.get("bank_code")
+            bank_name = asset.get("bank_name")
             if bank_code and bank_code not in unique_banks:
                 unique_banks[bank_code] = bank_name
-        
+
         if not unique_banks:
-            return ListView(controls=[
-                Text("現在、この案件に登録されている銀行口座情報がありません。先に銀行登録を行ってください。", color=Colors.RED_700)
-            ])
+            return ListView(
+                controls=[
+                    Text(
+                        "現在、この案件に登録されている銀行口座情報がありません。先に銀行登録を行ってください。",
+                        color=Colors.RED_700,
+                    )
+                ]
+            )
 
         controls = []
         for code, name in unique_banks.items():
@@ -87,7 +91,7 @@ class VisitReserveSelectBankView(Column):
                 else:
                     # 汎用/標準予約ルート (銀行コードを引数として渡す)
                     self.page.go(f"/case/{self.case_id}/reserve/standard/{code}")
-            
+
             controls.append(
                 ListTile(
                     leading=Icon(Icons.ACCOUNT_BALANCE),
@@ -96,10 +100,10 @@ class VisitReserveSelectBankView(Column):
                         "来店予約へ進む",
                         icon=Icons.CALENDAR_MONTH,
                         on_click=open_bank_reserve_page,
-                        data=code
+                        data=code,
                     ),
-                    on_click=open_bank_reserve_page
+                    on_click=open_bank_reserve_page,
                 )
             )
-        
+
         return ListView(controls=controls)

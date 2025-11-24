@@ -22,7 +22,9 @@ from components.pages.balance_cert_doc import BalanceCertDocView
 from components.pages.bank_balance_doc_edit import BankBalanceDocEditView
 from components.pages.bank_edit import BankEditView
 from components.pages.detail import DeceasedDetailView
+from components.pages.freeze_proc_view import FreezeProcView
 from components.pages.mizuho_balance_doc_view import MizuhoBalanceDocView
+from components.pages.securities_edit import SecuritiesEditView
 from components.pages.smbc_balance_doc_view import SmbcBalanceDocView
 from components.pages.visit_reserve_select_bank_view import VisitReserveSelectBankView
 from services.deceased_service import get_contracting_party_name
@@ -131,6 +133,23 @@ class CaseHubView:
         # 💡 修正: /bank/add のルートを上部に配置し、他のルートと競合させない
         elif route.endswith("/bank/add"):
             return BankEditView(self.page, self.case_id)
+
+        # --- 💡 凍結手続き (一覧画面) ---
+        elif route.endswith("/proc/freeze"):
+            return FreezeProcView(self.page, self.case_id)
+
+        # --- 💡 凍結手続き (詳細画面 - 各銀行ごと) ---
+        elif route.startswith(f"/case/{self.case_id}/proc/freeze/"):
+            # 銀行コードを取得
+            bank_code = route.split("/")[-1]
+            return PlaceholderView(
+                self.page,
+                f"凍結連絡詳細 (コード: {bank_code})",
+                "ここに電話番号、連絡メモ、TODOなどが表示されます（未実装）",
+            )
+
+        elif route.endswith("/securities/add"):
+            return SecuritiesEditView(self.page, self.case_id)
 
         # --- 3. 残高証明申請書類（選択画面） (balance_cert_doc.py) ---
         elif route.endswith("/doc/balance_cert"):

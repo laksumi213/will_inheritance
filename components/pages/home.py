@@ -1,7 +1,7 @@
 # /components/pages/home.py
 
-import threading
 import datetime
+import threading
 
 from flet import (
     Colors,
@@ -9,37 +9,38 @@ from flet import (
     Container,
     CrossAxisAlignment,
     Divider,
+    Dropdown,
     ElevatedButton,
+    FilePicker,  # 追加
+    FilePickerResultEvent,  # 追加
+    Icon,
+    Icons,
     ListTile,
     ListView,
+    MainAxisAlignment,  # 追加
     Page,
     Row,
+    SnackBar,  # 追加
     Text,
     TextField,
     TextStyle,
-    Dropdown, 
-    dropdown, 
-    Icon,     
-    Icons,
     border,
-    FilePicker, # 追加
-    FilePickerResultEvent, # 追加
-    SnackBar, # 追加
-    MainAxisAlignment # 追加
+    dropdown,
 )
 
-from services.json_backup_service import export_database_to_json, import_database_from_json
 from components.pages.client_register import reset_all_global_fields
 from components.utils.file_system import open_case_folder
 from services.db_setup import (
+    get_all_case_statuses,
     get_all_users,
     get_case_folder_path,
     get_case_list,
     get_incomplete_tasks,
     get_my_cases,
     get_user_capacity_data,
-    get_all_case_statuses
 )
+from services.json_backup_service import export_database_to_json, import_database_from_json
+
 
 class CaseDashboardView(Column):
     """
@@ -67,13 +68,12 @@ class CaseDashboardView(Column):
         # ページにオーバーレイとして登録 (必須)
         self.page.overlay.extend([self.export_file_picker, self.import_file_picker])
 
-
         # --- 1. データベースからマスタ情報の取得 ---
-        self.USER_MAP = get_all_users() 
+        self.USER_MAP = get_all_users()
         self.STATUS_LIST = get_all_case_statuses()
 
         # --- 2. 検索・フィルタ用コントロールの作成 ---
-        
+
         # (既存のコードと同じ)
         self.search_field = TextField(
             label="案件番号/依頼者名で検索",
@@ -81,16 +81,16 @@ class CaseDashboardView(Column):
             width=300,
             prefix_icon=Icons.SEARCH,
             label_style=TextStyle(color=Colors.BLACK),
+            autofocus=True,
             color=Colors.BLACK,
         )
 
         self.status_filter = Dropdown(
             label="ステータス",
             width=150,
-            options=[dropdown.Option(key="-1", text="全て")] + [
-                dropdown.Option(key=str(s.id), text=s.name) for s in self.STATUS_LIST
-            ],
-            value="-1", 
+            options=[dropdown.Option(key="-1", text="全て")]
+            + [dropdown.Option(key=str(s.id), text=s.name) for s in self.STATUS_LIST],
+            value="-1",
             on_change=self._on_filter_change,
             color=Colors.BLACK,
             label_style=TextStyle(color=Colors.BLACK),
@@ -104,8 +104,8 @@ class CaseDashboardView(Column):
             label="担当者絞り込み",
             width=180,
             options=self.manager_filter_options,
-            value="-1", 
-            disabled=not self.is_manager, 
+            value="-1",
+            disabled=not self.is_manager,
             on_change=self._on_filter_change,
             color=Colors.BLACK,
             label_style=TextStyle(color=Colors.BLACK),
@@ -132,16 +132,16 @@ class CaseDashboardView(Column):
                         # 左サイドバー
                         Column(
                             controls=self._get_left_sidebar_controls(),
-                            width=400, 
+                            width=400,
                             scroll="auto",
                         ),
                         # 右メインエリア
                         Column(
                             expand=True,
                             controls=[
-                                self._create_top_action_area(), # 💡 新規追加: CSVボタンエリア
+                                self._create_top_action_area(),  # 💡 新規追加: CSVボタンエリア
                                 Divider(),
-                                self._create_control_area(), # フィルタエリア
+                                self._create_control_area(),  # フィルタエリア
                                 Divider(),
                                 self.main_list_view_column,  # リストエリア
                             ],
@@ -155,10 +155,9 @@ class CaseDashboardView(Column):
     def _create_top_action_area(self):
         """画面上部のデータ管理ボタンエリア (JSON版)"""
         return Row(
-            alignment=MainAxisAlignment.END, 
+            alignment=MainAxisAlignment.END,
             controls=[
                 Text("データ管理: ", weight="bold", size=14),
-                
                 # エクスポートボタン
                 ElevatedButton(
                     "全データ保存 (JSON)",
@@ -167,12 +166,11 @@ class CaseDashboardView(Column):
                     color=Colors.WHITE,
                     on_click=lambda _: self.export_file_picker.save_file(
                         allowed_extensions=["json"],
-                        file_name=f"backup_{datetime.date.today()}.json", # 日付入りのファイル名
-                        dialog_title="バックアップファイルの保存先を選択"
-                    )
+                        file_name=f"backup_{datetime.date.today()}.json",  # 日付入りのファイル名
+                        dialog_title="バックアップファイルの保存先を選択",
+                    ),
                 ),
                 Container(width=10),
-                
                 # インポートボタン
                 ElevatedButton(
                     "データ復元/取込",
@@ -182,10 +180,10 @@ class CaseDashboardView(Column):
                     on_click=lambda _: self.import_file_picker.pick_files(
                         allow_multiple=False,
                         allowed_extensions=["json"],
-                        dialog_title="復元するJSONファイルを選択 (既存データは上書きされます)"
-                    )
+                        dialog_title="復元するJSONファイルを選択 (既存データは上書きされます)",
+                    ),
                 ),
-            ]
+            ],
         )
 
     # コールバックメソッドの修正 (export_cases_to_csv -> export_database_to_json)
@@ -193,7 +191,7 @@ class CaseDashboardView(Column):
         if e.path:
             # JSONエクスポートを実行
             success = export_database_to_json(e.path)
-            
+
             if success:
                 self._show_snack(f"データを保存しました: {e.path}", Colors.GREEN)
             else:
@@ -203,13 +201,13 @@ class CaseDashboardView(Column):
     def _on_import_result(self, e: FilePickerResultEvent):
         if e.files:
             file_path = e.files[0].path
-            
+
             # JSONインポートを実行
             success, msg = import_database_from_json(file_path)
-            
+
             self._show_snack(msg, Colors.GREEN if success else Colors.RED)
             if success:
-                self._update_all_views() # 画面を最新化
+                self._update_all_views()  # 画面を最新化
 
     def _show_snack(self, msg, color):
         self.page.open(
@@ -222,7 +220,7 @@ class CaseDashboardView(Column):
         self.page.update()
 
     # --- 既存のメソッド群 ---
-    
+
     def did_mount(self):
         self._update_all_views()
 
@@ -256,7 +254,7 @@ class CaseDashboardView(Column):
     def _run_search_action(self, *args):
         """現在の入力値（テキスト、ステータス、担当者）を取得してDB検索を実行"""
         search_term = self.search_field.value if self.search_field.value else ""
-        
+
         status_id_val = self.status_filter.value
         status_id = None
         if status_id_val and status_id_val != "-1":
@@ -264,10 +262,10 @@ class CaseDashboardView(Column):
                 status_id = int(status_id_val)
             except ValueError:
                 status_id = None
-        
+
         user_id_val = self.user_filter.value
         user_id = None
-        
+
         if user_id_val and user_id_val != "-1":
             try:
                 user_id = int(user_id_val)
@@ -276,14 +274,12 @@ class CaseDashboardView(Column):
                 user_id = None
 
         new_items = self._get_case_items(
-            search_term=search_term,
-            status_filter_id=status_id,
-            user_filter_id=user_id
+            search_term=search_term, status_filter_id=status_id, user_filter_id=user_id
         )
 
-        list_view = self.main_list_view_column.controls[-1] 
+        list_view = self.main_list_view_column.controls[-1]
         list_view.controls = new_items
-        
+
         self.page.run_thread(self.update)
 
     def _update_all_views(self):
@@ -294,7 +290,7 @@ class CaseDashboardView(Column):
         else:
             self.my_case_list_container.content.controls = self._get_my_case_items()
 
-        self._run_search_action() 
+        self._run_search_action()
 
         self.update()
 
@@ -302,18 +298,18 @@ class CaseDashboardView(Column):
 
     def _get_case_items(self, search_term="", status_filter_id=None, user_filter_id=None):
         cases = get_case_list(
-            search_term=search_term, 
-            status_id=status_filter_id,
-            user_id=user_filter_id 
+            search_term=search_term, status_id=status_filter_id, user_id=user_filter_id
         )
 
         if not cases:
-            msg = "条件に一致する案件はありません。" if (user_filter_id or status_filter_id or search_term) else "案件がまだ登録されていません。"
+            msg = (
+                "条件に一致する案件はありません。"
+                if (user_filter_id or status_filter_id or search_term)
+                else "案件がまだ登録されていません。"
+            )
             return [
                 Container(
-                    content=Text(msg, color=Colors.GREY_600),
-                    alignment=dict(x=0, y=0),
-                    padding=20
+                    content=Text(msg, color=Colors.GREY_600), alignment=dict(x=0, y=0), padding=20
                 )
             ]
 
@@ -346,27 +342,38 @@ class CaseDashboardView(Column):
                 Container(
                     content=ListTile(
                         leading=Icon(status_icon, color=status_color),
-                        title=Row([
-                            Text(f"{case['case_number']}", weight="bold", size=16),
-                            Text(f"{case['client_name']} 様", size=16),
-                            Container(
-                                content=Text(case['status'], color=Colors.WHITE, size=12),
-                                bgcolor=status_color,
-                                padding=5,
-                                border_radius=5,
-                            )
-                        ], spacing=10, vertical_alignment=CrossAxisAlignment.CENTER),
-                        subtitle=Column([
-                            Text(f"{role_text}被相続人: {case['deceased_name']}"),
-                            Text(f"最終更新: {case['last_updated_at']} | 次のアクション: {case['description'] or 'なし'}", size=12, color=Colors.GREY),
-                        ], spacing=2),
+                        title=Row(
+                            [
+                                Text(f"{case['case_number']}", weight="bold", size=16),
+                                Text(f"{case['client_name']} 様", size=16),
+                                Container(
+                                    content=Text(case["status"], color=Colors.WHITE, size=12),
+                                    bgcolor=status_color,
+                                    padding=5,
+                                    border_radius=5,
+                                ),
+                            ],
+                            spacing=10,
+                            vertical_alignment=CrossAxisAlignment.CENTER,
+                        ),
+                        subtitle=Column(
+                            [
+                                Text(f"{role_text}被相続人: {case['deceased_name']}"),
+                                Text(
+                                    f"最終更新: {case['last_updated_at']} | 次のアクション: {case['description'] or 'なし'}",
+                                    size=12,
+                                    color=Colors.GREY,
+                                ),
+                            ],
+                            spacing=2,
+                        ),
                         trailing=ElevatedButton("📂 フォルダ", on_click=open_folder, height=30),
                         on_click=open_detail,
                     ),
                     bgcolor=Colors.WHITE,
                     border_radius=8,
                     padding=5,
-                    border=border.only(bottom=border.BorderSide(1, color=Colors.GREY_200))
+                    border=border.only(bottom=border.BorderSide(1, color=Colors.GREY_200)),
                 )
             )
         return items
@@ -380,7 +387,9 @@ class CaseDashboardView(Column):
             items.append(
                 ListTile(
                     title=Text(f"{d['name']} ({d['role']})", weight="bold", color=color),
-                    subtitle=Text(f"未完了: {d['total_incomplete_tasks']} | 案件: {d['total_cases_handled']}"),
+                    subtitle=Text(
+                        f"未完了: {d['total_incomplete_tasks']} | 案件: {d['total_cases_handled']}"
+                    ),
                     dense=True,
                 )
             )
@@ -389,7 +398,10 @@ class CaseDashboardView(Column):
     def _create_manager_capacity_view(self):
         return Container(
             content=Column(controls=self._get_capacity_items(), spacing=5, scroll="auto"),
-            padding=10, bgcolor=Colors.WHITE, border_radius=10, height=200,
+            padding=10,
+            bgcolor=Colors.WHITE,
+            border_radius=10,
+            height=300,
         )
 
     # --- My Case View Helper ---
@@ -400,13 +412,18 @@ class CaseDashboardView(Column):
 
         items = [Text("あなたの担当案件", weight="bold", color=Colors.BLACK)]
         for case in cases:
+
             def open_detail(e, cid=case["case_id"]):
                 self.page.go(f"/detail/{cid}")
 
             items.append(
                 ListTile(
                     title=Text(f"案件: {case['case_number']}", color=Colors.BLACK, size=14),
-                    subtitle=Text(f"依頼者: {case['client_name']} | 状態: {case['status']}", color=Colors.BLACK, size=12),
+                    subtitle=Text(
+                        f"依頼者: {case['client_name']} | 状態: {case['status']}",
+                        color=Colors.BLACK,
+                        size=12,
+                    ),
                     dense=True,
                     on_click=open_detail,
                 )
@@ -416,7 +433,12 @@ class CaseDashboardView(Column):
     def _create_my_case_list_view(self):
         """todoリストエリアのUIを作成"""
         return Container(
-            content=Column(controls=self._get_my_case_items(), spacing=5, scroll="auto"), padding=10, bgcolor=Colors.WHITE, border_radius=10, height=200)
+            content=Column(controls=self._get_my_case_items(), spacing=5, scroll="auto"),
+            padding=10,
+            bgcolor=Colors.WHITE,
+            border_radius=10,
+            height=200,
+        )
 
     # --- Todo View Helper ---
     def _get_todo_items(self):
@@ -426,13 +448,17 @@ class CaseDashboardView(Column):
 
         items = [Text("期限が近いタスク", weight="bold", color=Colors.BLACK)]
         for task in tasks:
+
             def open_detail(e, cid=task["case_id"]):
                 self.page.go(f"/detail/{cid}")
 
             items.append(
                 ListTile(
                     title=Text(task["description"], color=Colors.BLACK, size=14),
-                    subtitle=Text(f"案件: {task['case_number']}({task['client_name']}) | 期限: {task['due_date']}", color=Colors.BLACK),
+                    subtitle=Text(
+                        f"案件: {task['case_number']}({task['client_name']}) | 期限: {task['due_date']}",
+                        color=Colors.BLACK,
+                    ),
                     dense=True,
                     on_click=open_detail,
                 )
@@ -442,13 +468,13 @@ class CaseDashboardView(Column):
     def _create_todo_list_view(self):
         """todoリストエリアのUIを作成"""
         return Container(
-            content=Column(controls=self._get_todo_items(), spacing=5, scroll="auto"), 
-            padding=10, 
-            bgcolor=Colors.WHITE, 
-            border_radius=10, 
-            height=300
+            content=Column(controls=self._get_todo_items(), spacing=5, scroll="auto"),
+            padding=10,
+            bgcolor=Colors.WHITE,
+            border_radius=10,
+            height=300,
         )
-    
+
     # --- Main Controls ---
     def _create_control_area(self):
         return Container(
@@ -474,7 +500,7 @@ class CaseDashboardView(Column):
             bgcolor=Colors.BLUE_GREY_50,
             border_radius=8,
         )
-    
+
     def _handle_new_case_register(self):
         reset_all_global_fields()
         self.page.go("/client_register")
@@ -489,11 +515,9 @@ class CaseDashboardView(Column):
         return Column(
             controls=[
                 Container(
-                    content=Row([Text("案件一覧", size=20, weight="bold")]),
-                    padding=dict(left=10)
+                    content=Row([Text("案件一覧", size=20, weight="bold")]), padding=dict(left=10)
                 ),
                 main_list_view,
             ],
             expand=True,
         )
-    

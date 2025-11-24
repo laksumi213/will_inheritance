@@ -7,7 +7,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from services.db_setup import (
+    AccountTypeMaster,
     Address,
+    BankMaster,
+    BranchMaster,
     Case,
     Contact,
     D_AddressHistory,
@@ -19,9 +22,6 @@ from services.db_setup import (
     Heir,
     Session,
     Task,
-    AccountTypeMaster,
-    BankMaster,
-    BranchMaster,
     delete_case_and_all_related_data,
     get_all_users,
     get_case_by_number,
@@ -31,29 +31,41 @@ from services.db_setup import (
 
 # --- 内部ヘルパー関数 ---
 
+
 def get_account_type_masters(db: Session) -> list[AccountTypeMaster]:
     """全口座種類マスタを取得"""
     return db.query(AccountTypeMaster).all()
+
 
 def get_bank_masters(db: Session) -> list[BankMaster]:
     """全銀行マスタを取得"""
     return db.query(BankMaster).order_by(BankMaster.bank_name).all()
 
+
 def get_branch_masters_by_bank_id(db: Session, bank_id: int) -> list[BranchMaster]:
     """指定された銀行IDに紐づく全支店マスタを取得"""
-    return db.query(BranchMaster).filter(BranchMaster.bank_id == bank_id).order_by(BranchMaster.branch_name).all()
+    return (
+        db.query(BranchMaster)
+        .filter(BranchMaster.bank_id == bank_id)
+        .order_by(BranchMaster.branch_name)
+        .all()
+    )
+
 
 def get_bank_master_by_id(db: Session, bank_id: int) -> BankMaster | None:
     """銀行マスタをIDで取得"""
     return db.query(BankMaster).filter(BankMaster.id == bank_id).first()
 
-def add_or_update_bank_master(db: Session, bank_id: int | None, name: str, code: str) -> BankMaster | None:
+
+def add_or_update_bank_master(
+    db: Session, bank_id: int | None, name: str, code: str
+) -> BankMaster | None:
     """銀行マスタを新規登録または更新する"""
     name = name.strip()
     code = code.strip()
 
     if not name or not code:
-        return None # 必須項目が欠落
+        return None  # 必須項目が欠落
 
     try:
         if bank_id:
@@ -67,7 +79,7 @@ def add_or_update_bank_master(db: Session, bank_id: int | None, name: str, code:
             # 新規登録
             bank = BankMaster(bank_name=name, bank_code=code)
             db.add(bank)
-        
+
         db.commit()
         db.refresh(bank)
         return bank
@@ -77,11 +89,12 @@ def add_or_update_bank_master(db: Session, bank_id: int | None, name: str, code:
         print(f"銀行マスタの登録/更新中にエラーが発生しました: {e}")
         return None
 
+
 # add_financial_asset と update_financial_asset の引数をIDベースに変更
 def add_financial_asset(
     case_id: int,
-    bank_id: int,          # 💡 IDに変更
-    branch_id: int | None, # 💡 IDに変更
+    bank_id: int,  # 💡 IDに変更
+    branch_id: int | None,  # 💡 IDに変更
     account_type_id: int,  # 💡 IDに変更
     account_number: str,
     balance: float,
@@ -106,7 +119,8 @@ def add_financial_asset(
             db.rollback()
             print(f"金融資産の登録中にエラーが発生しました: {e}")
             return False
-        
+
+
 def get_bank_cert_document_data(case_id: int, bank_code: str) -> dict | None:
     """
     指定された銀行コードの残高証明書申請に必要な、案件、被相続人、契約者の詳細情報を統合して取得する。
@@ -235,9 +249,9 @@ def get_financial_asset_by_case(case_id: int) -> list[dict]:
         return [
             {
                 "id": a.id,
-                "bank_id": a.bank_id, # 💡 IDを追加
-                "branch_id": a.branch_id, # 💡 IDを追加
-                "account_type_id": a.account_type_id, # 💡 IDを追加
+                "bank_id": a.bank_id,  # 💡 IDを追加
+                "branch_id": a.branch_id,  # 💡 IDを追加
+                "account_type_id": a.account_type_id,  # 💡 IDを追加
                 "bank_name": a.bank_ref.bank_name if a.bank_ref else "N/A",
                 "bank_code": a.bank_ref.bank_code if a.bank_ref else "N/A",
                 "branch_name": a.branch_ref.branch_name if a.branch_ref else "N/A",
@@ -313,8 +327,8 @@ def get_financial_assets_by_bank_code(case_id: int, bank_code: str) -> list[dict
 
 def update_financial_asset(
     asset_id: int,
-    bank_id: int, 
-    branch_id: int | None, 
+    bank_id: int,
+    branch_id: int | None,
     account_type_id: int,
     account_number: str,
     balance: float | None,
@@ -334,8 +348,8 @@ def update_financial_asset(
             # ✅ 修正: 名前/コードベースのフィールドをIDベースに変更
             asset_to_update.bank_id = bank_id
             asset_to_update.branch_id = branch_id
-            asset_to_update.account_type_id = account_type_id # 新たに追加
-            
+            asset_to_update.account_type_id = account_type_id  # 新たに追加
+
             asset_to_update.account_number = account_number
 
             if balance is not None:
@@ -542,7 +556,10 @@ def get_case_progress_summary(case_id: int):
             else "N/A",
         }
 
-def _update_address(db: Session, address_data: dict, existing_address_id: int | None = None) -> int | None:
+
+def _update_address(
+    db: Session, address_data: dict, existing_address_id: int | None = None
+) -> int | None:
     """住所データを更新または新規作成し、Address ID を返す。"""
     zip_code = address_data.get("zip_code")
     prefecture = address_data.get("prefecture")
@@ -570,8 +587,9 @@ def _update_address(db: Session, address_data: dict, existing_address_id: int | 
         # 新しい Address レコードを作成
         new_address = Address(**address_args)
         db.add(new_address)
-        db.flush() # IDを生成させる
+        db.flush()  # IDを生成させる
         return new_address.id
+
 
 def _update_or_create_address(
     session, owner_id, owner_type, zip_code, pref, city, street, building, is_last: bool = True
@@ -798,7 +816,7 @@ def update_deceased(
     past_addresses: list[dict] = None,
 ):
     """被相続人データを更新し、住所情報を登録・更新する。"""
-    
+
     # 日付の解析
     try:
         dob_date = parse_all_flexible_date(dob) if dob else None
@@ -829,21 +847,21 @@ def update_deceased(
                 "street_address": last_street,
                 "building_name": last_building,
             }
-            
+
             new_last_address_id = _update_address(db, last_address_data, deceased.last_address_id)
             deceased.last_address_id = new_last_address_id
 
             # 3. 過去の住所履歴 (D_AddressHistory) の処理
             if not past_addresses:
                 past_addresses = []
-                
+
             # 3.1. 削除処理: UIに存在しない古い履歴を削除
-            existing_history = db.query(D_AddressHistory).filter(
-                D_AddressHistory.deceased_id == deceased_id
-            ).all()
+            existing_history = (
+                db.query(D_AddressHistory).filter(D_AddressHistory.deceased_id == deceased_id).all()
+            )
 
             address_ids_to_delete = []
-            
+
             for history in existing_history:
                 # 削除対象: Deceased.last_address_id ではない全ての履歴 Address ID
                 if history.address_id != new_last_address_id:
@@ -853,47 +871,50 @@ def update_deceased(
                 # D_AddressHistory レコードを削除
                 db.query(D_AddressHistory).filter(
                     D_AddressHistory.address_id.in_(address_ids_to_delete),
-                    D_AddressHistory.deceased_id == deceased_id
+                    D_AddressHistory.deceased_id == deceased_id,
                 ).delete(synchronize_session=False)
 
                 # 孤立した Address レコードを削除
-                db.query(Address).filter(
-                    Address.id.in_(address_ids_to_delete)
-                ).delete(synchronize_session=False)
+                db.query(Address).filter(Address.id.in_(address_ids_to_delete)).delete(
+                    synchronize_session=False
+                )
 
-            
             # 3.2. UIから渡された過去の住所を新規作成・再登録
             for addr_data in past_addresses:
                 # 過去の住所は、履歴として残すため、常に新しい Address レコードを作成する
                 # 💡 ただし、ここではシンプルに「既存のAddress IDがあれば更新、なければ新規作成」のロジックを再利用する
                 existing_addr_id = addr_data.get("address_id")
-                
+
                 # Address レコードの更新または新規作成
                 address_id = _update_address(db, addr_data, existing_addr_id)
 
                 if address_id:
                     # D_AddressHistory のリンクレコードを検索/作成
-                    d_history = db.query(D_AddressHistory).filter(
-                        D_AddressHistory.deceased_id == deceased_id,
-                        D_AddressHistory.address_id == address_id,
-                    ).first()
-                    
+                    d_history = (
+                        db.query(D_AddressHistory)
+                        .filter(
+                            D_AddressHistory.deceased_id == deceased_id,
+                            D_AddressHistory.address_id == address_id,
+                        )
+                        .first()
+                    )
+
                     if not d_history:
                         # D_AddressHistory が存在しない場合は新規作成
                         d_history = D_AddressHistory(
                             deceased_id=deceased_id,
                             address_id=address_id,
-                            is_last_address=False # 過去の住所なので常に False
+                            is_last_address=False,  # 過去の住所なので常に False
                         )
                         db.add(d_history)
                     # 既に存在する場合は、何もしない（過去の住所は is_last_address=False が前提）
-            
+
             # 💡 最後の住所が D_AddressHistory に残っている場合は削除 (念のため)
             db.query(D_AddressHistory).filter(
                 D_AddressHistory.deceased_id == deceased_id,
-                D_AddressHistory.address_id == new_last_address_id # 最後の住所の Address ID
+                D_AddressHistory.address_id == new_last_address_id,  # 最後の住所の Address ID
             ).delete(synchronize_session=False)
-                    
+
             db.commit()
 
         except Exception as e:
@@ -1330,20 +1351,22 @@ def get_deceased_address_history(deceased_id: int) -> list[dict]:
     指定された被相続人の住所履歴（最後の住所を除く）を全て取得する。
     """
     with Session(bind=Engine) as session:
-        deceased = session.query(Deceased.last_address_id).filter(Deceased.id == deceased_id).first()
+        deceased = (
+            session.query(Deceased.last_address_id).filter(Deceased.id == deceased_id).first()
+        )
         last_address_id = deceased.last_address_id if deceased else None
-        
+
         # D_AddressHistory と Address を結合して、全履歴を取得
         query = (
             session.query(D_AddressHistory, Address)
             .join(Address, D_AddressHistory.address_id == Address.id)
             .filter(D_AddressHistory.deceased_id == deceased_id)
         )
-        
+
         # 最後の住所の Address ID を除外
         if last_address_id:
             query = query.filter(D_AddressHistory.address_id != last_address_id)
-            
+
         # is_last_address の降順ソートは不要（全て過去の住所になるため）
         history = query.all()
 
@@ -1462,6 +1485,7 @@ def is_case_number_duplicate(case_number: str) -> bool:
     existing_case = get_case_by_number(case_number)
     return existing_case is not None  # 案件が見つかれば True (重複) を返す
 
+
 def get_address_by_id(address_id: int) -> Address | None:
     """
     Address ID に基づいて Address レコードを取得する。
@@ -1472,6 +1496,7 @@ def get_address_by_id(address_id: int) -> Address | None:
     with Session(bind=Engine) as session:
         # Address モデルから ID に一致するレコードを取得
         return session.query(Address).filter(Address.id == address_id).first()
+
 
 def get_case_by_id(case_id: int) -> Case | None:
     """
@@ -1495,7 +1520,7 @@ def get_financial_asset_automation_data(case_id: int, target_bank_code: str) -> 
     """
     指定された案件IDと銀行コードに基づき、Web自動化に必要な
     案件、被相続人、契約者、住所、代表金融資産の統合データを取得する。
-    
+
     Args:
         case_id (int): 案件ID。
         target_bank_code (str): 対象銀行の銀行コード (例: "0001" for みずほ)。
@@ -1503,16 +1528,24 @@ def get_financial_asset_automation_data(case_id: int, target_bank_code: str) -> 
     Returns:
         dict | None: 統合データ辞書、または案件/銀行情報が見つからない場合は None。
     """
-    from services.db_setup import Deceased, Heir, Address, FinancialAsset, BankMaster, Engine, Session
     from sqlalchemy.orm import joinedload
-    
+
+    from services.db_setup import (
+        BankMaster,
+        Deceased,
+        Engine,
+        FinancialAsset,
+        Heir,
+        Session,
+    )
+
     with Session(bind=Engine) as session:
         # 1. Deceased, Case, 契約者Heir の統合取得 (Case IDからリレーションを辿る)
         deceased = (
             session.query(Deceased)
             .filter(Deceased.case_id == case_id)
             .options(joinedload(Deceased.case))
-            .options(joinedload(Deceased.last_address)) # last_address リレーションの利用
+            .options(joinedload(Deceased.last_address))  # last_address リレーションの利用
             .first()
         )
         if not deceased:
@@ -1525,12 +1558,12 @@ def get_financial_asset_automation_data(case_id: int, target_bank_code: str) -> 
             .filter(Heir.is_contracting_party == True)
             .first()
         )
-        
+
         # 契約者の連絡先 (代表の電話とメールを取得)
         contract_phone = None
         contract_email = None
         if contracting_heir:
-             # get_contact_info サービス関数が利用可能と仮定し、電話とメールを抽出
+            # get_contact_info サービス関数が利用可能と仮定し、電話とメールを抽出
             contacts = get_contact_info("heir", contracting_heir.id)
             contact_phone = next((c["value"] for c in contacts if c["type"] == "PHONE"), None)
             contact_email = next((c["value"] for c in contacts if c["type"] == "EMAIL"), None)
@@ -1541,46 +1574,113 @@ def get_financial_asset_automation_data(case_id: int, target_bank_code: str) -> 
             .join(BankMaster, FinancialAsset.bank_id == BankMaster.id)
             .filter(FinancialAsset.case_id == case_id)
             .filter(BankMaster.bank_code == target_bank_code)
-            .options(joinedload(FinancialAsset.branch_ref)) 
+            .options(joinedload(FinancialAsset.branch_ref))
             .first()
         )
-        
+
         # 4. 被相続人住所情報
         last_addr = deceased.last_address
-        
+
         # 5. 結果の構築
         return {
             "case_id": case_id,
             "case_number": deceased.case.case_number,
-            
             # --- 被相続人情報 ---
             "deceased_name": f"{deceased.name_last} {deceased.name_first}",
-            "deceased_dob": deceased.date_of_birth.strftime('%Y-%m-%d') if deceased.date_of_birth else None,
-            
+            "deceased_dob": deceased.date_of_birth.strftime("%Y-%m-%d")
+            if deceased.date_of_birth
+            else None,
             # 最終住所
             "deceased_last_zip": last_addr.zip_code if last_addr else None,
-            "deceased_last_addr1": f"{last_addr.prefecture}{last_addr.city_ward_town}{last_addr.street_address}" if last_addr else None,
+            "deceased_last_addr1": f"{last_addr.prefecture}{last_addr.city_ward_town}{last_addr.street_address}"
+            if last_addr
+            else None,
             "deceased_last_addr2": last_addr.building_name if last_addr else None,
-
             # --- 代表金融資産情報 ---
-            "bank_branch_code": representative_asset.branch_ref.branch_code if representative_asset and representative_asset.branch_ref else None,
-            "bank_account_number": representative_asset.account_number if representative_asset else None,
-            
+            "bank_branch_code": representative_asset.branch_ref.branch_code
+            if representative_asset and representative_asset.branch_ref
+            else None,
+            "bank_account_number": representative_asset.account_number
+            if representative_asset
+            else None,
             # --- 契約者/連絡先情報 ---
             "client_phone": contact_phone,
             "client_email": contact_email,
-            "staff_code": deceased.case.manager_id, # 担当者IDをコードとして利用
-            
+            "staff_code": deceased.case.manager_id,  # 担当者IDをコードとして利用
             # --- 法人固定情報 (汎用的な構造に含めるが、値は自動化プロセス側で補完) ---
-            "firm_name_kanji": "行政書士法人チェスター", 
+            "firm_name_kanji": "行政書士法人チェスター",
             "firm_name_kana": "ギョウセイショシホウジンチェスター",
             "staff_name_kanji": "森町 翼",
             "staff_name_kana": "モリマチ　ツバサ",
             "staff_tel": "050-6864-7034",
             "staff_mail": "t.morimachi_gy@chester-tax.com",
-            "firm_zip": "1030028", 
-            "firm_addr2": "八重洲口会館2階", 
-            "firm_dob_year": "2013", # 法人設立年 (仮)
+            "firm_zip": "1030028",
+            "firm_addr2": "八重洲口会館2階",
+            "firm_dob_year": "2013",  # 法人設立年 (仮)
             "firm_dob_month": "9",
             "firm_dob_day": "4",
         }
+
+
+# 💡 資産種別を指定して追加する関数
+def add_financial_asset_with_type(
+    case_id: int,
+    asset_type: str,
+    bank_id: int,
+    branch_id: int | None,
+    account_type_id: int | None,
+    account_number: str,
+    balance: float,
+    status: str,
+) -> bool:
+    """金融資産レコードを種別指定で新規登録する"""
+    with Session(bind=Engine) as db:
+        try:
+            new_asset = FinancialAsset(
+                case_id=case_id,
+                asset_type=asset_type,  # "BANK" or "SECURITIES"
+                bank_id=bank_id,
+                branch_id=branch_id,
+                account_type_id=account_type_id,
+                account_number=account_number,
+                balance=balance,
+                status=status,
+            )
+            db.add(new_asset)
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            print(f"金融資産({asset_type})登録エラー: {e}")
+            return False
+
+
+# 💡 資産種別でフィルタリングして取得する関数
+def get_financial_asset_by_case_and_type(case_id: int, asset_type: str) -> list[dict]:
+    """指定された案件IDと資産種別(BANK/SECURITIES)に紐づく資産を取得"""
+    with Session(bind=Engine) as session:
+        # asset_type でフィルタリング
+        assets = (
+            session.query(FinancialAsset)
+            .filter(FinancialAsset.case_id == case_id)
+            .filter(FinancialAsset.asset_type == asset_type)
+            .all()
+        )
+
+        return [
+            {
+                "id": a.id,
+                "bank_id": a.bank_id,
+                "branch_id": a.branch_id,
+                "account_type_id": a.account_type_id,
+                "bank_name": a.bank_ref.bank_name if a.bank_ref else "N/A",
+                "bank_code": a.bank_ref.bank_code if a.bank_ref else "N/A",
+                "branch_name": a.branch_ref.branch_name if a.branch_ref else "N/A",
+                "branch_code": a.branch_ref.branch_code if a.branch_ref else "N/A",
+                "account_type": a.account_type_ref.type_name if a.account_type_ref else "N/A",
+                "account_number": a.account_number,
+                "balance": a.balance,
+                "status": a.status,
+            }
+            for a in assets
+        ]

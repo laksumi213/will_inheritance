@@ -87,7 +87,6 @@ def main(page: Page):
                 page.views.append(hub_view)
 
                 # 内部コンテンツを切り替える (build() 時に初期化済みだが、念のためルートと同期させる)
-                # 💡 修正: 生成したインスタンスのメソッドを呼び出す
                 hub_instance.route_to_content(e.route)
 
         # --- 4. 被相続人編集ページ (/deceased_edit/<id>) ---
