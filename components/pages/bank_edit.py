@@ -302,6 +302,119 @@ bank_master_edit_dialog = AlertDialog(
 )
 
 # ---------------------------------------------
+# 支店マスタ (BranchMaster) 編集/新規登録用モーダル (追加)
+# ---------------------------------------------
+
+dialog_branch_name_field = TextField(label="支店名", width=250)
+dialog_branch_code_field = TextField(label="支店コード", width=150)
+dialog_branch_save_button = ElevatedButton("保存")
+
+branch_master_edit_dialog = AlertDialog(
+    title=Text("支店マスタの登録"),
+    content=Column(
+        [
+            dialog_branch_name_field,
+            dialog_branch_code_field,
+        ],
+        tight=True,
+        spacing=10,
+    ),
+    actions=[],
+    modal=True,
+)
+
+# ---------------------------------------------
+# 支店マスタ関連ロジック (追加)
+# ---------------------------------------------
+
+def open_branch_dialog(page: Page):
+    """支店登録モーダルを開く"""
+    # 親となる銀行が選択されているかチェック
+    if not bank_name_field.value or bank_name_field.value in ["def", "add_new_bank"]:
+        page.open(SnackBar(Text("先に銀行を選択してください。"), bgcolor=Colors.RED_500))
+        page.update()
+        # ドロップダウンをリセット
+        branch_name_field.value = "def"
+        branch_name_field.update()
+        return
+
+    # フォームクリア
+    dialog_branch_name_field.value = ""
+    dialog_branch_code_field.value = ""
+    
+    dialog_branch_save_button.on_click = lambda e: save_branch_master(e, page)
+    
+    branch_master_edit_dialog.actions = [
+        TextButton("キャンセル", on_click=lambda e: close_branch_dialog(e, page)),
+        dialog_branch_save_button,
+    ]
+    
+    page.open(branch_master_edit_dialog)
+    page.update()
+    dialog_branch_name_field.focus()
+
+def close_branch_dialog(e, page: Page):
+    branch_master_edit_dialog.open = False
+    page.update()
+
+def save_branch_master(e, page: Page):
+    """支店マスタを保存"""
+    name = dialog_branch_name_field.value
+    code = dialog_branch_code_field.value
+    
+    # 親銀行IDを取得
+    try:
+        parent_bank_id = int(bank_name_field.value)
+    except ValueError:
+        return
+
+    if not name or not code:
+        page.open(SnackBar(Text("支店名とコードは必須です。"), bgcolor=Colors.RED_500))
+        page.update()
+        return
+
+    with Session(bind=Engine) as db:
+        from services.db_setup import BranchMaster
+        
+        # 重複チェック
+        existing = db.query(BranchMaster).filter(
+            BranchMaster.bank_id == parent_bank_id,
+            BranchMaster.branch_code == code
+        ).first()
+        
+        if existing:
+            page.open(SnackBar(Text("この支店コードは既に登録されています。"), bgcolor=Colors.RED_500))
+            page.update()
+            return
+
+        try:
+            new_branch = BranchMaster(
+                bank_id=parent_bank_id,
+                branch_name=name,
+                branch_code=code
+            )
+            db.add(new_branch)
+            db.commit()
+            
+            close_branch_dialog(None, page)
+            page.open(SnackBar(Text("支店を登録しました。"), bgcolor=Colors.GREEN_500))
+            
+            # リストをリロードして、今登録した支店を選択状態にする
+            load_branch_options(page, parent_bank_id)
+            branch_name_field.value = str(new_branch.id)
+            branch_code_field.value = new_branch.branch_code
+            
+            branch_name_field.update()
+            branch_code_field.update()
+            
+        except Exception as ex:
+            db.rollback()
+            print(ex)
+            page.open(SnackBar(Text("保存エラーが発生しました。"), bgcolor=Colors.RED_500))
+            page.update()
+
+
+# ---------------------------------------------
 # 💡 マスターデータ関連のロジック
 # ---------------------------------------------
 
@@ -449,24 +562,25 @@ def update_branch_details(page: Page):
     """
     selected_branch_id_str = branch_name_field.value
 
+    # 💡 修正: [ ➕ 新しい支店を登録 ] が選ばれた場合
+    if selected_branch_id_str == "add_new_branch":
+        open_branch_dialog(page)
+        return
+
+    # 以下、既存の処理
     if selected_branch_id_str:
         try:
             branch_id = int(selected_branch_id_str)
             with Session(bind=Engine) as db:
                 from services.db_setup import BranchMaster
-
-                # 支店マスタをIDで取得 (この関数が services/deceased_service.py に存在しない場合は、ここでクエリを実行)
                 branch = db.query(BranchMaster).filter(BranchMaster.id == branch_id).first()
-
                 if branch:
                     branch_code_field.value = branch.branch_code
                     branch_code_field.update()
-                    # page.update() は不要。Fletではコントロールの update() がページ全体を更新しないため。
                     return
         except ValueError:
             pass
 
-    # 選択がリセットされた場合
     branch_code_field.value = ""
     branch_code_field.update()
     page.update()

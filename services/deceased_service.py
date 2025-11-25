@@ -178,6 +178,7 @@ def get_bank_cert_document_data(case_id: int, bank_code: str) -> dict | None:
                 "first_name": deceased.name_first,
                 "last_kana": deceased.name_last_kana,
                 "first_kana": deceased.name_first_kana,
+                "date_of_death": deceased.date_of_death,
                 "address": deceased_address_info,  # 住所情報全体
             },
             # 契約者情報

@@ -29,7 +29,6 @@ from flet import (
 # ただし、ライブラリに含まれていない場合は手動入力となる
 from zengin_code import Bank
 
-from components.pages.securities_edit import SECURITIES_MASTER
 from services.db_setup import BankMaster, Engine, Session
 
 # 💡 証券用のサービス関数（後述のdeceased_service.pyに追加が必要）をインポート
