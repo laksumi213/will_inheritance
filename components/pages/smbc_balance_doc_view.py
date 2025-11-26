@@ -183,7 +183,7 @@ def balance_certificate(data: dict, bank_code: str, case_id: int): # 💡 case_i
     )
 
 
-def balance_certificate_mailing(data: dict, bank_code: str):
+def balance_certificate_mailing(data: dict, bank_code: str, case_id: int):
     # --- 1. データ展開 ---
 
     case_number = data["case_number"]
@@ -209,12 +209,21 @@ def balance_certificate_mailing(data: dict, bank_code: str):
     # --- 2. ファイルパス構築 ---
     if os.name == "nt":
         print("Windows環境の処理")
-        output_path_base = rf"\\192.168.11.20\行政書士法人チェスター\01.個別ＪＯＢ\{case_number}{contractor_name_for_path}"
-        output_directory = output_path_base
+        # 💡 データベースからパスを取得
+        db_path = get_case_folder_path_service(case_id)
+        if db_path:
+            output_directory = db_path
+            print(f"DBから取得したパスを使用: {output_directory}")
+        else:
+            # DBにパスがない場合のフォールバック
+            output_directory = rf"\\192.168.11.20\行政書士法人チェスター\01.個別ＪＯＢ\{case_number}{contractor_name_for_path}"
+            print(f"DBにパスがないためフォールバックパスを使用: {output_directory}")
 
     elif os.name == "posix":
         print("POSIX環境の処理 (Mac/Linux)")
         output_path = os.path.dirname(os.path.dirname(__file__))  # デバッグ用パス
+
+        # 💡 実際の出力パスを構築
         output_directory = os.path.join(output_path, "generated_pdfs")
         os.makedirs(output_directory, exist_ok=True)
 
