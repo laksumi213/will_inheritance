@@ -1685,3 +1685,136 @@ def get_financial_asset_by_case_and_type(case_id: int, asset_type: str) -> list[
             }
             for a in assets
         ]
+
+
+# =======================================================
+# 💡 タスク管理用 CRUD関数
+# =======================================================
+
+
+def get_all_tasks_for_case(case_id: int) -> list[dict]:
+    """
+    指定された案件IDに紐づく全てのタスクを取得する。
+    UI表示用に辞書リスト形式で返す。
+    """
+    with Session(bind=Engine) as session:
+        tasks = (
+            session.query(Task)
+            .filter(Task.case_id == case_id)
+            .order_by(Task.due_date, Task.task_id)  # 期限順、ID順
+            .options(joinedload(Task.assigned_user))  # 担当者名を結合ロード
+            .all()
+        )
+
+        return [
+            {
+                "task_id": t.task_id,
+                "description": t.description,
+                "due_date": t.due_date.strftime("%Y-%m-%d") if t.due_date else None,
+                "is_completed": t.is_completed,
+                "assigned_user_id": t.assigned_user_id,
+                "assigned_user_name": t.assigned_user.name if t.assigned_user else "未割当",
+                "last_updated_at": t.last_updated_at.strftime("%Y-%m-%d")
+                if t.last_updated_at
+                else None,
+            }
+            for t in tasks
+        ]
+
+
+def save_task(
+    case_id: int,
+    task_id: int | None,
+    description: str,
+    due_date: str | None,
+    assigned_user_id: int | None,
+    is_completed: bool = False,
+) -> bool:
+    """
+    タスクを新規登録または更新する。
+    task_id が None の場合は新規登録、値がある場合は更新を行う。
+    """
+
+    # 日付文字列を datetime オブジェクトに変換
+    due_date_obj = None
+    if due_date:
+        try:
+            # 入力が 'YYYY-MM-DD' 形式であることを想定
+            due_date_obj = datetime.strptime(due_date, "%Y-%m-%d")
+        except ValueError:
+            print(f"日付形式エラー: {due_date}")
+            pass
+
+    with Session(bind=Engine) as session:
+        try:
+            if task_id:
+                # --- 更新 (Update) ---
+                task = session.query(Task).get(task_id)
+                if not task:
+                    print(f"タスクID {task_id} が見つかりません。")
+                    return False
+
+                task.description = description
+                task.due_date = due_date_obj
+                task.assigned_user_id = assigned_user_id
+                task.is_completed = is_completed
+                task.last_updated_at = datetime.now()
+
+            else:
+                # --- 新規作成 (Create) ---
+                new_task = Task(
+                    case_id=case_id,
+                    description=description,
+                    due_date=due_date_obj,
+                    assigned_user_id=assigned_user_id,
+                    is_completed=is_completed,
+                    last_updated_at=datetime.now(),
+                )
+                session.add(new_task)
+
+            session.commit()
+            return True
+
+        except Exception as e:
+            session.rollback()
+            print(f"タスク保存エラー: {e}")
+            return False
+
+
+def delete_task(task_id: int) -> bool:
+    """
+    指定されたタスクを削除する (Delete)。
+    """
+    with Session(bind=Engine) as session:
+        try:
+            task = session.query(Task).get(task_id)
+            if task:
+                session.delete(task)
+                session.commit()
+                return True
+            else:
+                print(f"削除対象のタスクID {task_id} が見つかりません。")
+                return False
+        except Exception as e:
+            session.rollback()
+            print(f"タスク削除エラー: {e}")
+            return False
+
+
+def toggle_task_completion(task_id: int, is_completed: bool) -> bool:
+    """
+    タスクの完了状態のみを切り替える (部分更新)。
+    """
+    with Session(bind=Engine) as session:
+        try:
+            task = session.query(Task).get(task_id)
+            if task:
+                task.is_completed = is_completed
+                task.last_updated_at = datetime.now()
+                session.commit()
+                return True
+            return False
+        except Exception as e:
+            session.rollback()
+            print(f"タスク状態更新エラー: {e}")
+            return False

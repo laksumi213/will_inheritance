@@ -3,7 +3,6 @@
 from flet import (
     AlertDialog,
     AppBar,
-    ButtonStyle,
     Colors,
     Column,
     Container,
@@ -29,17 +28,15 @@ from flet import (
     dropdown,
 )
 
-from components.utils.file_system import open_case_folder
 from components.utils.date_utils import convert_seireki_to_wareki
 from components.utils.ui_utils import show_confirm_dialog
 from services import deceased_service
 from services.db_setup import get_all_users
 from services.deceased_service import (
+    get_address_by_id,
     parse_all_flexible_date,
     update_case_assignment,  # 担当者更新
     update_case_folder_path,  # フォルダパス更新
-    get_address_by_id,
-    get_case_by_id,
 )
 
 # --- グローバルな UI 定義 ---
@@ -174,7 +171,7 @@ def DeceasedDetailView(page: Page, case_id: int):
     # --- サービス層からデータを取得 ---
     case = deceased_service.get_case_by_id(case_id)
     deceased = deceased_service.get_deceased_by_id(case_id)
-    
+
     # 新規モードのフラグを定義 (IDの比較を case_id に合わせる)
     is_new_client_case = case_id == -1  # 新規案件（契約者登録）モード
     is_new_deceased = case_id == 0  # 被相続人単独の新規登録モード
@@ -186,7 +183,7 @@ def DeceasedDetailView(page: Page, case_id: int):
         last_address = get_address_by_id(deceased.last_address_id)
 
     display_deceased_address = "未登録"
-    copyable_full_address = "未登録" # 💡 コピー用の変数も初期化
+    copyable_full_address = "未登録"  # 💡 コピー用の変数も初期化
 
     if last_address:
         # last_address は Address オブジェクト
@@ -196,29 +193,27 @@ def DeceasedDetailView(page: Page, case_id: int):
             last_address.city_ward_town,
             last_address.street_address,
         ]
-        
+
         # 住所本体の整形
         raw_deceased_address = "".join(filter(None, address_parts))
         building = last_address.building_name if last_address.building_name else ""
         zip_code = last_address.zip_code if last_address.zip_code else ""
-        
+
         # 1. 表示用の住所文字列の生成: 住所 + (建物名)
         if raw_deceased_address:
-             display_deceased_address = raw_deceased_address
-             if building:
-                 display_deceased_address += f" ({building})"
+            display_deceased_address = raw_deceased_address
+            if building:
+                display_deceased_address += f" ({building})"
         elif building:
-             display_deceased_address = f"建物名: {building}"
+            display_deceased_address = f"建物名: {building}"
         else:
             display_deceased_address = "未登録"
-            
+
         # 2. コピー用の完全な住所を作成: 〒 + 住所 + 建物名
         copyable_full_address = (
-            f"〒{zip_code} {raw_deceased_address} {building}"
-            if raw_deceased_address
-            else "未登録"
+            f"〒{zip_code} {raw_deceased_address} {building}" if raw_deceased_address else "未登録"
         ).strip()
-    
+
     # 案件情報を取得
     case = deceased.case if deceased and deceased.case else None
 
@@ -251,12 +246,12 @@ def DeceasedDetailView(page: Page, case_id: int):
     #         else:
     #             display_deceased_address = f"建物名: {building}"
 
-        # building = deceased_address_info.get("building_name", "")
-        # if building:
-        #     if display_deceased_address != "未登録":
-        #         display_deceased_address += f" ({building})"
-        #     else:
-        #         display_deceased_address = f"建物名: {building}"  # 住所がない場合は建物名のみ表示
+    # building = deceased_address_info.get("building_name", "")
+    # if building:
+    #     if display_deceased_address != "未登録":
+    #         display_deceased_address += f" ({building})"
+    #     else:
+    #         display_deceased_address = f"建物名: {building}"  # 住所がない場合は建物名のみ表示
 
     if deceased and not is_new_client_case:
         full_name = f"{deceased.name_last} {deceased.name_first}"
@@ -400,7 +395,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                         )
                     )
                     print(f"案件 {case_num} の削除に失敗しました。")
-                    
+
             except Exception as ex:
                 print(f"削除処理中に予期せぬエラー: {ex}")
                 page.oepn(
@@ -820,16 +815,15 @@ def DeceasedDetailView(page: Page, case_id: int):
                                                 f"案件番号: {case.case_number if case and case.case_number else 'N/A (未登録)'}",
                                                 size=18,
                                                 weight=FontWeight.BOLD,
-                                                color=Colors.DEEP_ORANGE_600,
+                                                # color=Colors.DEEP_ORANGE_600,
                                             ),
                                             # クリックで案件番号のみをコピー
-                                            on_click=lambda e, content=(
+                                            on_click=lambda e,
+                                            content=(
                                                 case.case_number
                                                 if case and case.case_number
                                                 else ""
-                                            ): copy_to_clipboard_and_notify(
-                                                e, page, content
-                                            ),
+                                            ): copy_to_clipboard_and_notify(e, page, content),
                                             tooltip="クリックして案件番号をコピー",
                                         ),
                                         ElevatedButton(
@@ -837,35 +831,39 @@ def DeceasedDetailView(page: Page, case_id: int):
                                             on_click=lambda e: page.open(delete_confirm_dialog),
                                             icon=Icons.DELETE_FOREVER,
                                             icon_color=Colors.RED,
-                                            style=ButtonStyle(bgcolor=Colors.RED_100),
+                                            bgcolor=Colors.BLUE_50,
+                                            color=Colors.BLUE_800,
+                                            # style=ButtonStyle(bgcolor=Colors.RED_100),
                                         ),
                                     ],
                                     alignment=MainAxisAlignment.SPACE_BETWEEN,
                                     vertical_alignment=CrossAxisAlignment.CENTER,
                                 ),
                                 Divider(height=10, color=Colors.TRANSPARENT),
-                                Row(
-                                    [
-                                        ElevatedButton(
-                                            "📂 案件フォルダを開く",
-                                            on_click=lambda e: open_case_folder(
-                                                page=page,
-                                                case_id=case.case_id,
-                                                get_path_service=deceased_service.get_case_folder_path
-                                            ),
-                                            style=ButtonStyle(
-                                                bgcolor=Colors.BLUE_50,
-                                                color=Colors.BLUE_800,
-                                            ),
-                                        )
-                                    ],
-                                    alignment=MainAxisAlignment.START,
-                                    visible=(case is not None and case.case_id is not None) # 案件がある場合のみ表示
-                                ),
-                                Divider(
-                                    height=10, color=Colors.TRANSPARENT
-                                ),  # 案件番号と担当者情報を少し離す
-                                # 💡 担当者情報表示 (被相続人情報の上に移動) 💡
+                                # Row(
+                                #     [
+                                #         ElevatedButton(
+                                #             "📂 案件フォルダを開く",
+                                #             on_click=lambda e: open_case_folder(
+                                #                 page=page,
+                                #                 case_id=case.case_id,
+                                #                 get_path_service=deceased_service.get_case_folder_path,
+                                #             ),
+                                #             style=ButtonStyle(
+                                #                 bgcolor=Colors.BLUE_50,
+                                #                 color=Colors.BLUE_800,
+                                #             ),
+                                #         )
+                                #     ],
+                                #     alignment=MainAxisAlignment.START,
+                                #     visible=(
+                                #         case is not None and case.case_id is not None
+                                #     ),  # 案件がある場合のみ表示
+                                # ),
+                                # Divider(
+                                #     height=10, color=Colors.TRANSPARENT
+                                # ),  # 案件番号と担当者情報を少し離す
+                                # # 💡 担当者情報表示 (被相続人情報の上に移動) 💡
                                 Row(
                                     [
                                         Text(
@@ -1061,7 +1059,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                         content=Column(
                             [
                                 Text(
-                                    "📁 案件フォルダ保存パス (OSネイティブ設定)",
+                                    "📁 案件フォルダ保存パス",
                                     weight=FontWeight.BOLD,
                                     size=18,
                                 ),

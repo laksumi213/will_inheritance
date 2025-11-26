@@ -26,23 +26,25 @@ from flet import (
 )
 
 # 証券会社も金融機関コード（4桁）を持つため、zengin_codeを利用できる場合は利用する
-# ただし、ライブラリに含まれていない場合は手動入力となる
 from zengin_code import Bank
 
 from services.db_setup import BankMaster, Engine, Session
 
-# 💡 証券用のサービス関数（後述のdeceased_service.pyに追加が必要）をインポート
+# 💡 証券用のサービス関数
 from services.deceased_service import (
-    add_financial_asset_with_type,  # 💡 asset_type指定用に追加
-    add_or_update_bank_master,  # マスタ登録は共通
+    add_financial_asset_with_type,
+    add_or_update_bank_master,
     delete_financial_asset,
     get_account_type_masters,
     get_bank_master_by_id,
     get_bank_masters,
     get_branch_masters_by_bank_id,
-    get_financial_asset_by_case_and_type,  # 💡 asset_typeフィルタ用に追加
+    get_financial_asset_by_case_and_type,
     update_financial_asset,
 )
+
+# 💡 共通ファイルからマスタデータをインポート
+from services.securities_data import SECURITIES_LIST, SECURITIES_MASTER
 
 # ---------------------------------------------
 # 部店マスタ (BranchMaster) 編集/新規登録用モーダル (追加)
@@ -155,39 +157,6 @@ def save_branch_master(e, page: Page):
             page.open(SnackBar(Text("保存エラーが発生しました。"), bgcolor=Colors.RED_500))
             page.update()
 
-
-SECURITIES_MASTER = {
-    # --- 大手・対面 ---
-    "0104": {"code": "0104", "name": "野村證券", "kana": "ノムラ"},
-    "0102": {"code": "0102", "name": "大和証券", "kana": "ダイワ"},
-    "0103": {"code": "0103", "name": "ＳＭＢＣ日興証券", "kana": "エスエムビーシーニッコウ"},
-    "0108": {"code": "0108", "name": "みずほ証券", "kana": "ミズホ"},
-    "0106": {
-        "code": "0106",
-        "name": "三菱ＵＦＪモルガン・スタンレー証券",
-        "kana": "ミツビシユーエフジェイモルガンスタンレー",
-    },
-    "0203": {"code": "0203", "name": "岡三証券", "kana": "オカサン"},
-    "0209": {"code": "0209", "name": "東海東京証券", "kana": "トウカイトウキョウ"},
-    # --- ネット証券 ---
-    "0143": {"code": "0143", "name": "ＳＢＩ証券", "kana": "エスビーアイ"},
-    "0146": {"code": "0146", "name": "楽天証券", "kana": "ラクテン"},
-    "0158": {"code": "0158", "name": "マネックス証券", "kana": "マネックス"},
-    "0148": {"code": "0148", "name": "松井証券", "kana": "マツイ"},
-    "0151": {"code": "0151", "name": "ａｕカブコム証券", "kana": "エーユーカブコム"},
-    "0265": {"code": "0265", "name": "ＧＭＯクリック証券", "kana": "ジーエムオークリック"},
-    "0363": {"code": "0363", "name": "ＰａｙＰａｙ証券", "kana": "ペイペイ"},
-    # --- その他 ---
-    "0116": {"code": "0116", "name": "岩井コスモ証券", "kana": "イワイコスモ"},
-    "0231": {"code": "0231", "name": "アイザワ証券", "kana": "アイザワ"},
-    "0213": {"code": "0213", "name": "東洋証券", "kana": "トウヨウ"},
-    "0210": {"code": "0210", "name": "水戸証券", "kana": "ミト"},
-    "0226": {"code": "0226", "name": "極東証券", "kana": "キョクトウ"},
-    "0233": {"code": "0233", "name": "丸三証券", "kana": "マルサン"},
-}
-
-# 検索しやすいようにリスト形式も用意
-SECURITIES_LIST = list(SECURITIES_MASTER.values())
 
 # ---------------------------------------------
 # 証券会社検索ヘルパー (独自マスタを使用)
@@ -323,8 +292,6 @@ def select_suggestion(e):
         code_val = data["code"]
     else:
         # 銀行（zengin_codeオブジェクト）の場合: .attr でアクセス
-        # zengin_codeのnameには「銀行」が含まれていないため付与する
-        # ※厳密には「信用金庫」等の場合もありますが、簡易的に対応
         name_val = f"{data.name}銀行"
         code_val = data.code
 
@@ -791,7 +758,7 @@ def SecuritiesEditView(page: Page, case_id: int):
 
     return Column(
         controls=[
-            Text(f"💹 証券口座登録 (案件ID: {case_id})", size=24, weight=FontWeight.BOLD),
+            Text("💹 証券口座登録", size=24, weight=FontWeight.BOLD),
             Divider(),
             Container(
                 content=Column(

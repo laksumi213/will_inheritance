@@ -227,7 +227,7 @@ class CaseDashboardView(Column):
     def _get_left_sidebar_controls(self):
         if self.is_manager:
             return [
-                Text("🔥 チーム負荷状況", size=16, weight="bold", color=Colors.RED_700),
+                Text("🔥 チーム負荷状況", size=16, weight="bold"),
                 self.capacity_view_container,
                 Divider(),
                 Text("📋 自分のToDo", size=16, weight="bold"),
@@ -309,7 +309,7 @@ class CaseDashboardView(Column):
             )
             return [
                 Container(
-                    content=Text(msg, color=Colors.GREY_600), alignment=dict(x=0, y=0), padding=20
+                    content=Text(msg, color=Colors.BLACK), alignment=dict(x=0, y=0), padding=20
                 )
             ]
 
@@ -344,8 +344,17 @@ class CaseDashboardView(Column):
                         leading=Icon(status_icon, color=status_color),
                         title=Row(
                             [
-                                Text(f"{case['case_number']}", weight="bold", size=16),
-                                Text(f"{case['client_name']} 様", size=16),
+                                Text(
+                                    f"{case['case_number']}",
+                                    weight="bold",
+                                    size=16,
+                                    color=Colors.BLACK,
+                                ),
+                                Text(
+                                    f"{case['client_name']} 様",
+                                    size=16,
+                                    color=Colors.BLACK,
+                                ),
                                 Container(
                                     content=Text(case["status"], color=Colors.WHITE, size=12),
                                     bgcolor=status_color,
@@ -358,11 +367,14 @@ class CaseDashboardView(Column):
                         ),
                         subtitle=Column(
                             [
-                                Text(f"{role_text}被相続人: {case['deceased_name']}"),
+                                Text(
+                                    f"{role_text}被相続人: {case['deceased_name']}",
+                                    color=Colors.BLACK,
+                                ),
                                 Text(
                                     f"最終更新: {case['last_updated_at']} | 次のアクション: {case['description'] or 'なし'}",
                                     size=12,
-                                    color=Colors.GREY,
+                                    color=Colors.BLACK,
                                 ),
                             ],
                             spacing=2,
@@ -388,7 +400,8 @@ class CaseDashboardView(Column):
                 ListTile(
                     title=Text(f"{d['name']} ({d['role']})", weight="bold", color=color),
                     subtitle=Text(
-                        f"未完了: {d['total_incomplete_tasks']} | 案件: {d['total_cases_handled']}"
+                        f"未完了: {d['total_incomplete_tasks']} | 案件: {d['total_cases_handled']}",
+                        color=Colors.BLACK,
                     ),
                     dense=True,
                 )
@@ -444,7 +457,7 @@ class CaseDashboardView(Column):
     def _get_todo_items(self):
         tasks = get_incomplete_tasks(user_id=1)
         if not tasks:
-            return [Text("現在、未完了のタスクはありません。", color=Colors.GREY_600)]
+            return [Text("現在、未完了のタスクはありません。", color=Colors.BLACK)]
 
         items = [Text("期限が近いタスク", weight="bold", color=Colors.BLACK)]
         for task in tasks:

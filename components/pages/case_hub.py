@@ -2,11 +2,13 @@
 
 from flet import (
     AppBar,
+    ButtonStyle,
     Colors,
     Column,
     Container,
     CrossAxisAlignment,
     Divider,
+    ElevatedButton,
     IconButton,
     Icons,
     NavigationRail,
@@ -26,7 +28,9 @@ from components.pages.freeze_proc_view import FreezeProcView
 from components.pages.mizuho_balance_doc_view import MizuhoBalanceDocView
 from components.pages.securities_edit import SecuritiesEditView
 from components.pages.smbc_balance_doc_view import SmbcBalanceDocView
+from components.pages.task_management_view import TaskManagementView
 from components.pages.visit_reserve_select_bank_view import VisitReserveSelectBankView
+from components.utils.file_system import open_case_folder
 from services.deceased_service import get_contracting_party_name
 
 
@@ -58,6 +62,11 @@ class CaseHubView:
                 "icon": Icons.INFO_OUTLINE,
                 "label": "案件概要/相続人",
                 "route": f"/case/{case_id}/overview",
+            },
+            "tasks": {
+                "icon": Icons.TASK_ALT,
+                "label": "タスク管理",
+                "route": f"/case/{case_id}/tasks",
             },
             "bank_reg": {
                 "icon": Icons.ACCOUNT_BALANCE,
@@ -121,7 +130,7 @@ class CaseHubView:
         現在のルートに基づいて、表示すべきメインコンテンツのFletコントロールを返す。
         """
 
-        # --- 1. 案件概要 / 相続人 (detail.py) ---
+        # --- 1. 案件概要 / 相続人 ---
         if (
             route.endswith(f"/case/{self.case_id}")
             or route.endswith(f"/case/{self.case_id}/overview")
@@ -129,18 +138,19 @@ class CaseHubView:
         ):
             return DeceasedDetailView(self.page, self.case_id)
 
-        # --- 2. 銀行口座登録・編集 (bank_edit.py) ---
-        # 💡 修正: /bank/add のルートを上部に配置し、他のルートと競合させない
+        # --- 💡 タスク管理 ---
+        elif route.endswith("/tasks"):
+            return TaskManagementView(self.page, self.case_id)
+
+        # --- 2. 銀行口座登録・編集 ---
         elif route.endswith("/bank/add"):
             return BankEditView(self.page, self.case_id)
 
-        # --- 💡 凍結手続き (一覧画面) ---
+        # --- 凍結手続き ---
         elif route.endswith("/proc/freeze"):
             return FreezeProcView(self.page, self.case_id)
 
-        # --- 💡 凍結手続き (詳細画面 - 各銀行ごと) ---
         elif route.startswith(f"/case/{self.case_id}/proc/freeze/"):
-            # 銀行コードを取得
             bank_code = route.split("/")[-1]
             return PlaceholderView(
                 self.page,
@@ -151,41 +161,31 @@ class CaseHubView:
         elif route.endswith("/securities/add"):
             return SecuritiesEditView(self.page, self.case_id)
 
-        # --- 3. 残高証明申請書類（選択画面） (balance_cert_doc.py) ---
+        # --- 残高証明申請書類 ---
         elif route.endswith("/doc/balance_cert"):
             return BalanceCertDocView(self.page, self.case_id)
 
-        # --- 4. 来店予約（銀行選択画面） ---
+        # --- 来店予約 ---
         elif route.endswith("/reserve/visit"):
             return VisitReserveSelectBankView(self.page, self.case_id)
 
-        # --- 5. 銀行コードに基づく専用フォーム (残証申請 / 来店予約) ---
-
+        # --- 銀行コードに基づく専用フォーム ---
         route_parts = route.split("/")
-        bank_code = route_parts[-1]  # 最後のセグメントを抽出
+        bank_code = route_parts[-1]
 
-        # 5-1. 残証申請書類（編集画面 - 銀行別フォーム）
         if route.startswith(f"/case/{self.case_id}/doc/balance_cert/"):
             if route.startswith(f"/case/{self.case_id}/doc/balance_cert/mizuho/"):
                 return MizuhoBalanceDocView(self.page, self.case_id, bank_code)
-
             elif route.startswith(f"/case/{self.case_id}/doc/balance_cert/smbc/"):
                 return SmbcBalanceDocView(self.page, self.case_id, bank_code)
-
             elif route.startswith(f"/case/{self.case_id}/doc/balance_cert/standard/"):
                 return BankBalanceDocEditView(self.page, self.case_id, bank_code)
 
-        # 5-2. 銀行別 来店予約ページ
         elif route.startswith(f"/case/{self.case_id}/reserve/"):
-            # 6-1. みずほ銀行 (コード: 0001) 専用ルート
             if route.startswith(f"/case/{self.case_id}/reserve/mizuho"):
                 return PlaceholderView(self.page, "みずほ予約フォーム", f"案件ID: {self.case_id}")
-
-            # 6-2. 三井住友銀行 (コード: 0009) 専用ルート
             elif route.startswith(f"/case/{self.case_id}/reserve/smbc"):
                 return PlaceholderView(self.page, "三井住友予約フォーム", f"案件ID: {self.case_id}")
-
-            # 6-3. 標準予約フォーム
             elif route.startswith(f"/case/{self.case_id}/reserve/standard/"):
                 return PlaceholderView(
                     self.page,
@@ -193,25 +193,18 @@ class CaseHubView:
                     f"案件ID: {self.case_id} / 銀行コード: {bank_code} の予約資料を作成。",
                 )
 
-        # --- 99. デフォルト / ルートエラー ---
+        # --- 99. デフォルト ---
         return PlaceholderView(self.page, "ページが見つかりません", f"ルート: {route}")
 
     def _get_index_from_route(self, route):
-        """ルートURLから対応するナビゲーションインデックスを計算する"""
         for index, dest in enumerate(self.destinations.values()):
-            # 💡 route.startswith() で部分一致を確認
             if route.startswith(dest["route"]):
                 return index
-        return 0  # 見つからない場合はデフォルトで0 (概要)
+        return 0
 
     def route_to_content(self, route):
-        """画面遷移に応じてメインコンテンツとサイドバーの状態を更新する"""
-
-        # 1. 状態を更新
         self.current_route = route
         self.selected_index = self._get_index_from_route(route)
-
-        # 2. メインコンテンツを再生成
         new_content_candidate = self._get_main_content_for_route(route)
 
         if new_content_candidate is None:
@@ -219,14 +212,44 @@ class CaseHubView:
                 self.page, "エラー", f"無効なルートが指定されました: {route}"
             )
 
-        # 3. self.main_content (Columnコントロール) の controls を更新
+        # --- 💡 「案件フォルダを開く」ボタンを常に上部に配置するロジック ---
+
+        # 1. コンテンツのリストをクリア
         self.main_content.controls.clear()
 
-        # DeceasedDetailView は View を返すため、その中身（controls[1].content.controls）を取得する
+        # 2. 共通ヘッダー（フォルダボタン）を作成
+        folder_button_row = Row(
+            [
+                ElevatedButton(
+                    "📂 案件フォルダを開く",
+                    on_click=lambda e: open_case_folder(
+                        page=self.page,
+                        case_id=self.case_id,
+                        get_path_service=get_case_folder_path_service,
+                    ),
+                    style=ButtonStyle(
+                        bgcolor=Colors.BLUE_50,
+                        color=Colors.BLUE_800,
+                        elevation=0,
+                    ),
+                )
+            ],
+            alignment="start",  # 右上に配置（お好みで end でも可）
+        )
+
+        # 3. ヘッダーを追加
+        self.main_content.controls.append(folder_button_row)
+        # self.main_content.controls.append(Divider(height=10, color=Colors.TRANSPARENT))
+
+        # 4. メインコンテンツを展開して追加
         if isinstance(new_content_candidate, View):
+            # Viewの場合は内部のコントロールを取り出す（AppBarなどは無視されることに注意）
+            # DeceasedDetailViewなどの完全なView構造を持つものは、内部構造に合わせて調整が必要
+            # ここでは簡易的に controls を展開する
             if len(new_content_candidate.controls) > 1 and hasattr(
                 new_content_candidate.controls[1], "content"
             ):
+                # Scaffold構造 (AppBar, Container(content=Column)) の場合
                 content_controls = new_content_candidate.controls[1].content.controls
             else:
                 content_controls = (
@@ -235,53 +258,60 @@ class CaseHubView:
                     else []
                 )
         else:
-            # BankEditView や PlaceholderView (Column) の controls をそのまま取得
+            # Column などのコントロールの場合
             content_controls = new_content_candidate.controls
 
         self.main_content.controls.extend(content_controls)
 
-        # 4. 画面を更新（NavigationRailの状態も更新される）
-        # 💡 NavigationRail の選択状態を明示的に更新
         if self.nav_rail:
             self.nav_rail.selected_index = self.selected_index
 
         self.main_content.update()
-        # self.page.update()
 
     def go_to_sub_route(self, e):
-        """ナビゲーションレール (サイドバー) クリック時のルーティング"""
-
-        # 1. NavigationRail の選択状態を更新 (見た目をすぐに変えるため)
         selected_index = e.control.selected_index
         self.selected_index = selected_index
-
-        # 2. Page.go() でルーティングを実行
         route = e.control.destinations[selected_index].data
         self.page.go(route)
-
-        # 3. 状態の変更を UI に反映 (NavRailのハイライトを更新)
-        # 🚨 HACK: Page.go() の前に update() を実行することで、NavRail の選択状態を瞬時に切り替えさせる
-        # これは main.py の router が発火する前に視覚的なフィードバックを与えるために必要です。
         if self.nav_rail:
             self.nav_rail.selected_index = selected_index
         self.page.update()
 
     def build(self):
-        """全体の View を構築"""
-
-        # 💡 初期コンテンツを保持するコンテナを構築
         initial_content_controls = []
-        if isinstance(self.main_content, View):
-            if len(self.main_content.controls) > 1 and hasattr(
-                self.main_content.controls[1], "content"
-            ):
-                initial_content_controls = self.main_content.controls[1].content.controls
-            else:
-                initial_content_controls = self.main_content.controls
-        else:
-            initial_content_controls = self.main_content.controls
+        # 初期表示時も同様のロジックでコンテンツを取得
+        temp_content = self.main_content
 
-        # 既存のDetailViewのコントロールを格納するコンテナ (このコンテナを route_to_content が更新する)
+        # 💡 初期化時もフォルダボタンを追加する
+        folder_button_row = Row(
+            [
+                ElevatedButton(
+                    "📂 案件フォルダを開く",
+                    on_click=lambda e: open_case_folder(
+                        page=self.page,
+                        case_id=self.case_id,
+                        get_path_service=get_case_folder_path_service,
+                    ),
+                    style=ButtonStyle(
+                        bgcolor=Colors.BLUE_50,
+                        color=Colors.BLUE_800,
+                        elevation=0,
+                    ),
+                )
+            ],
+            alignment="end",
+        )
+        initial_content_controls.append(folder_button_row)
+        initial_content_controls.append(Divider(height=10, color=Colors.TRANSPARENT))
+
+        if isinstance(temp_content, View):
+            if len(temp_content.controls) > 1 and hasattr(temp_content.controls[1], "content"):
+                initial_content_controls.extend(temp_content.controls[1].content.controls)
+            else:
+                initial_content_controls.extend(temp_content.controls)
+        else:
+            initial_content_controls.extend(temp_content.controls)
+
         self.main_content_container = Container(
             content=Column(
                 controls=initial_content_controls,
@@ -294,10 +324,8 @@ class CaseHubView:
             expand=True,
         )
 
-        # main_content を self.main_content_container の content にリファレンスを設定し直す
         self.main_content = self.main_content_container.content
 
-        # サイドバー（NavigationRail）
         nav_rail = NavigationRail(
             selected_index=self.selected_index,
             label_type="all",
@@ -312,7 +340,6 @@ class CaseHubView:
                 for dest in self.destinations.values()
             ],
         )
-        # 💡 NavigationRail インスタンスを保持
         self.nav_rail = nav_rail
 
         view_controls = [
@@ -323,7 +350,7 @@ class CaseHubView:
             ),
             Row(
                 [
-                    self.nav_rail,  # 💡 保持した nav_rail インスタンスを使用
+                    self.nav_rail,
                     VerticalDivider(width=1),
                     self.main_content_container,
                 ],

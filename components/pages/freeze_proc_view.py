@@ -5,15 +5,17 @@ from flet import (
     Colors,
     Column,
     Container,
+    CrossAxisAlignment,  # 💡 追加
     Divider,
     ElevatedButton,
     FontWeight,
     Icon,
     Icons,
-    ListTile,
-    ListView,
+    MainAxisAlignment,  # 💡 追加
     Page,
+    Row,  # 💡 追加
     Text,
+    border,
 )
 
 from services.deceased_service import get_financial_asset_by_case
@@ -30,6 +32,7 @@ class FreezeProcView(Column):
             expand=True,
             scroll="auto",
             spacing=20,
+            horizontal_alignment=CrossAxisAlignment.START,  # 💡 全体を左寄せ
         )
         self.page = page
         self.case_id = case_id
@@ -39,19 +42,16 @@ class FreezeProcView(Column):
                 "🔒 口座凍結のご連絡",
                 size=24,
                 weight=FontWeight.BOLD,
+                color=Colors.WHITE,
             ),
             Divider(),
             Text(
                 "死亡の連絡（口座凍結）を行う金融機関を選択してください。\n※複数の支店・口座がある場合でも、金融機関ごとにまとめて表示しています。",
                 size=16,
-                color=Colors.BLACK87,
+                color=Colors.WHITE,
             ),
-            Container(
-                content=self._create_institution_list_controls(),
-                padding=10,
-                border_radius=10,
-                bgcolor=Colors.WHITE,
-            ),
+            # リスト生成関数を呼び出し (Containerでラップせず直接Columnに追加)
+            self._create_institution_list_controls(),
         ]
 
     def _create_institution_list_controls(self):
@@ -61,56 +61,86 @@ class FreezeProcView(Column):
         assets = get_financial_asset_by_case(self.case_id)
 
         # 2. 金融機関コードをキーにしてユニークなリストを作成
-        #    { "0001": "みずほ銀行", "0143": "SBI証券", ... }
         unique_institutions = {}
 
         for asset in assets:
-            # BankMaster経由で取得した名称とコード
             code = asset.get("bank_code")
             name = asset.get("bank_name")
 
-            # コードが存在し、まだリストになければ追加
             if code and code not in unique_institutions:
                 unique_institutions[code] = name
 
         # 資産が一つもない場合
         if not unique_institutions:
-            return ListView(
-                controls=[
-                    Container(
-                        content=Text(
-                            "現在、この案件に登録されている金融資産情報がありません。\n先に「銀行登録」または「証券登録」を行ってください。",
-                            color=Colors.RED_700,
-                        ),
-                        padding=20,
-                    )
-                ]
+            return Container(
+                content=Text(
+                    "現在、この案件に登録されている金融資産情報がありません。\n先に「銀行登録」または「証券登録」を行ってください。",
+                    color=Colors.RED_700,
+                ),
+                padding=20,
+                bgcolor=Colors.WHITE,
+                border_radius=5,
+                width=600,  # 幅を制限
             )
 
-        controls = []
+        # 銀行ごとのコントロールリストを作成
+        bank_controls = Column(spacing=10)
+
         for code, name in unique_institutions.items():
-            # ボタンを押した先の処理（現在はプレースホルダーへ遷移）
+            # ボタンを押した先の処理
             def go_to_freeze_detail(e, code=code, name=name):
-                # 例: /case/1/proc/freeze/0001
                 self.page.go(f"/case/{self.case_id}/proc/freeze/{code}")
 
-            controls.append(
-                ListTile(
-                    leading=Icon(Icons.ACCOUNT_BALANCE_WALLET, color=Colors.BLUE_GREY),
-                    title=Text(f"{name}", weight=FontWeight.W_600, color=Colors.BLACK),
-                    subtitle=Text(f"金融機関コード: {code}"),
-                    trailing=ElevatedButton(
-                        "凍結連絡へ",
-                        icon=Icons.PHONE_CALLBACK,
-                        style=ButtonStyle(
-                            bgcolor=Colors.RED_600,  # 凍結＝重要/停止アクションなので赤系
-                            color=Colors.WHITE,
+            # 💡 銀行ごとのカードを作成
+            bank_card = Container(
+                content=Row(
+                    controls=[
+                        # アイコンと銀行名・コード
+                        Row(
+                            controls=[
+                                Icon(Icons.ACCOUNT_BALANCE_WALLET, color=Colors.BLUE_GREY_700),
+                                Column(
+                                    controls=[
+                                        Text(
+                                            f"{name}",
+                                            weight=FontWeight.W_600,
+                                            size=16,
+                                            color=Colors.BLACK,  # 💡 黒に指定
+                                        ),
+                                        Text(
+                                            f"金融機関コード: {code}",
+                                            size=12,
+                                            color=Colors.BLACK,  # 💡 黒に指定 (グレー回避)
+                                        ),
+                                    ],
+                                    spacing=2,
+                                    alignment=MainAxisAlignment.CENTER,
+                                ),
+                            ],
+                            spacing=15,
                         ),
-                        on_click=go_to_freeze_detail,
-                        data=code,
-                    ),
-                    on_click=go_to_freeze_detail,
-                )
+                        # ボタン
+                        ElevatedButton(
+                            "凍結連絡へ",
+                            icon=Icons.PHONE_CALLBACK,
+                            style=ButtonStyle(
+                                bgcolor=Colors.RED_600,
+                                color=Colors.WHITE,
+                            ),
+                            on_click=go_to_freeze_detail,
+                            data=code,
+                        ),
+                    ],
+                    alignment=MainAxisAlignment.SPACE_BETWEEN,  # 左右に配置
+                    vertical_alignment=CrossAxisAlignment.CENTER,
+                ),
+                width=600,  # 💡 幅を固定して右いっぱいになるのを防ぐ
+                padding=15,
+                border=border.all(1, Colors.GREY_300),  # 💡 枠線
+                border_radius=5,
+                bgcolor=Colors.WHITE,
             )
 
-        return ListView(controls=controls, spacing=5)
+            bank_controls.controls.append(bank_card)
+
+        return bank_controls

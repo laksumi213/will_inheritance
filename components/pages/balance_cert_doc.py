@@ -145,13 +145,11 @@ def BalanceCertDocView(page: Page, case_id: int):
     # --- メインコンテンツの定義 ---
     return Column(
         controls=[
-            # 💡 文字色を黒に修正 (App Barの背景色に合わせて)
             Text("📄 残証申請書類作成", size=24, weight=FontWeight.BOLD, color=Colors.WHITE),
             Divider(),
             Text(
                 f"案件ID {case_id} に登録されている金融資産（銀行口座）を選択してください。",
                 size=16,
-                # 💡 文字色を黒に修正
                 color=Colors.WHITE,
             ),
             Container(height=10),  # スペーサー
