@@ -8,3 +8,6 @@ wheels/
 
 # venv
 .venv
+
+# 環境設定ファイル
+.env

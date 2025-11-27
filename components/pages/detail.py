@@ -1,5 +1,27 @@
 # /components/pages/detail.py
 
+import threading
+import time
+import os
+from datetime import datetime
+
+# 💡 追加: 自動化用ライブラリ
+import pyautogui
+import pyperclip
+# import keyboard
+
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.common.keys import Keys
+from dotenv import load_dotenv
+import tkinter as tk
+from tkinter import messagebox
+
 from flet import (
     AlertDialog,
     AppBar,
@@ -10,8 +32,8 @@ from flet import (
     Divider,
     Dropdown,
     ElevatedButton,
-    FilePicker,  # FilePickerを追加
-    FilePickerResultEvent,  # FilePickerResultEventを追加
+    FilePicker,
+    FilePickerResultEvent,
     FontWeight,
     IconButton,
     Icons,
@@ -26,6 +48,7 @@ from flet import (
     View,
     border,
     dropdown,
+    ButtonStyle,
 )
 
 from components.utils.date_utils import convert_seireki_to_wareki
@@ -35,18 +58,16 @@ from services.db_setup import get_all_users
 from services.deceased_service import (
     get_address_by_id,
     parse_all_flexible_date,
-    update_case_assignment,  # 担当者更新
-    update_case_folder_path,  # フォルダパス更新
+    update_case_assignment,
+    update_case_folder_path,
 )
 
 # --- グローバルな UI 定義 ---
 
-# 💡 担当者情報フィールドの定義 (モーダル内で使用していたため、このファイルに残す)
 USER_MAP = get_all_users()
 USER_OPTIONS = [dropdown.Option(str(id), name) for id, name in USER_MAP.items()]
-USER_OPTIONS.insert(0, dropdown.Option("", "未割当"))  # 値がNone/空文字の場合は未割定とする
+USER_OPTIONS.insert(0, dropdown.Option("", "未割当"))
 
-# 案件担当者ドロップダウン（Assignment Modal用）
 dialog_manager_field = Dropdown(
     label="担当者1 (進捗管理)",
     width=200,
@@ -60,10 +81,8 @@ dialog_operator_field = Dropdown(
 
 
 def on_date_blur_handler(e, wareki_text: Text):
-    """TextFieldがフォーカスを失ったときに実行されるハンドラー。和暦表示を更新する。"""
-
-    input_value = e.control.value  # e.control は操作された TextField
-    wareki_text.value = ""  # 初期化
+    input_value = e.control.value
+    wareki_text.value = ""
 
     if not input_value:
         e.control.error_text = None
@@ -72,35 +91,26 @@ def on_date_blur_handler(e, wareki_text: Text):
         return
 
     try:
-        # 柔軟な解析関数で日付オブジェクトを取得 (date.date型が返る想定)
         validated_date = parse_all_flexible_date(input_value)
-
-        # YYYY-MM-DD 形式にフォーマットし直し、TextFieldの値を更新
         e.control.value = validated_date.isoformat()
-        e.control.error_text = None  # エラーメッセージをクリア
-
-        # ★ 和暦に変換してTEXTコントロールを更新 ★
+        e.control.error_text = None
         wareki_text.value = convert_seireki_to_wareki(validated_date)
 
     except ValueError:
-        # 解析に失敗した場合
         e.control.error_text = "無効な日付形式です"
         wareki_text.value = ""
 
-    wareki_text.update()  # Textコントロールを更新
-    e.control.update()  # TextFieldの見た目を更新
+    wareki_text.update()
+    e.control.update()
 
 
-# --- 1. モーダル編集で使用するフィールド定義  ---
-
-# 氏名・基本情報
+# --- モーダル編集で使用するフィールド定義 ---
 dialog_name_last_field = TextField(label="氏名 (姓)", width=150, autofocus=True)
 dialog_name_first_field = TextField(label="氏名 (名)", width=150)
 dialog_kana_last_field = TextField(label="ふりがな (姓)", width=150)
 dialog_kana_first_field = TextField(label="ふりがな (名)", width=150)
 dialog_rel_field = TextField(label="続柄", width=200)
 
-# 住所・本籍地
 dialog_hometown_field = TextField(label="本籍地")
 dialog_zip_field = TextField(label="郵便番号", width=150)
 dialog_pref_field = TextField(label="都道府県", width=150)
@@ -108,53 +118,231 @@ dialog_city_field = TextField(label="市区町村", width=200)
 dialog_street_field = TextField(label="番地", width=150)
 dialog_building_field = TextField(label="建物名・部屋番号")
 
-# 連絡先入力のコンテナ (動的フォームを保持)
 phone_inputs_column = Column(controls=[], spacing=5)
 email_inputs_column = Column(controls=[], spacing=5)
 
-# 日付
-dialog_dob_field = TextField(
-    label="生年月日 (YYYY-MM-DD)",
-    width=180,
-)
+dialog_dob_field = TextField(label="生年月日 (YYYY-MM-DD)", width=180)
 wareki_dob_text = Text(value="", width=250, color=Colors.BLUE_GREY_600, weight=FontWeight.W_500)
 dialog_dob_field.on_blur = lambda e: on_date_blur_handler(e, wareki_dob_text)
 
-dialog_dod_field = TextField(
-    label="死亡日 (YYYY-MM-DD)",
-    width=180,
-)
+dialog_dod_field = TextField(label="死亡日 (YYYY-MM-DD)", width=180)
 wareki_dod_text = Text(value="", width=250, color=Colors.BLUE_GREY_600, weight=FontWeight.W_500)
 dialog_dod_field.on_blur = lambda e: on_date_blur_handler(e, wareki_dod_text)
 
-# タイトルコントロール
 dialog_title_control = Text("情報編集", weight=FontWeight.BOLD)
-# 案件番号入力フィールド
 dialog_case_number_field = TextField(label="案件番号", width=250)
+
+
+# ---------------------------------------------
+# 💡 Kintone 自動化ロジック (PyAutoGUI版)
+# ---------------------------------------------
+def launch_kintone_automation(case_id: int):
+    """
+    Seleniumでブラウザを開き、Kintoneにログイン後、
+    PyAutoGUIを使ってキーボード操作で入力を行う
+    """
+    
+    # DBからデータ取得
+    kintone_data = deceased_service.get_kintone_integration_data(case_id)
+    if not kintone_data:
+        print("エラー: データが見つかりませんでした")
+        return
+
+    load_dotenv()
+    KINTONE_USER = os.getenv("KINTONE_USER")
+    KINTONE_PASS = os.getenv("KINTONE_PASS")
+
+    # PyAutoGUIの設定
+    pyautogui.PAUSE = 0.5  # 操作ごとの待機時間
+
+    def show_manual_instruction(message):
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        messagebox.showinfo("操作のお願い", message)
+        root.destroy()
+
+    def _run_browser():
+        keys_to_block = ['enter', 'tab', 'space', 'up', 'down', 'left', 'right']
+        
+        try:
+            options = webdriver.ChromeOptions()
+            options.add_experimental_option("detach", True)
+            
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
+            
+            driver.maximize_window()
+            target_url = "https://chester-tax.cybozu.com/k/242/edit"
+            driver.get(target_url)
+            
+            wait = WebDriverWait(driver, 600)
+            action_wait = WebDriverWait(driver, 5)
+
+            # --- A. ログイン処理 ---
+            try:
+                if "login" in driver.current_url:
+                    print("ログイン画面検知。")
+                    WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.NAME, "username")))
+                    if KINTONE_USER:
+                        driver.find_element(By.NAME, "username").send_keys(KINTONE_USER)
+                    if KINTONE_PASS:
+                        driver.find_element(By.NAME, "password").send_keys(KINTONE_PASS)
+                    driver.find_element(By.NAME, "password").send_keys(Keys.ENTER)
+            except Exception:
+                pass 
+
+            # --- B. 編集画面ロード待ち ---
+            print("編集画面のロードを待機中...")
+            try:
+                # 「保存」ボタンが見えるまで待機
+                wait.until(EC.visibility_of_element_located((By.XPATH, "//button[contains(text(), '保存')]")))
+                print("編集画面ロード完了")
+                time.sleep(1.0)
+            except TimeoutException:
+                print("タイムアウト: 編集画面に到達できませんでした。")
+                return
+
+            driver.execute_script("document.body.style.zoom='80%'")
+            time.sleep(0.5)
+
+            # ヘルパー関数: ラベルから要素を探す (Selenium)
+            def find_target_element(label):
+                label_xpath = f"//span[contains(@class, 'control-label-text-gaia') and normalize-space(text())='{label}']"
+                container_xpath = f"({label_xpath})[1]/ancestor::div[contains(@class, 'control-gaia')][1]"
+                target_xpath = f"{container_xpath}//input[not(@type='hidden')]"
+                return action_wait.until(EC.presence_of_element_located((By.XPATH, target_xpath)))
+            
+            # ヘルパー関数: PyAutoGUIでの下キー選択
+            def select_with_arrow(down_count):
+                if down_count > 0:
+                    time.sleep(0.3)
+                    pyautogui.press('down', presses=down_count)
+                pyautogui.press('enter')
+
+            # --- C. 自動入力フロー開始 ---
+            print("--- 自動入力を開始します。キーボード操作は無効化されます ---")
+
+            # ユーザーの誤操作を防ぐためにキー入力をブロック
+            # for k in keys_to_block:
+            #     keyboard.block_key(k)
+
+            # 1. 【顧客コード】フィールドをSeleniumで特定してクリック（フォーカスセット）
+            # これにより、以降のPyAutoGUIの入力がブラウザに対して行われるようにする
+            code_elem = find_target_element("顧客コード")
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", code_elem)
+            code_elem.click()
+            time.sleep(0.5)
+
+            # -----------------------------------------------------
+            # 🔥 ここから純粋なキーボード操作フロー 🔥
+            # -----------------------------------------------------
+
+            # 1. 顧客コード入力
+            pyautogui.write(kintone_data["case_number"])
+            time.sleep(0.5)
+
+            # 2. 【拠点フィールド】 (Tab x1 -> 下 x2 -> Enter)
+            pyautogui.press('tab')
+            select_with_arrow(2)
+
+            # 3. 【チームフィールド】 (Tab x1 -> 下 x3 -> Enter)
+            pyautogui.press('tab')
+            select_with_arrow(3)
+
+            # 4. 【担当者①など】 (既存のSeleniumロジックを活用して確実に入力)
+            # ※ Tabだけで移動し続けるとズレる可能性があるため、確実に要素を指定できるSeleniumも併用
+            
+            # 一旦キーブロック解除 (Selenium操作中は不要かもだが念のため)
+            # for k in keys_to_block: keyboard.unblock_key(k)
+
+            def input_selenium_text(label, value):
+                if not value: return
+                try:
+                    elem = find_target_element(label)
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
+                    elem.click()
+                    elem.send_keys(Keys.CONTROL, "a") # 全選択
+                    elem.send_keys(Keys.DELETE)      # 削除
+                    elem.send_keys(value)
+                    time.sleep(0.2)
+                    elem.send_keys(Keys.TAB)
+                except Exception:
+                    pass
+
+            # 担当者入力 (Seleniumで指定)
+            input_selenium_text("担当者①", "森町")
+            input_selenium_text("担当者②", "森町")
+            input_selenium_text("面談対応者（MC）", "森町")
+
+            # 5. 【行チェ通知先】 (森町ペースト -> 下 x1 -> Enter)
+            # まず通知先フィールドにフォーカスを当てる (Selenium)
+            notify_elem = find_target_element("行チェ通知先") # ユーザー選択フィールドのInputを探す
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", notify_elem)
+            notify_elem.click()
+            time.sleep(0.5)
+
+            # クリップボード操作 (PyAutoGUI)
+            pyperclip.copy("森町")
+            pyautogui.hotkey('ctrl', 'v')
+            time.sleep(.5) # 検索候補が出るのを待つ
+            select_with_arrow(1) # 下1回 -> Enter
+
+            # 6. その他の情報入力 (Seleniumで安全に)
+            input_selenium_text("郵便番号", kintone_data["client_zip"])
+            input_selenium_text("顧客名", kintone_data["client_name"])
+            input_selenium_text("被相続人名", kintone_data["deceased_name"])
+            
+            time.sleep(1.0) # 自動補完待ち
+
+            input_selenium_text("住所", kintone_data["client_addr"])
+            input_selenium_text("顧客名(ふりがな)", kintone_data["client_kana"])
+            input_selenium_text("被相続人名（ふりがな）", kintone_data["deceased_kana"])
+            input_selenium_text("TEL", kintone_data["client_tel"])
+            input_selenium_text("メールアドレス", kintone_data["client_mail"])
+            input_selenium_text("相続開始日", kintone_data["inheritance_date"])
+
+            print("✅ 入力完了")
+
+            # 手動操作のためにブロック解除
+            # for k in keys_to_block:
+            #     keyboard.unblock_key(k)
+
+            # --- 手動タブ切り替え指示 ---
+            show_manual_instruction("【案件情報】タブをクリックして開いてください。\n\n切り替えが終わったら、このウィンドウの「OK」を押してください。")
+            time.sleep(1.0)
+
+            # 案件情報タブの内容
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            input_selenium_text("紹介日", today_str)
+
+        except Exception as e:
+            print(f"❌ 自動化エラー: {e}")
+        # finally:
+        #     # エラー終了時も必ずロック解除
+        #     try:
+        #         for k in keys_to_block:
+        #             keyboard.unblock_key(k)
+        #     except:
+        #         pass
+
+    threading.Thread(target=_run_browser, daemon=True).start()
 
 
 def copy_to_clipboard_and_notify(e, page: Page, content: str):
     """クリックされたテキストをクリップボードにコピーし、SnackBarで通知する"""
-
-    # データを取得
     text_to_copy = content.strip()
-
     if not text_to_copy or text_to_copy == "N/A":
         return
 
-    # 1. クリップボードにコピー
-    # Fletの Page.set_clipboard() を使用
     page.set_clipboard(text_to_copy)
-
-    # 2. SnackBarで通知
-    snack_bar_content = Text(
-        f"'{text_to_copy[:30].strip()}' をクリップボードにコピーしました。📋",
-        color=Colors.WHITE,
-    )
 
     page.open(
         SnackBar(
-            content=snack_bar_content,
+            content=Text(
+                f"'{text_to_copy[:30].strip()}' をクリップボードにコピーしました。📋",
+                color=Colors.WHITE,
+            ),
             bgcolor=Colors.BLUE_GREY_700,
             duration=1500,
         )
@@ -172,34 +360,28 @@ def DeceasedDetailView(page: Page, case_id: int):
     case = deceased_service.get_case_by_id(case_id)
     deceased = deceased_service.get_deceased_by_id(case_id)
 
-    # 新規モードのフラグを定義 (IDの比較を case_id に合わせる)
-    is_new_client_case = case_id == -1  # 新規案件（契約者登録）モード
-    is_new_deceased = case_id == 0  # 被相続人単独の新規登録モード
+    is_new_client_case = case_id == -1
+    is_new_deceased = case_id == 0
     deceased_id = deceased.id if deceased else case_id
 
-    # 💡 最後の住所情報を取得
+    # 最後の住所情報を取得
     last_address = None
     if deceased and deceased.last_address_id:
         last_address = get_address_by_id(deceased.last_address_id)
 
     display_deceased_address = "未登録"
-    copyable_full_address = "未登録"  # 💡 コピー用の変数も初期化
+    copyable_full_address = "未登録"
 
     if last_address:
-        # last_address は Address オブジェクト
-        # 郵便番号、都道府県、市区町村、番地、建物名などを結合して表示用の文字列を作成
         address_parts = [
             last_address.prefecture,
             last_address.city_ward_town,
             last_address.street_address,
         ]
-
-        # 住所本体の整形
         raw_deceased_address = "".join(filter(None, address_parts))
         building = last_address.building_name if last_address.building_name else ""
         zip_code = last_address.zip_code if last_address.zip_code else ""
 
-        # 1. 表示用の住所文字列の生成: 住所 + (建物名)
         if raw_deceased_address:
             display_deceased_address = raw_deceased_address
             if building:
@@ -209,49 +391,12 @@ def DeceasedDetailView(page: Page, case_id: int):
         else:
             display_deceased_address = "未登録"
 
-        # 2. コピー用の完全な住所を作成: 〒 + 住所 + 建物名
         copyable_full_address = (
             f"〒{zip_code} {raw_deceased_address} {building}" if raw_deceased_address else "未登録"
         ).strip()
 
     # 案件情報を取得
     case = deceased.case if deceased and deceased.case else None
-
-    # if deceased and deceased_id > 0:
-    #     # deceased_id > 0 の場合のみ、住所情報を取得する
-    #     deceased_address_info = {}
-    #     deceased_address_info = deceased_service.get_address_info("deceased", deceased_id)
-
-    #     # 住所の整形
-    #     address_parts = [
-    #         deceased_address_info.get("prefecture", ""),
-    #         deceased_address_info.get("city_ward_town", ""),
-    #         deceased_address_info.get("street_address", ""),
-    #     ]
-    #     raw_deceased_address = "".join(filter(None, address_parts))
-    #     # 🎯 建物名を取得
-    #     building = deceased_address_info.get("building_name", "")
-
-    #     # 🎯 コピー用の完全な住所を作成 (住所 + 建物名)
-    #     copyable_full_address = raw_deceased_address
-    #     if building:
-    #         # 住所と建物名の間にスペースを入れる
-    #         copyable_full_address += f" {building}"
-
-    #     # 表示用の住所文字列の生成 (元のロジックを維持)
-    #     display_deceased_address = raw_deceased_address or "未登録"
-    #     if building:
-    #         if display_deceased_address != "未登録":
-    #             display_deceased_address += f" ({building})"
-    #         else:
-    #             display_deceased_address = f"建物名: {building}"
-
-    # building = deceased_address_info.get("building_name", "")
-    # if building:
-    #     if display_deceased_address != "未登録":
-    #         display_deceased_address += f" ({building})"
-    #     else:
-    #         display_deceased_address = f"建物名: {building}"  # 住所がない場合は建物名のみ表示
 
     if deceased and not is_new_client_case:
         full_name = f"{deceased.name_last} {deceased.name_first}"
@@ -272,11 +417,9 @@ def DeceasedDetailView(page: Page, case_id: int):
             dod_display_str = "未登録"
 
     elif is_new_client_case or is_new_deceased or deceased is None:
-        # 新規登録の場合のロジック (DetachedInstanceError対策で一つのブロックにまとめる)
         full_name = "【未登録】新規登録が必要です"
         dob_str = "N/A"
         dod_str = "N/A"
-        # モーダルを開くためにダミーのオブジェクトを使用
         deceased = type(
             "DummyDeceased",
             (object,),
@@ -290,11 +433,11 @@ def DeceasedDetailView(page: Page, case_id: int):
                 "relationship_type": "本人",
                 "hometown": "",
                 "heirs": [],
-                "case": None,  # case属性をダミーに追加
-                "case_id": None,  # case_id属性をダミーに追加
+                "case": None,
+                "case_id": None,
+                "last_address_id": None, # ダミー追加
             },
         )()
-        # caseオブジェクトもNoneに設定
         case = None
 
     heirs_controls = Column()
@@ -307,8 +450,6 @@ def DeceasedDetailView(page: Page, case_id: int):
     )
 
     def save_path_on_blur(e):
-        """TextFieldからフォーカスが外れたとき、またはFilePickerからパスが返されたときに実行"""
-
         current_input = path_field.value.strip()
 
         if current_input == "パス設定をキャンセルしました":
@@ -342,48 +483,27 @@ def DeceasedDetailView(page: Page, case_id: int):
                             duration=3000,
                         )
                     )
-
         page.update()
 
-    # --- FilePicker 結果ハンドラ ---
     def get_directory_result_detail(e: FilePickerResultEvent):
         path_field.value = e.path if e.path else "パス設定をキャンセルしました"
         save_path_on_blur(e)
         page.update()
-        # new_path = dialog_path_field.value.strip()
-        # if case and new_path != "パス設定をキャンセルしました":
-        #     update_case_folder_path(case.case_id, new_path or None)
-        #     page.open(
-        #         SnackBar(
-        #             content=Text("フォルダパスを保存しました。", color=Colors.WHITE),
-        #             bgcolor=Colors.GREEN_700,
-        #             duration=1500,
-        #         )
-        #     )
 
-        # page.update()
-
-    # フォルダ選択ダイアログを開く
     def open_folder_dialog_detail(e):
         file_picker.on_result = get_directory_result_detail
         file_picker.get_directory_path(dialog_title="案件フォルダの保存先を選択")
 
     path_field.on_blur = lambda e: save_path_on_blur(e)
 
-    # --- 案件削除確認ダイアログの定義 ---
     def create_delete_confirm_dialog(case_num: str):
-        """案件削除の確認ダイアログ"""
-
         def confirm_delete_case(e):
-            """削除サービスを呼び出し、削除後にトップ画面に戻る"""
             try:
-                # 案件番号を渡して削除を実行
                 success = deceased_service.delete_case_and_all_related_data(case_num)
                 if success:
                     print(f"案件 {case_num} の削除が完了しました。")
-                    page.go("/")  # 成功したらトップ画面に戻る
+                    page.go("/")
                 else:
-                    # 削除失敗の通知 (実際にはSnackbarなどを使うべき)
                     page.open(
                         SnackBar(
                             content=Text(
@@ -394,23 +514,17 @@ def DeceasedDetailView(page: Page, case_id: int):
                             duration=2000,
                         )
                     )
-                    print(f"案件 {case_num} の削除に失敗しました。")
-
             except Exception as ex:
-                print(f"削除処理中に予期せぬエラー: {ex}")
-                page.oepn(
+                page.open(
                     SnackBar(
                         content=Text(f"削除中にエラーが発生しました: {ex}", color=Colors.WHITE),
                         bgcolor=Colors.RED_700,
                         duration=2000,
                     )
                 )
-
-            # ダイアログを閉じる
             delete_confirm_dialog.open = False
             page.update()
 
-        # 💡 キャンセルボタンの動作を定義
         def close_delete_dialog(e):
             delete_confirm_dialog.open = False
             page.update()
@@ -435,10 +549,7 @@ def DeceasedDetailView(page: Page, case_id: int):
         )
         return delete_confirm_dialog
 
-    # --- 担当者専用モーダル定義 ---
     def create_assignment_dialog():
-        """担当者情報のみを編集するためのモーダル"""
-
         return AlertDialog(
             modal=True,
             title=Text("案件担当者 編集", weight=FontWeight.BOLD),
@@ -455,8 +566,8 @@ def DeceasedDetailView(page: Page, case_id: int):
                     tight=True,
                     spacing=15,
                 ),
-                width=450,  # 幅を調整
-                height=200,  # 高さを調整
+                width=450,
+                height=200,
             ),
             actions=[
                 TextButton("キャンセル", on_click=lambda e: close_dialog()),
@@ -466,70 +577,42 @@ def DeceasedDetailView(page: Page, case_id: int):
         )
 
     assignment_edit_dialog = create_assignment_dialog()
-
-    # 💡 案件削除確認ダイアログを生成
     delete_confirm_dialog = create_delete_confirm_dialog(case.case_number if case else "N/A")
 
-    # --- モーダル制御関数 (担当者編集のみ有効) ---
     def close_dialog():
         if assignment_edit_dialog.open:
             assignment_edit_dialog.open = False
             page.update()
 
-    # # 案件削除確認ダイアログを開く関数
-    # def open_delete_confirm_dialog(e):
-    #     page.open(delete_confirm_dialog)
-    #     page.update()
-
-    # 担当者情報保存ロジック
     def save_assignment_dialog():
         if not case:
-            print("⚠️ 案件情報がないため、担当者を保存できません。")
             close_dialog()
             return
 
         def _get_id_from_dropdown(value):
             if value is None or value in ("", "None", "未割当"):
                 return None
-
             try:
                 return int(value)
             except ValueError:
-                # 想定外の文字列が来た場合はエラーを回避し、Noneを返す（またはログを出力）
-                print(f"Warning: Attempted to convert invalid value to int: {value}")
                 return None
 
         manager_id = _get_id_from_dropdown(dialog_manager_field.value)
         operator_id = _get_id_from_dropdown(dialog_operator_field.value)
-        new_path = dialog_path_field.value.strip()
-
-        # 1. 担当者情報の更新
+        
         update_case_assignment(
             case_id=case.case_id,
             manager_id=manager_id,
             operator_id=operator_id,
         )
-
-        # 2. フォルダパスの更新
-        if new_path != "パス設定をキャンセルしました":
-            update_case_folder_path(case.case_id, new_path or None)
-
         close_dialog()
-
-        # 3. ライブアップデート: caseオブジェクトとUI表示を更新
         case.manager_id = manager_id
         case.operator_id = operator_id
-
-        # UI上の担当者フィールドを更新 (manager_field, operator_field は後で定義されているため、ここでは値の更新のみ)
-        # manager_field.value = ... (更新ロジックはUI定義後に実行されることを期待)
-        # operator_field.value = ...
-
-        page.update()  # UI全体を再描画
+        page.update()
 
     def open_assignment_dialog(e):
-        """担当者編集モーダルを開く"""
         if not case:
-            page.oepn(
+            page.open(
                 SnackBar(
                     content=Text(
                         "⚠️ 案件情報がないため、担当者を編集できません。",
@@ -542,49 +625,24 @@ def DeceasedDetailView(page: Page, case_id: int):
             page.update()
             return
 
-        # 現在の値でドロップダウンを初期化
         dialog_manager_field.value = str(case.manager_id) if case.manager_id else ""
         dialog_operator_field.value = str(case.operator_id) if case.operator_id else ""
-
-        # モーダルを開く
         page.open(assignment_edit_dialog)
         page.update()
 
-    def _on_mount(e):
-        if is_new_client_case or is_new_deceased:
-            # 💡 新規案件登録モード (-1) の場合、自動で /deceased_edit/-1 に遷移
-            if is_new_client_case:
-                page.go("/deceased_edit/-1")
-
-            # 💡 単独新規被相続人登録モード (0) の場合、自動で /deceased_edit/0 に遷移
-            elif is_new_deceased:
-                page.go("/deceased_edit/0")
-
-        page.update()
-
-    # --- 新しいページ遷移関数 ---
-
     def go_to_deceased_edit_page(e):
-        """被相続人編集ページに遷移する"""
-        # DeceasedEditViewは Deceased IDを期待するため、deceased.id を渡す。
-        #    - 新規案件の場合は -1 を渡す (Case IDと同じ値で処理)
         id_to_pass = deceased.id if deceased else case_id
         page.go(f"/deceased_edit/{id_to_pass}")
 
     def go_to_new_heir_page(e):
-        """新しい相続人追加ページに遷移する"""
-        # HeirEditViewに渡す Deceased ID を取得
         id_to_pass = deceased.id if deceased else case_id
         page.go(f"/heir_edit/new?deceased_id={id_to_pass}")
 
     def go_to_heir_edit_page(e):
-        """既存の相続人編集ページに遷移する"""
         heir_id = e.control.data
-        # HeirEditViewに渡す Deceased ID を取得
         id_to_pass = deceased.id if deceased else case_id
         page.go(f"/heir_edit/{heir_id}?deceased_id={id_to_pass}")
 
-    # --- 相続人リストの表示ロジック ---
     def update_heirs_list():
         heirs_controls.controls.clear()
         current_deceased = deceased_service.get_deceased_by_id(deceased_id)
@@ -601,19 +659,13 @@ def DeceasedDetailView(page: Page, case_id: int):
 
         for heir in current_deceased.heirs:
             heir_full_name = f"{heir.name_last}　{heir.name_first}"
-
-            # 契約者マークを追加するロジック
-            is_contracting = getattr(heir, "is_contracting_party", False)  # 💡 契約者フラグを取得
+            is_contracting = getattr(heir, "is_contracting_party", False)
             contract_mark = "【契約者】" if is_contracting else ""
 
-            # 連絡先情報を取得
             contacts = deceased_service.get_contact_info("heir", heir.id)
-            # 住所情報を取得
             address_info = deceased_service.get_address_info("heir", heir.id)
 
-            # 電話番号の整形
             primary_phone = "N/A"
-            # UIで選択肢がないため、保存時に設定される "Primary" をまず探す
             priority_sub_types = ["Primary", "携帯", "自宅"]
 
             for sub_type in priority_sub_types:
@@ -629,18 +681,13 @@ def DeceasedDetailView(page: Page, case_id: int):
                     primary_phone = found_phone
                     break
 
-            # 優先度の高いものがなければ、最初に見つかった電話番号を採用
             if primary_phone == "N/A":
                 found_any_phone = next((c["value"] for c in contacts if c["type"] == "PHONE"), None)
                 if found_any_phone:
                     primary_phone = found_any_phone
 
-            if primary_phone == "N/A":
-                display_phone_value = "未登録"
-            else:
-                display_phone_value = primary_phone
+            display_phone_value = "未登録" if primary_phone == "N/A" else primary_phone
 
-            # 主要な住所を結合して表示
             addr_parts = [
                 address_info.get("prefecture", ""),
                 address_info.get("city_ward_town", ""),
@@ -657,23 +704,15 @@ def DeceasedDetailView(page: Page, case_id: int):
             if not display_relationship:
                 display_relationship = "未登録"
 
-            phone_display_text = f"電話: {display_phone_value}"
-            address_display_text = f"住所: {primary_address}"
-
             heirs_controls.controls.append(
                 Row(
                     [
                         Text(f"ID:{heir.id}", width=50),
-                        # 氏名 (クリックでコピー)
                         Container(
                             content=Text(
                                 f"名前: {heir_full_name} {contract_mark}",
-                                width=200,  # 氏名表示の幅を調整
-                                # color=Colors.BLUE_800
-                                # if heir_full_name.strip()
-                                # else Colors.BLACK,
+                                width=200,
                             ),
-                            # 氏名に on_click を設定
                             on_click=lambda e, name=heir_full_name: copy_to_clipboard_and_notify(
                                 e, page, name.strip()
                             ),
@@ -681,30 +720,17 @@ def DeceasedDetailView(page: Page, case_id: int):
                             tooltip="クリックして氏名をコピー",
                         ),
                         Text(f"続柄: {display_relationship}", width=100),
-                        # ★ 電話番号 (クリックでコピー) ★
                         Container(
-                            content=Text(
-                                phone_display_text,
-                                width=150,  # 電話番号表示の幅を広げる
-                                size=12,
-                                # color=Colors.BLUE_GREY_600,
-                            ),
+                            content=Text(f"電話: {display_phone_value}", width=150, size=12),
                             on_click=lambda e, phone=primary_phone: copy_to_clipboard_and_notify(
                                 e, page, phone
                             ),
                             data=primary_phone,
                             tooltip="クリックして電話番号をコピー",
                         ),
-                        # スペーサー（電話と住所を区切る）
                         Container(width=10),
-                        # ★ 住所 (クリックでコピー) ★
                         Container(
-                            content=Text(
-                                address_display_text,
-                                width=350,  # 住所表示の幅を調整
-                                size=12,
-                                # color=Colors.BLUE_GREY_600,
-                            ),
+                            content=Text(f"住所: {primary_address}", width=350, size=12),
                             on_click=lambda e, addr=raw_address: copy_to_clipboard_and_notify(
                                 e, page, addr
                             ),
@@ -715,8 +741,8 @@ def DeceasedDetailView(page: Page, case_id: int):
                             Icons.EDIT,
                             icon_color=Colors.BLUE_500,
                             data=heir.id,
-                            on_click=go_to_heir_edit_page,  # 関数名を変更
-                            tooltip="相続人を編集 (別ページへ遷移)",
+                            on_click=go_to_heir_edit_page,
+                            tooltip="相続人を編集",
                         ),
                         IconButton(
                             Icons.DELETE,
@@ -732,12 +758,8 @@ def DeceasedDetailView(page: Page, case_id: int):
             )
         page.update()
 
-    # --- 削除ダイアログ制御関数 ---
     def open_heir_delete_confirm(e, heir_id_to_delete: int, heir_full_name: str):
-        """相続人削除確認ダイアログを表示し、コールバックを設定する"""
-
         def perform_delete(e):
-            """削除サービスを実行するコールバック関数"""
             try:
                 deceased_service.delete_heir(heir_id_to_delete)
                 page.open(
@@ -752,7 +774,6 @@ def DeceasedDetailView(page: Page, case_id: int):
                 )
                 update_heirs_list()
             except Exception as ex:
-                print(f"相続人削除エラー: {ex}")
                 page.open(
                     SnackBar(
                         content=Text(f"削除中にエラーが発生しました: {ex}", color=Colors.WHITE),
@@ -770,18 +791,10 @@ def DeceasedDetailView(page: Page, case_id: int):
             confirm_color=Colors.RED_600,
         )
 
-    # 初期リストの表示
     if not is_new_deceased and not is_new_client_case:
         update_heirs_list()
 
-    # # 案件削除確認ダイアログを開く関数
-    # def open_delete_confirm_dialog(e):
-    #     page.open(delete_confirm_dialog)
-    #     page.update()
-
-    # 担当者1の表示
     manager_field = Text(
-        # caseがNone、またはmanager_idがNoneの場合は「未割当」を表示
         f"担当1 (進捗): {USER_MAP.get(case.manager_id, '未割当')}"
         if case is not None and case.manager_id is not None
         else "担当1 (進捗): 未割当",
@@ -790,7 +803,6 @@ def DeceasedDetailView(page: Page, case_id: int):
     )
 
     operator_field = Text(
-        # caseがNone、またはoperator_idがNoneの場合は「未割当」を表示
         f"担当2 (実務): {USER_MAP.get(case.operator_id, '未割当')}"
         if case is not None and case.operator_id is not None
         else "担当2 (実務): 未割当",
@@ -798,13 +810,11 @@ def DeceasedDetailView(page: Page, case_id: int):
         width=250,
     )
 
-    # View の定義
     view_controls = [
         AppBar(title=Text("被相続人 詳細/相続人管理"), bgcolor=Colors.BLUE_GREY_700),
         Container(
             content=Column(
                 [
-                    # 💡 案件番号表示セクション 💡
                     Container(
                         content=Column(
                             [
@@ -815,9 +825,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                                                 f"案件番号: {case.case_number if case and case.case_number else 'N/A (未登録)'}",
                                                 size=18,
                                                 weight=FontWeight.BOLD,
-                                                # color=Colors.DEEP_ORANGE_600,
                                             ),
-                                            # クリックで案件番号のみをコピー
                                             on_click=lambda e,
                                             content=(
                                                 case.case_number
@@ -827,43 +835,29 @@ def DeceasedDetailView(page: Page, case_id: int):
                                             tooltip="クリックして案件番号をコピー",
                                         ),
                                         ElevatedButton(
+                                            "Kintone入力",
+                                            icon=Icons.CLOUD_UPLOAD,
+                                            on_click=lambda e: launch_kintone_automation(case.case_id) if case else None,
+                                            style=ButtonStyle(
+                                                bgcolor=Colors.AMBER_100,
+                                                color=Colors.BROWN_900,
+                                            ),
+                                            tooltip="Kintoneを開き、詳細情報を自動入力します"
+                                        ),
+                                        Container(width=10),
+                                        ElevatedButton(
                                             "案件を完全に削除",
                                             on_click=lambda e: page.open(delete_confirm_dialog),
                                             icon=Icons.DELETE_FOREVER,
                                             icon_color=Colors.RED,
                                             bgcolor=Colors.BLUE_50,
                                             color=Colors.BLUE_800,
-                                            # style=ButtonStyle(bgcolor=Colors.RED_100),
                                         ),
                                     ],
                                     alignment=MainAxisAlignment.SPACE_BETWEEN,
                                     vertical_alignment=CrossAxisAlignment.CENTER,
                                 ),
                                 Divider(height=10, color=Colors.TRANSPARENT),
-                                # Row(
-                                #     [
-                                #         ElevatedButton(
-                                #             "📂 案件フォルダを開く",
-                                #             on_click=lambda e: open_case_folder(
-                                #                 page=page,
-                                #                 case_id=case.case_id,
-                                #                 get_path_service=deceased_service.get_case_folder_path,
-                                #             ),
-                                #             style=ButtonStyle(
-                                #                 bgcolor=Colors.BLUE_50,
-                                #                 color=Colors.BLUE_800,
-                                #             ),
-                                #         )
-                                #     ],
-                                #     alignment=MainAxisAlignment.START,
-                                #     visible=(
-                                #         case is not None and case.case_id is not None
-                                #     ),  # 案件がある場合のみ表示
-                                # ),
-                                # Divider(
-                                #     height=10, color=Colors.TRANSPARENT
-                                # ),  # 案件番号と担当者情報を少し離す
-                                # # 💡 担当者情報表示 (被相続人情報の上に移動) 💡
                                 Row(
                                     [
                                         Text(
@@ -871,7 +865,6 @@ def DeceasedDetailView(page: Page, case_id: int):
                                             size=18,
                                             weight=FontWeight.BOLD,
                                         ),
-                                        # 💡 編集ボタンを追加 💡
                                         IconButton(
                                             Icons.EDIT,
                                             icon_color=Colors.BLUE_500,
@@ -882,45 +875,19 @@ def DeceasedDetailView(page: Page, case_id: int):
                                     alignment=MainAxisAlignment.START,
                                 ),
                                 Row(
-                                    [
-                                        # 担当者1の表示
-                                        manager_field,
-                                        # Text(
-                                        #     # caseがNone、またはmanager_idがNoneの場合は「未割当」を表示
-                                        #     f"担当1 (進捗): {USER_MAP.get(case.manager_id, '未割当')}"
-                                        #     if case is not None
-                                        #     and case.manager_id is not None
-                                        #     else "担当1 (進捗): 未割当",
-                                        #     size=14,
-                                        #     width=250,
-                                        # ),
-                                        # 担当者2の表示
-                                        operator_field,
-                                        # Text(
-                                        #     # caseがNone、またはoperator_idがNoneの場合は「未割当」を表示
-                                        #     f"担当2 (実務): {USER_MAP.get(case.operator_id, '未割当')}"
-                                        #     if case is not None
-                                        #     and case.operator_id is not None
-                                        #     else "担当2 (実務): 未割当",
-                                        #     size=14,
-                                        #     width=250,
-                                        # ),
-                                    ],
+                                    [manager_field, operator_field],
                                     alignment=MainAxisAlignment.START,
                                 ),
                             ]
                         ),
-                        # 新規案件モード（-1）または単独新規被相続人モード（0）以外で、case情報がある場合に表示
                         visible=not is_new_client_case and not is_new_deceased and case is not None,
                     ),
                     Divider(
                         visible=not is_new_client_case and not is_new_deceased and case is not None
                     ),
-                    # 被相続人情報
                     Row(
                         [
                             Text(
-                                # "👤 被相続人情報 ✏️ ",
                                 "👤 被相続人情報",
                                 size=18,
                                 weight=FontWeight.BOLD,
@@ -935,7 +902,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                                 Icons.EDIT,
                                 icon_color=Colors.BLUE_500,
                                 tooltip="被相続人を編集 (別ページへ遷移)",
-                                on_click=go_to_deceased_edit_page,  # 関数名を変更
+                                on_click=go_to_deceased_edit_page,
                             ),
                         ]
                     ),
@@ -955,12 +922,11 @@ def DeceasedDetailView(page: Page, case_id: int):
                             ),
                             Column(
                                 [
-                                    # 西暦のみ
                                     Container(
                                         content=Text(
                                             f"生年月日（西暦）: {dob_date_obj.isoformat() if dob_date_obj else '未登録'}",
                                             size=14,
-                                            width=250,  # 幅を調整
+                                            width=250,
                                         ),
                                         on_click=lambda e,
                                         content=(
@@ -978,12 +944,11 @@ def DeceasedDetailView(page: Page, case_id: int):
                             ),
                             Column(
                                 [
-                                    # 西暦のみ
                                     Container(
                                         content=Text(
                                             f"死亡日（西暦）: {dod_date_obj.isoformat() if dod_date_obj else '未登録'}",
                                             size=14,
-                                            width=250,  # 幅を調整
+                                            width=250,
                                         ),
                                         on_click=lambda e,
                                         content=(
@@ -991,7 +956,6 @@ def DeceasedDetailView(page: Page, case_id: int):
                                         ): copy_to_clipboard_and_notify(e, page, content),
                                         tooltip="クリックして西暦をコピー",
                                     ),
-                                    # 和暦のみ
                                     Text(
                                         f"死亡日（和暦）: {convert_seireki_to_wareki(dod_date_obj) if dod_date_obj else '未登録'}",
                                         size=12,
@@ -1011,21 +975,17 @@ def DeceasedDetailView(page: Page, case_id: int):
                                     size=14,
                                     width=600,
                                 ),
-                                # 住所のコピー機能を追加
                                 on_click=lambda e,
                                 content=copyable_full_address: copy_to_clipboard_and_notify(
                                     e, page, content
                                 ),
                                 tooltip="クリックして現住所をコピー",
                             ),
-                            # 必要に応じて本籍地なども追加可能
                         ],
                         alignment=MainAxisAlignment.START,
-                        visible=not is_new_client_case
-                        and not is_new_deceased,  # 新規登録モード以外で表示
+                        visible=not is_new_client_case and not is_new_deceased,
                     ),
                     Divider(),
-                    # 相続人リスト
                     Column(
                         [
                             Row(
@@ -1034,14 +994,12 @@ def DeceasedDetailView(page: Page, case_id: int):
                                         "👨‍👩‍👧‍👦 相続人リスト",
                                         size=16,
                                     ),
-                                    # 💡 新しい相続人追加ボタン 💡
                                     ElevatedButton(
                                         "新しい相続人を追加",
                                         icon=Icons.ADD,
-                                        on_click=go_to_new_heir_page,  # 関数名を変更
+                                        on_click=go_to_new_heir_page,
                                     ),
                                 ],
-                                # alignment=MainAxisAlignment.SPACE_BETWEEN,
                                 vertical_alignment=CrossAxisAlignment.CENTER,
                             ),
                             Container(
@@ -1051,7 +1009,6 @@ def DeceasedDetailView(page: Page, case_id: int):
                                 width=page.width * 0.8,
                             ),
                         ],
-                        # 新規案件モード（-1）または単独新規被相続人モード（0）では非表示
                         visible=not is_new_deceased and not is_new_client_case,
                     ),
                     Divider(),
@@ -1081,7 +1038,7 @@ def DeceasedDetailView(page: Page, case_id: int):
                             ]
                         ),
                         width=page.width * 0.8,
-                        visible=case is not None,  # 案件情報がある場合のみ表示
+                        visible=case is not None,
                     ),
                     Divider(),
                     Row(
@@ -1097,12 +1054,9 @@ def DeceasedDetailView(page: Page, case_id: int):
         ),
     ]
 
-    # --- View表示時の初期化処理 ---
     def on_view_show_handler(e):
-        """Viewが表示されるたびに実行され、データ表示とパス初期化を行う"""
         page.update()
 
-        # 新規登録モードの場合は自動遷移
         if is_new_client_case:
             page.go("/deceased_edit/-1")
             return
@@ -1110,12 +1064,9 @@ def DeceasedDetailView(page: Page, case_id: int):
             page.go("/deceased_edit/0")
             return
 
-        # 既存/登録済みの場合の処理
         if not is_new_deceased and not is_new_client_case:
-            # 相続人リストの更新
             update_heirs_list()
 
-        # 💡 パスフィールドの初期値を設定
         if case:
             current_path = deceased_service.get_case_folder_path(case.case_id) or ""
             path_field.value = current_path
@@ -1123,16 +1074,6 @@ def DeceasedDetailView(page: Page, case_id: int):
             path_field.value = ""
 
         page.update()
-        # page.update()
-        # update_heirs_list()
-
-        # # 💡 パスフィールドの初期値を設定
-        # if case:
-        #     current_path = get_case_folder_path(case.case_id) or ""
-        #     path_field.value = current_path
-        # else:
-        #     path_field.value = ""
-        # page.update()
 
     view = View(
         f"/detail/{case_id}",
@@ -1141,12 +1082,4 @@ def DeceasedDetailView(page: Page, case_id: int):
     )
 
     view.on_view_show = on_view_show_handler
-
-    # ページがマウントされた時に自動でモーダルを開く設定
-    # view.on_view_show = _on_mount
-
-    # # 初期リストの表示 (新規の場合、heirs_controlsは空のまま)
-    # if not is_new_deceased and not is_new_client_case:
-    #     update_heirs_list()
-
     return view

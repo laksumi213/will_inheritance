@@ -1818,3 +1818,68 @@ def toggle_task_completion(task_id: int, is_completed: bool) -> bool:
             session.rollback()
             print(f"タスク状態更新エラー: {e}")
             return False
+
+
+def get_kintone_integration_data(case_id: int) -> dict | None:
+    """
+    Kintone自動入力用にあらゆる情報を統合して取得する
+    """
+    with Session(bind=Engine) as session:
+        # 1. 案件と被相続人の取得
+        deceased = session.query(Deceased).filter(Deceased.case_id == case_id).first()
+        if not deceased:
+            return None
+        
+        case = deceased.case
+
+        # 2. 契約者（Heir）の取得
+        contracting_heir = (
+            session.query(Heir)
+            .filter(Heir.deceased_id == deceased.id)
+            .filter(Heir.is_contracting_party == True)
+            .first()
+        )
+
+        # 3. 契約者の住所・連絡先
+        client_name = ""
+        client_kana = ""
+        client_zip = ""
+        client_addr = ""
+        client_tel = ""
+        client_mail = ""
+
+        if contracting_heir:
+            # 💡 修正: 氏名の間のスペースを全角 '　' に変更
+            client_name = f"{contracting_heir.name_last}　{contracting_heir.name_first}"
+            client_kana = f"{contracting_heir.name_last_kana}　{contracting_heir.name_first_kana}"
+            
+            # 住所
+            addr_info = get_address_info("heir", contracting_heir.id)
+            client_zip = addr_info.get("zip_code", "")
+            client_addr = f"{addr_info.get('prefecture','')}{addr_info.get('city_ward_town','')}{addr_info.get('street_address','')}"
+            if addr_info.get("building_name"):
+                client_addr += f" {addr_info.get('building_name')}"
+            
+            # 連絡先
+            contacts = get_contact_info("heir", contracting_heir.id)
+            client_tel = next((c["value"] for c in contacts if c["type"] == "PHONE"), "")
+            client_mail = next((c["value"] for c in contacts if c["type"] == "EMAIL"), "")
+
+        # 4. 被相続人情報 (こちらも念のため全角スペースに)
+        deceased_name = f"{deceased.name_last}　{deceased.name_first}"
+        deceased_kana = f"{deceased.name_last_kana}　{deceased.name_first_kana}"
+        
+        inheritance_date = deceased.date_of_death.strftime("%Y-%m-%d") if deceased.date_of_death else ""
+
+        return {
+            "case_number": case.case_number,
+            "client_name": client_name,
+            "client_kana": client_kana,
+            "client_zip": client_zip,
+            "client_addr": client_addr,
+            "client_tel": client_tel,
+            "client_mail": client_mail,
+            "deceased_name": deceased_name,
+            "deceased_kana": deceased_kana,
+            "inheritance_date": inheritance_date,
+        }

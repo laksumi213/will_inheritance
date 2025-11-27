@@ -31,7 +31,7 @@ from components.pages.smbc_balance_doc_view import SmbcBalanceDocView
 from components.pages.task_management_view import TaskManagementView
 from components.pages.visit_reserve_select_bank_view import VisitReserveSelectBankView
 from components.utils.file_system import open_case_folder
-from services.deceased_service import get_contracting_party_name
+from services.deceased_service import get_contracting_party_name, get_case_folder_path_service
 
 
 # 💡 メインコンテンツのダミービュー（後で実装）
