@@ -1883,3 +1883,27 @@ def get_kintone_integration_data(case_id: int) -> dict | None:
             "deceased_kana": deceased_kana,
             "inheritance_date": inheritance_date,
         }
+    
+
+# 案件IDから被相続人を確実に取得する専用関数
+def get_deceased_by_case_id(case_id: int):
+    """
+    案件ID (Case.case_id) を指定して、その案件に紐づく被相続人情報を取得する。
+    IDの混同を防ぐために、詳細画面ではこちらを使用する。
+    """
+    with Session(bind=Engine) as session:
+        options_load = (
+            joinedload(Deceased.heirs),
+            joinedload(Deceased.case).joinedload(Case.manager),
+            joinedload(Deceased.case).joinedload(Case.operator),
+            joinedload(Deceased.case).joinedload(Case.status_ref),
+            joinedload(Deceased.last_address), # 住所もロード
+        )
+
+        deceased = (
+            session.query(Deceased)
+            .options(*options_load)
+            .filter(Deceased.case_id == case_id)
+            .first()
+        )
+        return deceased

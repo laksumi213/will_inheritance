@@ -91,6 +91,12 @@ class VisitReserveSelectBankView(Column):
                 elif bank_code == "0009":
                     # 三井住友銀行専用ルート (仮)
                     self.page.go(f"/case/{self.case_id}/reserve/smbc")
+                elif bank_code == "0040":
+                    # イオン銀行専用ルート
+                    self.page.go(f"/case/{self.case_id}/reserve/aeon")
+                elif bank_code == "0397":
+                    # 💡 SBI新生銀行専用ルート
+                    self.page.go(f"/case/{self.case_id}/reserve/sbi_shinsei")
                 else:
                     # 標準フォーム
                     self.page.go(f"/case/{self.case_id}/reserve/standard/{bank_code}")

@@ -358,7 +358,8 @@ def DeceasedDetailView(page: Page, case_id: int):
 
     # --- サービス層からデータを取得 ---
     case = deceased_service.get_case_by_id(case_id)
-    deceased = deceased_service.get_deceased_by_id(case_id)
+    # deceased = deceased_service.get_deceased_by_id(case_id)
+    deceased = deceased_service.get_deceased_by_case_id(case_id)
 
     is_new_client_case = case_id == -1
     is_new_deceased = case_id == 0

@@ -20,6 +20,7 @@ from flet import (
     View,
 )
 
+from components.pages.aeon_visit_reserve_view import AeonVisitReserveView
 from components.pages.balance_cert_doc import BalanceCertDocView
 from components.pages.bank_balance_doc_edit import BankBalanceDocEditView
 from components.pages.bank_edit import BankEditView
@@ -27,6 +28,7 @@ from components.pages.detail import DeceasedDetailView
 from components.pages.freeze_proc_view import FreezeProcView
 from components.pages.mizuho_balance_doc_view import MizuhoBalanceDocView
 from components.pages.securities_edit import SecuritiesEditView
+from components.pages.sbi_shinsei_visit_reserve_view import SbiShinseiVisitReserveView # 💡 追加
 from components.pages.smbc_balance_doc_view import SmbcBalanceDocView
 from components.pages.task_management_view import TaskManagementView
 from components.pages.visit_reserve_select_bank_view import VisitReserveSelectBankView
@@ -186,6 +188,11 @@ class CaseHubView:
                 return PlaceholderView(self.page, "みずほ予約フォーム", f"案件ID: {self.case_id}")
             elif route.startswith(f"/case/{self.case_id}/reserve/smbc"):
                 return PlaceholderView(self.page, "三井住友予約フォーム", f"案件ID: {self.case_id}")
+            elif route.startswith(f"/case/{self.case_id}/reserve/aeon"):
+                return AeonVisitReserveView(self.page, self.case_id, "0040")
+            elif route.startswith(f"/case/{self.case_id}/reserve/sbi_shinsei"):
+                # 💡 SBI新生銀行専用ルート
+                return SbiShinseiVisitReserveView(self.page, self.case_id, "0397")
             elif route.startswith(f"/case/{self.case_id}/reserve/standard/"):
                 return PlaceholderView(
                     self.page,
@@ -234,12 +241,12 @@ class CaseHubView:
                     ),
                 )
             ],
-            alignment="start",  # 右上に配置（お好みで end でも可）
+            alignment="start",
         )
 
         # 3. ヘッダーを追加
         self.main_content.controls.append(folder_button_row)
-        # self.main_content.controls.append(Divider(height=10, color=Colors.TRANSPARENT))
+        self.main_content.controls.append(Divider(height=10, color=Colors.TRANSPARENT))
 
         # 4. メインコンテンツを展開して追加
         if isinstance(new_content_candidate, View):
