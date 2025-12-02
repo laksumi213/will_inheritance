@@ -11,16 +11,16 @@ from flet import (
     Divider,
     Dropdown,
     ElevatedButton,
-    FilePicker,  # 追加
-    FilePickerResultEvent,  # 追加
+    FilePicker,
+    FilePickerResultEvent,
     Icon,
     Icons,
     ListTile,
     ListView,
-    MainAxisAlignment,  # 追加
+    MainAxisAlignment,
     Page,
     Row,
-    SnackBar,  # 追加
+    SnackBar,
     Text,
     TextField,
     TextStyle,
@@ -30,7 +30,9 @@ from flet import (
 
 from components.pages.client_register import reset_all_global_fields
 from components.utils.file_system import open_case_folder
-from services.db_setup import (
+
+# 💡 修正: db_setup から deceased_service にインポート元を変更
+from services.deceased_service import (
     get_all_case_statuses,
     get_all_users,
     get_case_folder_path,

@@ -46,8 +46,6 @@ def get_db():
         db.close()
 
 
-# 💡 以下、既存コードで定義されていた全てのDBモデル
-
 # --- 2. マスタテーブル (Master Data) ---
 
 
@@ -65,11 +63,6 @@ class CaseStatus(Base):
     name = Column(String, unique=True, nullable=False)  # ステータス名 (例: 受託)
     order_num = Column(Integer)  # ステータスの表示/処理順序
 
-
-# class FinancialInstitution(Base):
-#     __tablename__ = "institutions"  # 金融機関名のマスター
-#     id = Column(Integer, primary_key=True)
-#     name = Column(String, unique=True, nullable=False)  # 金融機関名
 
 # 1. 口座種類マスタ (AccountTypeMaster)
 class AccountTypeMaster(Base):
@@ -481,282 +474,6 @@ class CaseSubmissionDoc(Base):
     case_ref = relationship("Case", back_populates="submitted_docs")
 
 
-# =======================================================
-## データアクセス関数 (CRUD)
-# =======================================================
-
-
-# 💡 全ユーザーリストの取得 (担当者ドロップダウン用)
-def get_all_users():
-    """全てのユーザーIDと名前を取得する"""
-    db = Session()
-    try:
-        users = db.query(User.id, User.name).order_by(User.id).all()
-        # {ID: Name} の辞書形式で返す
-        return {id: name for id, name in users}  # {ID: Name} の辞書形式で返す
-    finally:
-        db.close()
-
-
-# 💡 未完了タスクの取得 (ダッシュボード左側用)
-def get_incomplete_tasks(user_id=None):
-    """未完了のタスクを取得する (ユーザーIDでフィルタ可能)"""
-    db = Session()
-    try:
-        tasks = (
-            db.query(Task, Case.case_number, User.name, Case.client_name)
-            .join(Case, Task.case_id == Case.case_id)
-            .join(User, Task.assigned_user_id == User.id)
-            .filter(Task.is_completed == False)
-            .filter(Task.assigned_user_id == user_id)
-            .order_by(Task.due_date)
-            .limit(10)
-            .all()
-        )
-
-        tasks_data = []
-        for task, case_number, assigned_user_name, client_name in tasks:
-            tasks_data.append(
-                {
-                    "task_id": task.task_id,
-                    "case_id": task.case_id,
-                    "case_number": case_number,
-                    "description": task.description,
-                    "due_date": task.due_date.strftime("%Y/%m/%d") if task.due_date else "N/A",
-                    "assigned_user": assigned_user_name,
-                    "client_name": client_name,
-                }
-            )
-        return tasks_data
-    finally:
-        db.close()
-
-
-# 💡 案件リストの取得 (メイン一覧用)
-def get_case_list(search_term="", status_id=None, user_id=None):
-    """案件一覧を取得する (検索・フィルタリング・担当者フィルタ対応)"""
-    db = Session()
-    try:
-        query = (
-            db.query(
-                Case,  # 1. Caseオブジェクト全体
-                Deceased.name_last,  # 2. Deceasedの姓
-                Deceased.name_first,  # 3. Deceasedの名
-                CaseStatus.name.label("status_name"),  # 4. ステータス名
-                Task.description,
-                Task.last_updated_at,
-            )
-            .join(
-                Deceased, Case.case_id == Deceased.case_id, isouter=True
-            )  # Deceasedテーブルとの結合
-            .join(
-                CaseStatus, Case.current_status_id == CaseStatus.id, isouter=True
-            )  # CaseStatusテーブルとの結合
-            .join(Task, Case.case_id == Task.case_id, isouter=True)  # Taskテーブルとの結合
-            .order_by(Task.last_updated_at.desc())
-        )
-
-        # 検索条件
-        if search_term:
-            query = query.filter(
-                (Case.case_number.ilike(f"%{search_term}%"))
-                | (Case.client_name.ilike(f"%{search_term}%"))
-                | (Case.client_name_kana.ilike(f"%{search_term}%"))
-            )
-
-        # ステータスフィルター
-        if status_id:
-            query = query.filter(Case.current_status_id == status_id)
-
-        # 💡 担当者によるフィルタ
-        if user_id:
-            query = query.filter((Case.manager_id == user_id) | (Case.operator_id == user_id))
-
-        cases_data = query.limit(50).all()
-
-        case_list = []
-        processed_case_ids = set()
-
-        for (
-            case,
-            d_last,
-            d_first,
-            status_name,
-            description,
-            last_updated_at,
-        ) in cases_data:
-            if case.case_id in processed_case_ids:
-                # 既に処理済みであれば、この行はタスク情報のみが異なる重複行であるため、
-                # リストへの追加処理をスキップします。
-                continue
-
-            # 💡 案件IDの記録:
-            #    - 処理を行う案件IDをセットに追加し、以降の行で重複として識別できるようにします。
-            processed_case_ids.add(case.case_id)
-
-            # --- 重複排除後に実行される、案件情報構築ロジック ---
-            deceased_name = f"{d_last} {d_first}" if d_last else "N/A"
-
-            # 担当ロールの決定 (ユーザーが担当1か担当2かを判定)
-            role_label = ""
-            if user_id:
-                is_manager = case.manager_id == user_id
-                is_operator = case.operator_id == user_id
-                if is_manager and is_operator:
-                    role_label = "担当1 & 2"
-                elif is_manager:
-                    role_label = "担当1"
-                elif is_operator:
-                    role_label = "担当2"
-
-            case_list.append(
-                {
-                    "case_id": case.case_id,
-                    "case_number": case.case_number,
-                    "client_name": case.client_name,
-                    "deceased_name": deceased_name,
-                    "contract_date": case.contract_date.strftime("%Y/%m/%d")
-                    if case.contract_date
-                    else "N/A",
-                    "status": status_name if status_name else "N/A",
-                    "role_label": role_label,
-                    "manager_id": case.manager_id,
-                    "operator_id": case.operator_id,
-                    "description": description,
-                    "last_updated_at": (
-                        last_updated_at.strftime("%Y/%m/%d") if last_updated_at else "N/A"
-                    ),
-                }
-            )
-            print()
-            print(
-                case.case_id,
-                case.case_number,
-                f"case.client_name:{case.client_name}",
-                f"deceased_name:{deceased_name}",
-            )
-        return case_list
-    finally:
-        db.close()
-
-
-# 💡 担当案件の取得 (get_case_listのuser_idフィルタとほぼ同じだが、既存コードに合わせたため残す)
-def get_my_cases(user_id: int, limit: int = 10):
-    """特定のユーザーが担当者(Manager)または実務担当者(Operator)である案件を取得する。"""
-    db = Session()
-    try:
-        query = (
-            db.query(Case)
-            .options(joinedload(Case.deceased_ref), joinedload(Case.status_ref))
-            .filter((Case.manager_id == user_id) | (Case.operator_id == user_id))
-            .order_by(Case.current_status_id, Case.contract_date.desc())
-        )
-
-        cases = query.limit(limit).all()
-
-        case_list = []
-        for case in cases:
-            deceased_name = (
-                case.deceased_ref.name_last + " " + case.deceased_ref.name_first
-                if case.deceased_ref
-                else "N/A"
-            )
-
-            case_list.append(
-                {
-                    "case_id": case.case_id,
-                    "case_number": case.case_number,
-                    "client_name": case.client_name,
-                    "deceased_name": deceased_name,
-                    "status": case.status_ref.name if case.status_ref else "N/A",
-                }
-            )
-        return case_list
-    finally:
-        db.close()
-
-
-# 💡 全担当者の業務キャパシティを取得 (管理職ビュー用)
-def get_user_capacity_data():
-    """管理職向け: 全担当者の業務キャパシティ（未完了タスク数、担当案件数）を取得する。"""
-    db = Session()
-    try:
-        users = db.query(User).all()
-        capacity_data = []
-
-        for user in users:
-            user_id = user.id
-
-            task_count = (
-                db.query(func.count(Task.task_id))
-                .filter(Task.assigned_user_id == user_id, Task.is_completed == False)
-                .scalar()
-            )
-
-            case_count = (
-                db.query(func.count(Case.case_id))
-                .filter((Case.manager_id == user_id) | (Case.operator_id == user_id))
-                .scalar()
-            )
-
-            capacity_data.append(
-                {
-                    "user_id": user_id,
-                    "name": user.name,
-                    "role": user.role,
-                    "total_incomplete_tasks": task_count,
-                    "total_cases_handled": case_count,
-                }
-            )
-        capacity_data.sort(key=lambda x: x["total_incomplete_tasks"], reverse=True)
-        return capacity_data
-    finally:
-        db.close()
-
-
-# 💡 月ごとの面談スケジュールを取得
-def get_interviews_by_month(year: int, month: int):
-    """指定された年月に面談予定がある案件のリストを取得する。"""
-    db = Session()
-    try:
-        # 月の開始日と終了日を計算
-        start_date = datetime(year, month, 1)
-        if month == 12:
-            end_date = datetime(year + 1, 1, 1)
-        else:
-            end_date = datetime(year, month + 1, 1)
-
-        query = (
-            db.query(Case, Deceased.name_last, Deceased.name_first)
-            .join(Deceased, Case.case_id == Deceased.case_id, isouter=True)
-            .filter(Case.interview_date.isnot(None))
-            .filter(Case.interview_date >= start_date)
-            .filter(Case.interview_date < end_date)
-            .order_by(Case.interview_date)
-        )
-
-        results = query.all()
-
-        interview_list = []
-        for case, d_last, d_first in results:
-            deceased_name = f"{d_last} {d_first}" if d_last else "N/A"
-
-            interview_list.append(
-                {
-                    "case_id": case.case_id,
-                    "case_number": case.case_number,
-                    "client_name": case.client_name,
-                    "deceased_name": deceased_name,
-                    "interview_date": case.interview_date,
-                    "manager_id": case.manager_id,
-                    "operator_id": case.operator_id,
-                }
-            )
-        return interview_list
-    finally:
-        db.close()
-
-
 # --- DB初期化関数 ---
 def init_db():
     Base.metadata.create_all(Engine)
@@ -765,34 +482,58 @@ def init_db():
 # --- DB操作関数 ---
 def add_initial_data():
     session = Session()
-    if session.query(Case).count() == 0:
-        # 1. 担当者とステータスの初期登録
+    # 既存データの有無に関わらず、マスタデータの不足分を追加するように修正
+    # ただし、Case作成などのサンプルデータは初回のみとするため、Caseカウントチェックは残す
+    
+    # 1. 担当者とステータスの初期登録 (存在チェック付き)
+    if not session.query(User).filter_by(windows_id="admin01").first():
         user1 = User(windows_id="admin01", name="管理者 太郎", role="Manager")
+        session.add(user1)
+    
+    if not session.query(CaseStatus).filter_by(name="受託").first():
         status1 = CaseStatus(name="受託", order_num=3)
-        session.add_all([user1, status1])
-        session.flush() # IDを確定させる
+        session.add(status1)
+    
+    session.flush()
 
-        # 2. 銀行マスタと口座種類マスタの初期登録
-        
-        # 2-1. 銀行マスタ (みずほ銀行)
+    # 2. 銀行マスタの初期登録
+    if not session.query(BankMaster).filter_by(bank_code="0001").first():
         bank_master = BankMaster(bank_name="みずほ銀行", bank_code="0001")
         session.add(bank_master)
         session.flush()
         
-        # 2-2. 支店マスタ (銀座中央支店)
+        # 2-2. 支店マスタ
         branch_master = BranchMaster(
             bank_id=bank_master.id,
             branch_name="銀座中央",
             branch_code="050"
         )
         session.add(branch_master)
-        
-        # 2-3. 口座種類マスタ (普通預金)
-        account_type_master = AccountTypeMaster(type_name="普通預金")
-        session.add(account_type_master)
-        session.flush()
+    
+    # 2-3. 口座種類マスタ (拡張)
+    initial_account_types = [
+        "普通預金",
+        "定期預金",
+        "当座預金",
+        "普通貯金",
+        "定期貯金",
+        "投資信託",
+        "外貨預金"
+    ]
+    
+    for type_name in initial_account_types:
+        if not session.query(AccountTypeMaster).filter_by(type_name=type_name).first():
+            session.add(AccountTypeMaster(type_name=type_name))
+            
+    session.commit()
 
-        # 3. 案件 (Case: G2103) の登録
+    # 3. サンプル案件データの登録 (初回のみ)
+    if session.query(Case).count() == 0:
+        # ID再取得
+        user1 = session.query(User).filter_by(windows_id="admin01").first()
+        status1 = session.query(CaseStatus).filter_by(name="受託").first()
+        
+        # 案件 (Case: G2103) の登録
         case1 = Case(
             case_number="G2103",
             client_name="水谷 昌代",
@@ -807,8 +548,6 @@ def add_initial_data():
         session.flush()
 
         # 4. 被相続人 (Deceased: 水谷 弘) の登録
-        
-        # 4-1. 被相続人の住所 (共通住所)
         addr_deceased = Address(
             zip_code="104-0053",
             prefecture="東京都",
@@ -819,7 +558,6 @@ def add_initial_data():
         session.add(addr_deceased)
         session.flush()
         
-        # 4-2. 被相続人の最終住所IDをAddressに設定し、基本情報を登録
         d1 = Deceased(
             case_id=case1.case_id,
             name_last="水谷",
@@ -835,16 +573,6 @@ def add_initial_data():
         session.add(d1)
         session.flush()
         
-        # # 4-3. 住所履歴 (D_AddressHistory) の登録
-        # d1_addr_link = D_AddressHistory(
-        #     deceased_id=d1.id, 
-        #     address_id=addr_deceased.id, 
-        #     is_last_address=True
-        # )
-        # session.add(d1_addr_link)
-        
-        # 4-4. 連絡先登録 (被相続人の連絡先は D_ContactLink を経由するが、ここでは簡略化のため省略または契約者に一本化)
-
         # 5. 契約者 (Heir: 水谷 昌代, 妻) の登録
         h1 = Heir(
             deceased_id=d1.id,
@@ -860,7 +588,6 @@ def add_initial_data():
         session.add(h1)
         session.flush()
         
-        # 5-1. 契約者の住所は被相続人と同一の Address を参照（H_AddressHistory経由）
         h1_addr_link = H_AddressHistory(
             heir_id=h1.id, 
             address_id=addr_deceased.id, 
@@ -868,7 +595,6 @@ def add_initial_data():
         )
         session.add(h1_addr_link)
         
-        # 5-2. 契約者の連絡先 (電話番号: 03-3533-1675)
         contact_phone = Contact(value="03-3533-1675", type="PHONE", sub_type="Primary")
         session.add(contact_phone)
         session.flush()
@@ -877,17 +603,24 @@ def add_initial_data():
         session.add(h1_contact_link)
 
         # 6. 金融資産 (FinancialAsset) の登録
-        bank1 = FinancialAsset(
-            case_id=case1.case_id,
-            bank_id=bank_master.id,       # マスタID
-            branch_id=branch_master.id,   # マスタID
-            account_type_id=account_type_master.id, # マスタID
-            account_number="1234567",
-            balance=5000000.0,
-            status="調査中",
-        )
+        # マスタ取得
+        bank_master = session.query(BankMaster).filter_by(bank_code="0001").first()
+        branch_master = session.query(BranchMaster).filter_by(bank_id=bank_master.id, branch_code="050").first()
+        account_type_master = session.query(AccountTypeMaster).filter_by(type_name="普通預金").first()
+
+        if bank_master and branch_master and account_type_master:
+            bank1 = FinancialAsset(
+                case_id=case1.case_id,
+                bank_id=bank_master.id,       
+                branch_id=branch_master.id,   
+                account_type_id=account_type_master.id, 
+                account_number="1234567",
+                balance=5000000.0,
+                status="調査中",
+            )
+            session.add(bank1)
         
-        # 7. 負債/葬儀費用の登録 (既存ロジックを維持)
+        # 7. 負債/葬儀費用の登録
         liability1 = Liability(
             case_id=case1.case_id,
             is_debt=False,
@@ -895,379 +628,8 @@ def add_initial_data():
             amount=2500000.0,
             is_funeral_cost=True,
         )
-        session.add_all([bank1, liability1])
+        session.add(liability1)
 
         session.commit()
-
-
-        # # 1. 担当者とステータスの初期登録
-        # user1 = User(windows_id="admin01", name="管理者 太郎", role="Manager")
-        # status1 = CaseStatus(name="受託", order_num=3)
-        # session.add_all([user1, status1])
-        # session.flush() # IDを確定させる
-
-        # # 2. 銀行マスタと口座種類マスタの初期登録
-        
-        # # 2-1. 銀行マスタ (みずほ銀行)
-        # bank_master = BankMaster(bank_name="みずほ銀行", bank_code="0001")
-        # session.add(bank_master)
-        # session.flush()
-        
-        # # 2-2. 支店マスタ (銀座中央支店)
-        # branch_master = BranchMaster(
-        #     bank_id=bank_master.id,
-        #     branch_name="銀座中央",
-        #     branch_code="050"
-        # )
-        # session.add(branch_master)
-        
-        # # 2-3. 口座種類マスタ (普通預金)
-        # account_type_master = AccountTypeMaster(type_name="普通預金")
-        # session.add(account_type_master)
-        # session.flush()
-
-        # # 3. 案件 (Case: G2103) の登録
-        # case1 = Case(
-        #     case_number="G2103",
-        #     client_name="水谷 昌代",
-        #     client_name_kana="みずたに　まさよ",
-        #     manager_id=user1.id,
-        #     current_status_id=status1.id,
-        #     contract_date=date(2025, 10, 1),
-        #     fee_contract_amount=500000.0,
-        #     folder_path=r"\\192.168.11.20\行政書士法人チェスター\01.個別ＪＯＢ\G2103水谷昌代様（スタンダードプラン）"
-        # )
-        # session.add(case1)
-        # session.flush()
-
-        # # 4. 被相続人 (Deceased: 水谷 弘) の登録
-        
-        # # 4-1. 被相続人の住所 (共通住所)
-        # addr_deceased = Address(
-        #     zip_code="104-0053",
-        #     prefecture="東京都",
-        #     city_ward_town="中央区晴海",
-        #     street_address="二丁目5番16号",
-        #     building_name="1101号",
-        # )
-        # session.add(addr_deceased)
-        # session.flush()
-        
-        # # 4-2. 被相続人の最終住所IDをAddressに設定し、基本情報を登録
-        # d1 = Deceased(
-        #     case_id=case1.case_id,
-        #     name_last="水谷",
-        #     name_first="弘",
-        #     name_last_kana="みずたに",
-        #     name_first_kana="ひろし",
-        #     date_of_birth=date(1935, 1, 12),
-        #     date_of_death=date(2025, 5, 16),
-        #     hometown="東京都台東区東上野一丁目1番地",
-        #     relationship_type="本人",
-        #     last_address_id=addr_deceased.id
-        # )
-        # session.add(d1)
-        # session.flush()
-        
-        # # 5. 契約者 (Heir: 水谷 昌代, 妻) の登録
-        # h1 = Heir(
-        #     deceased_id=d1.id,
-        #     name_last="水谷",
-        #     name_first="昌代",
-        #     name_last_kana="みずたに",
-        #     name_first_kana="まさよ",
-        #     relationship_type="妻",
-        #     date_of_birth=date(1946, 11, 29),
-        #     hometown="東京都台東区東上野1-1",
-        #     is_contracting_party=True, # 契約者フラグ
-        # )
-        # session.add(h1)
-        # session.flush()
-        
-        # # 5-1. 契約者の住所は被相続人と同一の Address を参照（H_AddressHistory経由）
-        # h1_addr_link = H_AddressHistory(
-        #     heir_id=h1.id, 
-        #     address_id=addr_deceased.id, 
-        #     is_current_address=True
-        # )
-        # session.add(h1_addr_link)
-        
-        # # 5-2. 契約者の連絡先 (電話番号: 03-3533-1675)
-        # contact_phone = Contact(value="03-3533-1675", type="PHONE", sub_type="Primary")
-        # session.add(contact_phone)
-        # session.flush()
-        
-        # h1_contact_link = H_ContactLink(heir_id=h1.id, contact_id=contact_phone.id)
-        # session.add(h1_contact_link)
-
-        # # 6. 金融資産 (FinancialAsset) の登録
-        # bank1 = FinancialAsset(
-        #     case_id=case1.case_id,
-        #     bank_id=bank_master.id,       # マスタID
-        #     branch_id=branch_master.id,   # マスタID
-        #     account_type_id=account_type_master.id, # マスタID
-        #     account_number="1234567",
-        #     balance=5000000.0,
-        #     status="調査中",
-        # )
-        
-        # session.commit()
+    
     session.close()
-
-    # ... (既存のタスク生成ロジックの呼び出し部分) ...
-    # from services.db_setup import Base, Engine, Session
-    # DBセッション開始
-    with Session() as db:
-        # ユーザーとテンプレートの初期投入 (この関数内ではスキップしても良いが、seed_db_users_and_cases は残す)
-        case_id, tanaka_id, sato_id = seed_db_users_and_cases(db)
-        setup_task_templates(db)
-
-        # 既存タスクをクリア (テスト再実行用)
-        db.query(Task).delete()
-        db.commit()
-
-        # 案件ID:1をトリガーにしてタスクを自動生成 (Case G0001のタスク生成を続ける場合はこのまま)
-        print("---------------------------------------")
-        print(f"案件ID: {case_id} のタスク生成を開始します。")
-        generate_case_tasks(db, case_id)
-        print("---------------------------------------")
-
-        # 結果の確認
-        generated_tasks = db.query(Task).all()
-        print(f"生成されたタスク総数: {len(generated_tasks)} 件")
-
-
-def get_all_records(model_class):
-    session = Session()
-    if model_class.__name__ == "Heir":
-        records = (
-            session.query(model_class)
-            .options(joinedload(model_class.address_links))
-            .options(joinedload(model_class.contact_links))
-            .all()
-        )
-    else:
-        records = session.query(model_class).all()
-
-    results = []
-    for record in records:
-        data = {}
-        for column in record.__table__.columns:
-            value = getattr(record, column.name)
-            if isinstance(value, (date, datetime)):
-                data[column.name] = str(value)
-            else:
-                data[column.name] = value
-
-        if model_class.__name__ == "Heir":
-            # 住所情報（H_AddressHistory & Address）
-            addresses = []
-            for addr_link in record.address_links:
-                address_data = session.query(Address).get(addr_link.address_id)
-                address_detail = {
-                    "is_current": addr_link.is_current_address,
-                    "zip_code": address_data.zip_code,
-                    "address_full": f"{address_data.prefecture}{address_data.city_ward_town}{address_data.street_address} {address_data.building_name or ''}".strip(),
-                }
-                addresses.append(address_detail)
-            data["addresses"] = addresses
-
-            # 連絡先情報（H_ContactLink & Contact）
-            contacts = []
-            for contact_link in record.contact_links:
-                contact_data = session.query(Contact).get(contact_link.contact_id)
-                contacts.append(
-                    {
-                        "type": contact_data.type,
-                        "sub_type": contact_data.sub_type,
-                        "value": contact_data.value,
-                    }
-                )
-            data["contacts"] = contacts
-
-        results.append(data)
-
-    session.close()
-    return results
-
-
-def display_records_pretty(model_class):
-    records = get_all_records(model_class)
-    print(f"\n===== {model_class.__name__} Table ({len(records)} records) =====")
-    pretty_json = json.dumps(records, indent=2, ensure_ascii=False)
-    print(pretty_json)
-    print("=======================================\n")
-
-
-def get_case_folder_path(case_id: int) -> str | None:
-    """
-    Case ID に紐づくフォルダパス (Case.folder_path) を取得する。
-    """
-    with Session(bind=Engine) as session:
-        case = session.query(Case).filter(Case.case_id == case_id).first()
-        # フォルダパスが存在しない場合や Case が見つからない場合は None を返す
-        return case.folder_path if case and case.folder_path else None
-
-
-def get_case_by_number(case_number: str):
-    """
-    案件番号を指定して、Caseレコードを一つ取得する。
-    存在しない場合は None を返す。
-    """
-    db = Session()
-    try:
-        case = db.query(Case).filter(Case.case_number == case_number).first()
-        return case
-    finally:
-        db.close()
-
-
-# 次の案件番号を生成する関数
-def get_next_case_number():
-    """
-    既存の案件番号 'GXXXX' のうち最大の番号を取得し、次の番号 (GXXXX+1) を生成する。
-    案件番号がない場合は 'G0001' を返す。
-    """
-    with Session() as db:
-        # 1. 案件番号が 'G' で始まるレコードをフィルタ
-        # 2. 案件番号の末尾の4桁の数字部分を抽出 (SUBSTR) し、それを最大値として取得
-
-        # SQLiteのSUBSTR/CASTを仮定
-        max_num_str = (
-            db.query(func.max(func.cast(func.substr(Case.case_number, 2), Integer)))
-            .filter(Case.case_number.like("G%"))
-            .scalar()
-        )
-
-        if max_num_str is None:
-            # 案件が一つもない場合
-            next_number = 1
-        else:
-            # 最大値に1を加える
-            next_number = int(max_num_str) + 1
-
-        # 案件番号 'G' + 4桁のゼロパディング形式にフォーマット
-        return f"G{next_number:04d}"
-
-
-def delete_case_and_all_related_data(case_number: str):
-    """
-    指定された案件番号のCaseレコードと、それにカスケード削除される全ての関連レコードを削除する。
-    さらに、孤立した Address, Contact レコードを削除する。
-    """
-    db = Session()
-    try:
-        # 1. Caseレコードを取得
-        case_to_delete = db.query(Case).filter(Case.case_number == case_number).first()
-
-        if not case_to_delete:
-            print(f"案件番号 {case_number} は見つかりませんでした。")
-            return False
-
-        case_id = case_to_delete.case_id
-        print(f"案件ID {case_id} ({case_number}) の削除を開始します...")
-
-        # 2. Caseに紐づく Deceased と Heir の ID を事前に取得 (クリーンアップのため)
-        deceased = db.query(Deceased).filter(Deceased.case_id == case_id).first()
-        deceased_id = deceased.id if deceased else None
-
-        heir_ids = []
-        if deceased_id:
-            heir_ids = [h.id for h in db.query(Heir).filter(Heir.deceased_id == deceased_id).all()]
-
-        # 3. Caseの削除を実行
-        #    - Case, Deceased, Heir, Task, Asset... (cascade設定されているもの全て) が自動削除される
-        #    - D_AddressHistory, H_AddressHistory, D_ContactLink, H_ContactLink も自動削除される
-        db.delete(case_to_delete)
-        db.commit()
-        print(
-            f"Case ID {case_id} およびカスケード関連データ ({len(heir_ids)}件の相続人を含む) の削除が完了しました。"
-        )
-
-        # 4. 孤立した Address および Contact レコードのクリーンアップ
-
-        # 4-1. 孤立した Address レコードの削除
-        # どの D_AddressHistory/H_AddressHistory からも参照されていない Address を削除する
-        # (NOT EXISTS を使用)
-
-        # Address が D_AddressHistory/H_AddressHistory のどちらからも参照されていない Address ID を見つける
-        subquery_deceased = db.query(D_AddressHistory.address_id)
-        subquery_heir = db.query(H_AddressHistory.address_id)
-
-        delete_count_addr = (
-            db.query(Address)
-            .filter(~Address.id.in_(subquery_deceased), ~Address.id.in_(subquery_heir))
-            .delete(synchronize_session="fetch")
-        )
-        db.commit()
-        print(f"孤立した Address レコードを {delete_count_addr} 件削除しました。")
-
-        # 4-2. 孤立した Contact レコードの削除
-        # どの D_ContactLink/H_ContactLink/CaseContactPoint からも参照されていない Contact を削除する
-        subquery_d = db.query(D_ContactLink.contact_id)
-        subquery_h = db.query(H_ContactLink.contact_id)
-        subquery_c = db.query(CaseContactPoint.contact_id)
-
-        delete_count_contact = (
-            db.query(Contact)
-            .filter(
-                ~Contact.id.in_(subquery_d),
-                ~Contact.id.in_(subquery_h),
-                ~Contact.id.in_(subquery_c),
-            )
-            .delete(synchronize_session="fetch")
-        )
-        db.commit()
-        print(f"孤立した Contact レコードを {delete_count_contact} 件削除しました。")
-
-        return True
-
-    except Exception as e:
-        db.rollback()
-        print(f"データ削除中にエラーが発生しました: {e}")
-        return False
-    finally:
-        db.close()
-
-
-def create_contact_and_link_to_heir(
-    db: Session, heir_id: int, contacts: list[dict], contact_type: str
-):
-    """
-    収集された連絡先リストを Contact テーブルに登録し、H_ContactLink を介して相続人に紐づける。
-
-    Args:
-        db (Session): SQLAlchemy セッション
-        heir_id (int): 紐づける相続人のID
-        contacts (list[dict]): [{'value': '090...', 'sub_type': '携帯'}, ...]
-        contact_type (str): "PHONE" または "EMAIL"
-    """
-    # リストをループして各連絡先を処理
-    for contact_data in contacts:
-        value = contact_data.get("value")
-        sub_type = contact_data.get("sub_type")
-
-        # 値が空でなければ登録
-        if value:
-            # 1. Contact レコードの作成
-            new_contact = Contact(
-                value=value,
-                type=contact_type,
-                sub_type=sub_type,
-            )
-            db.add(new_contact)
-            db.flush()  # IDを取得
-
-            # 2. H_ContactLink レコードの作成
-            link = H_ContactLink(heir_id=heir_id, contact_id=new_contact.id)
-            db.add(link)
-
-
-def get_all_case_statuses():
-    """全ての案件ステータスを取得する（ドロップダウン用）"""
-    db = Session()
-    try:
-        statuses = db.query(CaseStatus).order_by(CaseStatus.order_num).all()
-        return statuses
-    finally:
-        db.close()

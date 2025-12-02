@@ -2,15 +2,13 @@
 
 import threading
 from time import sleep
-from datetime import date
 from flet import Page, SnackBar, Text, Colors
 from components.utils.web_operation import Web
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, WebDriverException # 💡 追加: WebDriverExceptionをインポート
+from selenium.common.exceptions import NoSuchElementException, WebDriverException
 import mojimoji 
-from tkinter import messagebox
 from services.deceased_service import get_financial_asset_automation_data
 
 # 実行中のMizuhoReservationインスタンスを保持する辞書
@@ -39,14 +37,14 @@ def start_mizuho_reservation(page: Page, case_id: int, selected_branch: str, sel
         page.update()
         return
 
-    # 💡 修正: 既に予約プロセスが進行中の場合は、クリーンアップして再開
+    # 既に予約プロセスが進行中の場合は、クリーンアップして再開
     if case_id in _active_reservations:
         old_instance = _active_reservations[case_id]
-        old_instance.cleanup() # 古いドライバーを強制終了
+        old_instance.cleanup() 
         del _active_reservations[case_id]
         
         page.open(SnackBar(
-            content=Text("過去のWebセッションを終了しました。新しい予約プロセスを開始します。", color=Colors.WHITE),
+            content=Text("過去のWebセッションをリセットしました。新しい予約プロセスを開始します。", color=Colors.WHITE),
             bgcolor=Colors.AMBER_700
         ))
         page.update()
@@ -54,7 +52,7 @@ def start_mizuho_reservation(page: Page, case_id: int, selected_branch: str, sel
     # Web操作は時間がかかるため、別スレッドで実行
     def run_automation():
         try:
-            # 💡 インスタンスを作成し、グローバル変数に保存
+            # インスタンスを作成し、グローバル変数に保存
             reservation_instance = MizuhoReservation(page, data, selected_branch, selected_procedure)
             _active_reservations[case_id] = reservation_instance
             
@@ -71,7 +69,7 @@ def start_mizuho_reservation(page: Page, case_id: int, selected_branch: str, sel
             )
             
         except Exception as e:
-            # 💡 エラー発生時はインスタンスを削除
+            # エラー発生時はインスタンスを削除
             if case_id in _active_reservations:
                 _active_reservations[case_id].cleanup()
                 del _active_reservations[case_id]
@@ -104,16 +102,14 @@ def continue_mizuho_reservation(page: Page, case_id: int):
 
     reservation_instance = _active_reservations[case_id]
     
-    # 💡 修正: スレッドを再導入し、UIフリーズを回避
     def run_automation_continue():
         try:
             driver = reservation_instance.driver
 
-            # 💡 修正: Web画面が閉じられていないかチェック (WebDriverExceptionもキャッチ)
+            # Web画面が閉じられていないかチェック (WebDriverExceptionもキャッチ)
             try:
                 _ = driver.title 
             except (NoSuchElementException, WebDriverException) as e:
-                # ウィンドウが閉じられている場合に発生する例外をキャッチ
                 page.open(SnackBar(
                     content=Text("エラー: Web画面が閉じられています。予約を最初からやり直してください。", color=Colors.WHITE),
                     bgcolor=Colors.RED_700
@@ -125,7 +121,7 @@ def continue_mizuho_reservation(page: Page, case_id: int):
                 page.update()
                 return # 処理を中断
                         
-            # 💡 ユーザーに最終操作を促す（start_proc()内から移動させ、処理全体が成功した場合のみ表示）
+            # ユーザーに最終操作を促す
             page.open(
                 SnackBar(
                     content = Text("✅ 最終確認画面に遷移しました。Webブラウザで「予約内容を確認」をクリックして予約を完了してください。", color=Colors.WHITE),
@@ -146,13 +142,13 @@ def continue_mizuho_reservation(page: Page, case_id: int):
             )
 
         finally:
-            # 💡 完了後、インスタンスを削除
+            # 完了後、インスタンスを削除
             if case_id in _active_reservations:
                 del _active_reservations[case_id]
             page.update()
 
-    run_automation_continue()
     # threading.Thread(target=run_automation_continue).start()
+    run_automation_continue()
 
 
 # ----------------------------------------------------------------------------------
@@ -165,8 +161,8 @@ class MizuhoReservation:
         self.data = data
         self.selected_branch = selected_branch
         self.selected_procedure = selected_procedure
-        self.proc = Web() # Web操作ヘルパーのインスタンス化
-        # データベースから取得したデータを属性に展開
+        self.proc = Web() # Web操作ヘルパーのインスタンス化 (シングルトン)
+        
         self.deceased_name = self.data["deceased_name"]
         self.deceased_dob = self.data["deceased_dob"].split('-') if self.data["deceased_dob"] else ["0000", "00", "00"]
         self.bank_branch_code = self.data["bank_branch_code"]
@@ -187,20 +183,22 @@ class MizuhoReservation:
         self.firm_dob_month = self.data["firm_dob_month"]
         self.firm_dob_day = self.data["firm_dob_day"]
 
-    # 💡 追加: クリーンアップメソッド
+    # 💡 クリーンアップメソッド: シングルトンなので quit() は呼ばない
     def cleanup(self):
-        """Webドライバーを安全に終了させる"""
-        try:
-            if self.driver:
-                self.driver.quit()
-        except Exception:
-            # ドライバーが既に閉じられている場合など
-            pass
+        """プロセス終了時の処理"""
+        # シングルトンパターンのため、WebDriver全体を終了させる quit() は呼び出さない。
+        # 必要に応じて、現在のタブを閉じる等の処理を記述するが、
+        # 続けて別の操作を行う可能性を考慮し、ここでは何もしない。
+        pass
+        # try:
+        #     if self.driver:
+        #         self.driver.quit()
+        # except Exception:
+        #     pass
 
     def click_button_by_text(self, driver, text):
         """ボタンの表示テキストを使って要素を探し、クリックする関数"""
         xpath_locator = f"//button[text()='{text}']"
-        # ... (既存のclick_button_by_text) ...
         try:
             button = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.XPATH, xpath_locator))
@@ -215,18 +213,13 @@ class MizuhoReservation:
         # ----------------------------------------------------
         # 1. 予約開始ページのオープン
         # ----------------------------------------------------
-        # ... (既存のreservationロジックは変更なし) ...
-
         if self.selected_branch == '京橋支店':
-            # 京橋支店 ※この支店は法人ではなく個人で予約
             url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA338922&_gl=1*k5k7g4*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTUzMzUkajYwJGwwJGgw'
         
         elif self.selected_branch == '八重洲口支店':
-            # 八重洲口支店
             url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA338924&_gl=1*1yjvpu4*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTU1MjkkajUxJGwwJGgw'
         
         elif self.selected_branch == '東京中央支店':
-            # 東京中央支店 ※この支店は法人ではなく個人で予約
             url = 'https://www.mizuhobank.co.jp/tenpoinfo/tenpo_reservation/reservation.html?id=BA339731&_gl=1*1eoo2t1*_ga*MTY5MzY1OTY1My4xNzU5ODE4NTkw*_ga_3D4K3DCJNB*czE3NjA0OTUxNDYkbzIkZzEkdDE3NjA0OTU0MzgkajUyJGwwJGgw'
             
         self.proc.web_open(url)
@@ -252,7 +245,7 @@ class MizuhoReservation:
 
         sleep(1)
 
-    def start_proc(self): # 💡 メソッド名をstart_procに修正
+    def start_proc(self):
         # ----------------------------------------------------
         # 2. 日時選択後の情報入力
         # ----------------------------------------------------
@@ -265,14 +258,12 @@ class MizuhoReservation:
         )
 
         ## 1. 必須のチェックボックス（3項目）の操作
-        driver.find_element(By.XPATH,
-                                      "//*[@id='right-column']/div[1]/form/div[1]/div[2]/div[1]/label/span").click()
+        driver.find_element(By.XPATH, "//*[@id='right-column']/div[1]/form/div[1]/div[2]/div[1]/label/span").click()
         
-        # 2. ご相談内容・ご希望など (bt_form_attr_res11)
-        # 💡 selected_procedureに基づいて挿入するテキストを変更
+        # 2. ご相談内容・ご希望など
         if self.selected_procedure == "残高証明書の発行依頼":
             procedure_text = "残高証明書の発行依頼"
-        else: # "取引明細の発行依頼"
+        else: 
             procedure_text = "取引明細の発行依頼"
             
         text_content = (
@@ -282,10 +273,8 @@ class MizuhoReservation:
         )
         driver.find_element(By.ID, 'bt_form_attr_res11').send_keys(text_content)
 
-
         # 各種証明書発行
-        driver.find_element(By.XPATH,
-                                      '//*[@id="right-column"]/div[1]/form/div[1]/div[6]/div[2]/label/span').click()
+        driver.find_element(By.XPATH, '//*[@id="right-column"]/div[1]/form/div[1]/div[6]/div[2]/label/span').click()
 
         # ご予約時刻を15分過ぎても... -> 確認しました
         driver.find_element(By.XPATH, '//*[@id="right-column"]/div[1]/form/div[1]/div[8]/div/label/span').click()
@@ -304,65 +293,62 @@ class MizuhoReservation:
             EC.presence_of_element_located((By.NAME, "form1"))
         )
 
-        # 法人名【漢字】 (DB固定値)
+        # 法人名【漢字】
         driver.find_element(By.NAME, "cus_name").send_keys(self.firm_name_kanji)
 
-        # 法人名【全角カナ】 (DB固定値)
+        # 法人名【全角カナ】
         driver.find_element(By.NAME, "cus_kana").send_keys(self.firm_name_kana)
 
-        # ご来店者のお名前【漢字】 (DB情報 + 案件担当者コード)
-        driver.find_element(By.NAME, "attr_org1").send_keys(f'{self.staff_name_kanji}（{self.data['case_number']}）')
+        # ご来店者のお名前【漢字】
+        driver.find_element(By.NAME, "attr_org1").send_keys(f'{self.staff_name_kanji}（{self.data["case_number"]}）')
 
-        # ご来店者のお名前【全角カナ】 (DB固定値)
+        # ご来店者のお名前【全角カナ】
         driver.find_element(By.NAME, "attr_org2").send_keys(self.data['staff_name_kana'])
 
-        # 電話番号 (契約者電話番号)
+        # 電話番号
         driver.find_element(By.NAME, "cus_tel").send_keys(self.staff_tel.replace('-', ''))
 
-        # 連絡がつきやすい時間帯 (いつでも)
+        # 連絡がつきやすい時間帯
         driver.find_element(By.XPATH, "//*[@id='right-column']/div[1]/form/div[1]/div[12]/div[1]/label/span").click()
 
-        # メールアドレス (契約者メールアドレス)
+        # メールアドレス
         driver.find_element(By.NAME, "cus_mail").send_keys(self.staff_mail)
 
-        # 生年月日 (法人設立年月日または今日の日付 - 法人情報から取得)
+        # 生年月日
         Select(driver.find_element(By.ID, "bt_form_cus_birthy")).select_by_value(self.firm_dob_year)
         Select(driver.find_element(By.ID, "bt_form_cus_birthm")).select_by_value(self.firm_dob_month)
         Select(driver.find_element(By.ID, "bt_form_cus_birthd")).select_by_value(self.firm_dob_day)
 
-        # 郵便番号 (法人郵便番号)
+        # 郵便番号
         driver.find_element(By.NAME, 'cus_zip').send_keys(mojimoji.zen_to_han(self.firm_zip or "1030028"))
         driver.find_element(By.XPATH, '//*[@id="right-column"]/div[1]/form/div[1]/div[18]/input[2]').click()
-        sleep(1) # 住所自動入力の待機
+        sleep(1) 
 
-        # 市区町村・番地 (自動入力されるが、念のため)
+        # 市区町村・番地
         driver.find_element(By.NAME, 'cus_addr1').send_keys('7-20')
 
-        # 建物名など (法人建物名)
+        # 建物名など
         driver.find_element(By.NAME, 'cus_addr2').send_keys(self.firm_addr2 or "ビル名")
 
-        # 店番号 (DBから取得した支店コード)
+        # 店番号
         driver.find_element(By.NAME, "attr_org4").send_keys(mojimoji.zen_to_han(self.bank_branch_code or "0"))
 
-        # 口座番号 (DBから取得した口座番号)
+        # 口座番号
         driver.find_element(By.NAME, "attr_org6").send_keys(mojimoji.zen_to_han(self.bank_account_number or "0"))
 
         # ご予約時に選択いただいたメニュー... -> 確認しました
         driver.find_element(By.XPATH, '//*[@id="right-column"]/div[1]/form/div[1]/div[34]/div/label/span').click()
 
         # 個人情報の利用目的... -> 同意します
-        driver.find_element(By.XPATH,
-                            '//*[@id="right-column"]/div[1]/form/div[1]/div[36]/div/label/span').click()
+        driver.find_element(By.XPATH, '//*[@id="right-column"]/div[1]/form/div[1]/div[36]/div/label/span').click()
 
         # メールマガジン -> 配信を希望しない
-        driver.find_element(By.XPATH,
-                                      '//*[@id="right-column"]/div[1]/form/div[1]/div[38]/div[2]/label/span').click()
+        driver.find_element(By.XPATH, '//*[@id="right-column"]/div[1]/form/div[1]/div[38]/div[2]/label/span').click()
 
         # ----------------------------------------------------
         # 4. 最終確認
         # ----------------------------------------------------
-        # 「次へ進む」ボタンを特定 (type="submit", value="次へ進む")
         driver.find_element(By.NAME, "submit").click()
         
         sleep(5)
-        self.proc.web_operation(driver.current_url) # 最終画面をユーザーに渡して終了
+        self.proc.web_operation(driver.current_url)

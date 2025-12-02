@@ -30,8 +30,10 @@ from components.utils.contact_controls import (
     create_contact_input_row,
 )
 from services import deceased_service
-from services.db_setup import get_all_users
+
+# 💡 修正: db_setup から deceased_service に変更
 from services.deceased_service import (
+    get_all_users,  # 💡 変更
     add_new_case_for_client_registration,
     get_case_id_by_deceased_id,
     get_next_case_number_service,
@@ -217,6 +219,7 @@ def ClientRegisterView(page: Page):
             )
 
             if new_deceased_id > 0:
+                # 💡 修正: Case ID を取得して遷移する
                 case_id_for_path = get_case_id_by_deceased_id(new_deceased_id)
 
                 # 4-1. フォルダパスの更新
@@ -239,7 +242,8 @@ def ClientRegisterView(page: Page):
                         duration=1500,
                     )
                 )
-                page.go(f"/detail/{new_deceased_id}")
+                # 💡 修正: Case ID で遷移
+                page.go(f"/detail/{case_id_for_path}")
             else:
                 raise Exception(
                     "データベース登録に失敗しました。（サービス関数が負のIDを返しました）"
@@ -381,9 +385,6 @@ def reset_all_global_fields():
     path_field.value = ""
     
     # 連絡先リストをクリアし、デフォルトの空の行を1つ再追加
-    # NOTE: UI上から controls を削除するだけでは、リストをきれいに初期化できないため、
-    # 既存の initialize_contact_column ロジックを流用し、リストを再構築します。
-    
     # 既存の Column オブジェクト自体をクリアし、新しいコントロールで上書き
     phone_inputs_column.controls.clear()
     new_row_p, _ = create_contact_input_row(phone_inputs_column, initial_value="", is_email=False)

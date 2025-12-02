@@ -1,12 +1,10 @@
 # /services/web_automation_service.py
 
 import threading
-from time import sleep
 from flet import Page, SnackBar, Text, Colors
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, WebDriverException
 
 # 既存のWeb操作クラスを使用
 from components.utils.web_operation import Web 
@@ -14,15 +12,18 @@ from components.utils.web_operation import Web
 class WebAutomationService:
     def __init__(self, page: Page = None):
         self.page = page
-        self.proc = Web() # Web操作ヘルパーのインスタンス化
+        self.proc = Web() # Web操作ヘルパーのインスタンス化 (シングルトン)
         self.driver = None
 
     def close(self):
-        if self.proc and self.proc.driver:
-            try:
-                self.proc.driver.quit()
-            except:
-                pass
+        # 💡 シングルトンパターンではドライバーをここで終了させない
+        # 他の処理で再利用するため、quit()は呼び出さないように変更
+        pass
+        # if self.proc and self.proc.driver:
+        #     try:
+        #         self.proc.driver.quit()
+        #     except:
+        #         pass
 
     def _show_snackbar(self, message, color=Colors.GREEN):
         if self.page:
@@ -104,7 +105,7 @@ class WebAutomationService:
             except:
                 print("同意チェックボックスが見つかりませんでした")
             
-            # 💡 修正: 画面を日時選択エリア（上部）へスクロール
+            # 画面を日時選択エリア（上部）へスクロール
             try:
                 # 日時選択エリアのID (HTMLソースより)
                 date_section = self.driver.find_element(By.ID, "page:form-pc:pageBlock-pc:dateTime-pc")
@@ -122,7 +123,7 @@ class WebAutomationService:
             print(f"Aeon Automation Error: {e}")
 
 
-    # ... (SBI新生銀行のコードは変更なし) ...
+    # --- SBI新生銀行 自動化ロジック ---
     def run_sbi_shinsei_automation(self, data: dict):
         target_url = "https://webforms.sbishinseibank.co.jp/reserve/input?type=inv_sfc&lid=temp_bran_btn_03&h=form&intcid=temp_bran_btn_03"
         threading.Thread(target=self._sbi_task, args=(target_url, data)).start()

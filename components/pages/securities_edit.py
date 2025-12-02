@@ -1,4 +1,4 @@
-# /components/pages/securities_edit.py
+# components/pages/securities_edit.py
 
 from flet import (
     AlertDialog,
@@ -616,6 +616,20 @@ def SecuritiesEditView(page: Page, case_id: int):
         cancel_edit_button.visible = False
         page.update()
 
+    # 💡 共通コピー関数
+    def copy_to_clipboard(e, text):
+        if not text or text == "N/A":
+            return
+        page.set_clipboard(text)
+        page.open(
+            SnackBar(
+                content=Text(f"「{text}」をコピーしました", color=Colors.WHITE),
+                bgcolor=Colors.GREEN_700,
+                duration=1000,
+            )
+        )
+        page.update()
+
     def update_assets_list():
         # 💡 asset_type="SECURITIES" でフィルタリングして取得
         assets = get_financial_asset_by_case_and_type(case_id, "SECURITIES")
@@ -628,16 +642,45 @@ def SecuritiesEditView(page: Page, case_id: int):
         else:
             for asset in assets:
                 balance_str = f"¥{asset['balance']:,.0f}" if asset["balance"] is not None else "-"
-                title_info = f"🏢 {asset['bank_name']} ({asset.get('bank_code', '-')})"
-                sub_info = f"{asset.get('branch_name', '-')} | {asset.get('account_type', '-')}"
+                
+                # 表示用データの準備
+                securities_name = asset['bank_name']
+                securities_code = asset.get('bank_code', '-')
+                title_info = f"🏢 {securities_name} ({securities_code})"
+                
+                branch_name = asset.get('branch_name', '-')
+                account_type = asset.get('account_type', '-')
+                sub_info = f"{branch_name} | {account_type}"
+                
+                account_number = asset['account_number']
+                account_info = f"口座: {account_number}"
+                
+                balance_info = f"評価額: {balance_str}"
+
+                # 💡 クリック可能なコンテナを作成するヘルパー
+                def create_clickable_text(text, data_val, width=None):
+                    return Container(
+                        content=Text(
+                            text,
+                            size=14,
+                            weight=FontWeight.BOLD if "🏢" in text else FontWeight.NORMAL,
+                            color=Colors.BLACK87,
+                        ),
+                        width=width,
+                        on_click=lambda e: copy_to_clipboard(e, data_val),
+                        tooltip="クリックしてコピー",
+                        padding=5,
+                        border_radius=5,
+                        ink=True,
+                    )
 
                 assets_list_view.controls.append(
                     Row(
                         [
-                            Text(title_info, weight=FontWeight.BOLD, width=200, color=Colors.BLACK),
-                            Text(sub_info, width=200, color=Colors.BLACK),
-                            Text(f"口座: {asset['account_number']}", width=150, color=Colors.BLACK),
-                            Text(f"評価額: {balance_str}", width=120, color=Colors.BLACK),
+                            create_clickable_text(title_info, securities_name, width=200),
+                            create_clickable_text(sub_info, branch_name, width=200),
+                            create_clickable_text(account_info, account_number, width=150),
+                            create_clickable_text(balance_info, str(asset['balance']), width=120),
                             IconButton(
                                 Icons.EDIT,
                                 icon_color=Colors.BLUE_400,
