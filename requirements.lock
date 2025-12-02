@@ -10,7 +10,10 @@
 #   universal: false
 
 -e file:.
+acres==0.5.0
+    # via nipype
 altgraph==0.17.4
+    # via macholib
     # via pyinstaller
 annotated-types==0.7.0
     # via pydantic
@@ -18,6 +21,8 @@ anyio==4.4.0
     # via httpx
     # via starlette
     # via watchfiles
+appscript==1.4.0
+    # via xlwings
 arrow==1.3.0
     # via cookiecutter
 attrs==24.2.0
@@ -34,28 +39,39 @@ certifi==2024.8.30
     # via httpx
     # via requests
     # via selenium
-cffi==2.0.0
-    # via trio
 chardet==5.2.0
     # via binaryornot
     # via reportlab
 charset-normalizer==3.3.2
     # via requests
+ci-info==0.3.0
+    # via etelemetry
 click==8.2.1
     # via cookiecutter
+    # via nipype
     # via uvicorn
-colorama==0.4.6
-    # via click
-    # via qrcode
-    # via uvicorn
+configobj==5.0.9
+    # via fitz
+configparser==7.2.0
+    # via fitz
+contourpy==1.3.3
+    # via matplotlib
 cookiecutter==2.6.0
     # via flet-cli
+cycler==0.12.1
+    # via matplotlib
 docx==0.2.4
     # via will-inheritance
 et-xmlfile==1.1.0
     # via openpyxl
+etelemetry==0.3.1
+    # via nipype
 fastapi==0.116.1
     # via flet-web
+filelock==3.20.0
+    # via nipype
+fitz==0.0.1.dev2
+    # via will-inheritance
 flet==0.28.3
     # via flet-cli
     # via flet-desktop
@@ -67,6 +83,8 @@ flet-desktop==0.28.3
     # via flet
 flet-web==0.28.3
     # via flet
+fonttools==4.61.0
+    # via matplotlib
 greenlet==3.1.1
     # via sqlalchemy
 h11==0.14.0
@@ -75,6 +93,8 @@ h11==0.14.0
     # via wsproto
 httpcore==1.0.5
     # via httpx
+httplib2==0.31.0
+    # via fitz
 httptools==0.6.4
     # via uvicorn
 httpx==0.27.2
@@ -90,21 +110,45 @@ jinja2==3.1.6
     # via cookiecutter
 keyboard==0.13.5
     # via will-inheritance
+kiwisolver==1.4.9
+    # via matplotlib
+looseversion==1.3.0
+    # via nipype
 lxml==5.3.0
+    # via appscript
     # via docx
     # via pandas-datareader
+    # via pyxnat
+macholib==1.16.4
+    # via pyinstaller
 markdown-it-py==4.0.0
     # via rich
 markupsafe==3.0.2
     # via jinja2
+matplotlib==3.10.7
+    # via will-inheritance
 mdurl==0.1.2
     # via markdown-it-py
 mojimoji==0.0.13
     # via will-inheritance
 mouseinfo==0.1.3
     # via pyautogui
+networkx==3.6
+    # via nipype
+    # via prov
+nibabel==5.3.2
+    # via fitz
+    # via nipype
+nipype==1.10.0
+    # via fitz
 numpy==2.3.2
+    # via contourpy
+    # via fitz
+    # via matplotlib
+    # via nibabel
+    # via nipype
     # via pandas
+    # via scipy
     # via will-inheritance
 oauthlib==3.2.2
     # via flet
@@ -113,35 +157,48 @@ openpyxl==3.1.5
 outcome==1.3.0.post0
     # via trio
 packaging==23.2
+    # via etelemetry
     # via flet-cli
+    # via matplotlib
+    # via nibabel
+    # via nipype
     # via pyinstaller
     # via pyinstaller-hooks-contrib
     # via webdriver-manager
 pandas==2.3.2
+    # via fitz
     # via pandas-datareader
     # via will-inheritance
 pandas-datareader==0.10.0
     # via will-inheritance
+pathlib==1.0.1
+    # via pyxnat
 pdf2image==1.17.0
     # via will-inheritance
 pdfminer==20191125
     # via will-inheritance
-pefile==2023.2.7
-    # via pyinstaller
 pillow==10.4.0
     # via docx
+    # via matplotlib
     # via pdf2image
     # via reportlab
+prov==2.1.1
+    # via nipype
+psutil==7.1.3
+    # via xlwings
+puremagic==1.30
+    # via nipype
 pyautogui==0.9.54
     # via will-inheritance
-pycparser==2.23
-    # via cffi
 pycryptodome==3.20.0
     # via pdfminer
 pydantic==2.11.7
     # via fastapi
 pydantic-core==2.33.2
     # via pydantic
+pydot==4.0.1
+    # via nipype
+    # via prov
 pygetwindow==0.0.9
     # via pyautogui
 pygments==2.19.2
@@ -152,6 +209,669 @@ pyinstaller-hooks-contrib==2025.8
     # via pyinstaller
 pymsgbox==1.0.9
     # via pyautogui
+pyobjc==12.1
+    # via keyboard
+pyobjc-core==12.1
+    # via pyautogui
+    # via pyobjc
+    # via pyobjc-framework-accessibility
+    # via pyobjc-framework-accounts
+    # via pyobjc-framework-addressbook
+    # via pyobjc-framework-adservices
+    # via pyobjc-framework-adsupport
+    # via pyobjc-framework-applescriptkit
+    # via pyobjc-framework-applescriptobjc
+    # via pyobjc-framework-applicationservices
+    # via pyobjc-framework-apptrackingtransparency
+    # via pyobjc-framework-audiovideobridging
+    # via pyobjc-framework-authenticationservices
+    # via pyobjc-framework-automaticassessmentconfiguration
+    # via pyobjc-framework-automator
+    # via pyobjc-framework-avfoundation
+    # via pyobjc-framework-avkit
+    # via pyobjc-framework-avrouting
+    # via pyobjc-framework-backgroundassets
+    # via pyobjc-framework-browserenginekit
+    # via pyobjc-framework-businesschat
+    # via pyobjc-framework-callkit
+    # via pyobjc-framework-carbon
+    # via pyobjc-framework-cfnetwork
+    # via pyobjc-framework-cinematic
+    # via pyobjc-framework-classkit
+    # via pyobjc-framework-cloudkit
+    # via pyobjc-framework-cocoa
+    # via pyobjc-framework-colorsync
+    # via pyobjc-framework-contacts
+    # via pyobjc-framework-contactsui
+    # via pyobjc-framework-coreaudio
+    # via pyobjc-framework-coreaudiokit
+    # via pyobjc-framework-corebluetooth
+    # via pyobjc-framework-coredata
+    # via pyobjc-framework-corehaptics
+    # via pyobjc-framework-corelocation
+    # via pyobjc-framework-coremedia
+    # via pyobjc-framework-coremediaio
+    # via pyobjc-framework-coremidi
+    # via pyobjc-framework-coreml
+    # via pyobjc-framework-coremotion
+    # via pyobjc-framework-coreservices
+    # via pyobjc-framework-corespotlight
+    # via pyobjc-framework-coretext
+    # via pyobjc-framework-corewlan
+    # via pyobjc-framework-cryptotokenkit
+    # via pyobjc-framework-datadetection
+    # via pyobjc-framework-devicecheck
+    # via pyobjc-framework-devicediscoveryextension
+    # via pyobjc-framework-discrecording
+    # via pyobjc-framework-discrecordingui
+    # via pyobjc-framework-diskarbitration
+    # via pyobjc-framework-dvdplayback
+    # via pyobjc-framework-eventkit
+    # via pyobjc-framework-exceptionhandling
+    # via pyobjc-framework-executionpolicy
+    # via pyobjc-framework-extensionkit
+    # via pyobjc-framework-externalaccessory
+    # via pyobjc-framework-fileprovider
+    # via pyobjc-framework-fileproviderui
+    # via pyobjc-framework-findersync
+    # via pyobjc-framework-fsevents
+    # via pyobjc-framework-fskit
+    # via pyobjc-framework-gamecenter
+    # via pyobjc-framework-gamecontroller
+    # via pyobjc-framework-gamekit
+    # via pyobjc-framework-gameplaykit
+    # via pyobjc-framework-healthkit
+    # via pyobjc-framework-imagecapturecore
+    # via pyobjc-framework-installerplugins
+    # via pyobjc-framework-intents
+    # via pyobjc-framework-intentsui
+    # via pyobjc-framework-iobluetooth
+    # via pyobjc-framework-iobluetoothui
+    # via pyobjc-framework-iosurface
+    # via pyobjc-framework-ituneslibrary
+    # via pyobjc-framework-kernelmanagement
+    # via pyobjc-framework-latentsemanticmapping
+    # via pyobjc-framework-launchservices
+    # via pyobjc-framework-libdispatch
+    # via pyobjc-framework-libxpc
+    # via pyobjc-framework-linkpresentation
+    # via pyobjc-framework-localauthentication
+    # via pyobjc-framework-localauthenticationembeddedui
+    # via pyobjc-framework-mailkit
+    # via pyobjc-framework-mapkit
+    # via pyobjc-framework-mediaaccessibility
+    # via pyobjc-framework-mediaextension
+    # via pyobjc-framework-medialibrary
+    # via pyobjc-framework-mediaplayer
+    # via pyobjc-framework-mediatoolbox
+    # via pyobjc-framework-metal
+    # via pyobjc-framework-metalfx
+    # via pyobjc-framework-metalkit
+    # via pyobjc-framework-metalperformanceshaders
+    # via pyobjc-framework-metalperformanceshadersgraph
+    # via pyobjc-framework-metrickit
+    # via pyobjc-framework-mlcompute
+    # via pyobjc-framework-modelio
+    # via pyobjc-framework-multipeerconnectivity
+    # via pyobjc-framework-naturallanguage
+    # via pyobjc-framework-netfs
+    # via pyobjc-framework-network
+    # via pyobjc-framework-networkextension
+    # via pyobjc-framework-notificationcenter
+    # via pyobjc-framework-opendirectory
+    # via pyobjc-framework-osakit
+    # via pyobjc-framework-oslog
+    # via pyobjc-framework-passkit
+    # via pyobjc-framework-pencilkit
+    # via pyobjc-framework-phase
+    # via pyobjc-framework-photos
+    # via pyobjc-framework-photosui
+    # via pyobjc-framework-preferencepanes
+    # via pyobjc-framework-pushkit
+    # via pyobjc-framework-quartz
+    # via pyobjc-framework-quicklookthumbnailing
+    # via pyobjc-framework-replaykit
+    # via pyobjc-framework-safariservices
+    # via pyobjc-framework-safetykit
+    # via pyobjc-framework-scenekit
+    # via pyobjc-framework-screencapturekit
+    # via pyobjc-framework-screensaver
+    # via pyobjc-framework-screentime
+    # via pyobjc-framework-searchkit
+    # via pyobjc-framework-security
+    # via pyobjc-framework-securityfoundation
+    # via pyobjc-framework-securityinterface
+    # via pyobjc-framework-securityui
+    # via pyobjc-framework-sensitivecontentanalysis
+    # via pyobjc-framework-servicemanagement
+    # via pyobjc-framework-sharedwithyou
+    # via pyobjc-framework-sharedwithyoucore
+    # via pyobjc-framework-shazamkit
+    # via pyobjc-framework-social
+    # via pyobjc-framework-soundanalysis
+    # via pyobjc-framework-speech
+    # via pyobjc-framework-spritekit
+    # via pyobjc-framework-storekit
+    # via pyobjc-framework-symbols
+    # via pyobjc-framework-syncservices
+    # via pyobjc-framework-systemconfiguration
+    # via pyobjc-framework-systemextensions
+    # via pyobjc-framework-threadnetwork
+    # via pyobjc-framework-uniformtypeidentifiers
+    # via pyobjc-framework-usernotifications
+    # via pyobjc-framework-usernotificationsui
+    # via pyobjc-framework-videosubscriberaccount
+    # via pyobjc-framework-videotoolbox
+    # via pyobjc-framework-virtualization
+    # via pyobjc-framework-vision
+    # via pyobjc-framework-webkit
+pyobjc-framework-accessibility==12.1
+    # via pyobjc
+pyobjc-framework-accounts==12.1
+    # via pyobjc
+    # via pyobjc-framework-cloudkit
+pyobjc-framework-addressbook==12.1
+    # via pyobjc
+pyobjc-framework-adservices==12.1
+    # via pyobjc
+pyobjc-framework-adsupport==12.1
+    # via pyobjc
+pyobjc-framework-applescriptkit==12.1
+    # via pyobjc
+pyobjc-framework-applescriptobjc==12.1
+    # via pyobjc
+pyobjc-framework-applicationservices==12.1
+    # via pyobjc
+pyobjc-framework-apptrackingtransparency==12.1
+    # via pyobjc
+pyobjc-framework-audiovideobridging==12.1
+    # via pyobjc
+pyobjc-framework-authenticationservices==12.1
+    # via pyobjc
+pyobjc-framework-automaticassessmentconfiguration==12.1
+    # via pyobjc
+pyobjc-framework-automator==12.1
+    # via pyobjc
+pyobjc-framework-avfoundation==12.1
+    # via pyobjc
+    # via pyobjc-framework-cinematic
+    # via pyobjc-framework-mediaextension
+    # via pyobjc-framework-mediaplayer
+    # via pyobjc-framework-phase
+pyobjc-framework-avkit==12.1
+    # via pyobjc
+pyobjc-framework-avrouting==12.1
+    # via pyobjc
+pyobjc-framework-backgroundassets==12.1
+    # via pyobjc
+pyobjc-framework-browserenginekit==12.1
+    # via pyobjc
+pyobjc-framework-businesschat==12.1
+    # via pyobjc
+pyobjc-framework-callkit==12.1
+    # via pyobjc
+pyobjc-framework-carbon==12.1
+    # via pyobjc
+pyobjc-framework-cfnetwork==12.1
+    # via pyobjc
+pyobjc-framework-cinematic==12.1
+    # via pyobjc
+pyobjc-framework-classkit==12.1
+    # via pyobjc
+pyobjc-framework-cloudkit==12.1
+    # via pyobjc
+pyobjc-framework-cocoa==12.1
+    # via pyobjc
+    # via pyobjc-framework-accessibility
+    # via pyobjc-framework-accounts
+    # via pyobjc-framework-addressbook
+    # via pyobjc-framework-adservices
+    # via pyobjc-framework-adsupport
+    # via pyobjc-framework-applescriptkit
+    # via pyobjc-framework-applescriptobjc
+    # via pyobjc-framework-applicationservices
+    # via pyobjc-framework-apptrackingtransparency
+    # via pyobjc-framework-audiovideobridging
+    # via pyobjc-framework-authenticationservices
+    # via pyobjc-framework-automaticassessmentconfiguration
+    # via pyobjc-framework-automator
+    # via pyobjc-framework-avfoundation
+    # via pyobjc-framework-avkit
+    # via pyobjc-framework-avrouting
+    # via pyobjc-framework-backgroundassets
+    # via pyobjc-framework-browserenginekit
+    # via pyobjc-framework-businesschat
+    # via pyobjc-framework-callkit
+    # via pyobjc-framework-carbon
+    # via pyobjc-framework-cfnetwork
+    # via pyobjc-framework-cinematic
+    # via pyobjc-framework-classkit
+    # via pyobjc-framework-cloudkit
+    # via pyobjc-framework-colorsync
+    # via pyobjc-framework-contacts
+    # via pyobjc-framework-contactsui
+    # via pyobjc-framework-coreaudio
+    # via pyobjc-framework-coreaudiokit
+    # via pyobjc-framework-corebluetooth
+    # via pyobjc-framework-coredata
+    # via pyobjc-framework-corehaptics
+    # via pyobjc-framework-corelocation
+    # via pyobjc-framework-coremedia
+    # via pyobjc-framework-coremediaio
+    # via pyobjc-framework-coremidi
+    # via pyobjc-framework-coreml
+    # via pyobjc-framework-coremotion
+    # via pyobjc-framework-coreservices
+    # via pyobjc-framework-corespotlight
+    # via pyobjc-framework-coretext
+    # via pyobjc-framework-corewlan
+    # via pyobjc-framework-cryptotokenkit
+    # via pyobjc-framework-datadetection
+    # via pyobjc-framework-devicecheck
+    # via pyobjc-framework-devicediscoveryextension
+    # via pyobjc-framework-discrecording
+    # via pyobjc-framework-discrecordingui
+    # via pyobjc-framework-diskarbitration
+    # via pyobjc-framework-dvdplayback
+    # via pyobjc-framework-eventkit
+    # via pyobjc-framework-exceptionhandling
+    # via pyobjc-framework-executionpolicy
+    # via pyobjc-framework-extensionkit
+    # via pyobjc-framework-externalaccessory
+    # via pyobjc-framework-fileprovider
+    # via pyobjc-framework-findersync
+    # via pyobjc-framework-fsevents
+    # via pyobjc-framework-fskit
+    # via pyobjc-framework-gamecenter
+    # via pyobjc-framework-gamecontroller
+    # via pyobjc-framework-gamekit
+    # via pyobjc-framework-gameplaykit
+    # via pyobjc-framework-healthkit
+    # via pyobjc-framework-imagecapturecore
+    # via pyobjc-framework-installerplugins
+    # via pyobjc-framework-intents
+    # via pyobjc-framework-iobluetooth
+    # via pyobjc-framework-iosurface
+    # via pyobjc-framework-ituneslibrary
+    # via pyobjc-framework-kernelmanagement
+    # via pyobjc-framework-latentsemanticmapping
+    # via pyobjc-framework-libdispatch
+    # via pyobjc-framework-libxpc
+    # via pyobjc-framework-linkpresentation
+    # via pyobjc-framework-localauthentication
+    # via pyobjc-framework-localauthenticationembeddedui
+    # via pyobjc-framework-mailkit
+    # via pyobjc-framework-mapkit
+    # via pyobjc-framework-mediaaccessibility
+    # via pyobjc-framework-mediaextension
+    # via pyobjc-framework-medialibrary
+    # via pyobjc-framework-mediatoolbox
+    # via pyobjc-framework-metal
+    # via pyobjc-framework-metalkit
+    # via pyobjc-framework-metrickit
+    # via pyobjc-framework-mlcompute
+    # via pyobjc-framework-modelio
+    # via pyobjc-framework-multipeerconnectivity
+    # via pyobjc-framework-naturallanguage
+    # via pyobjc-framework-netfs
+    # via pyobjc-framework-network
+    # via pyobjc-framework-networkextension
+    # via pyobjc-framework-notificationcenter
+    # via pyobjc-framework-opendirectory
+    # via pyobjc-framework-osakit
+    # via pyobjc-framework-oslog
+    # via pyobjc-framework-passkit
+    # via pyobjc-framework-pencilkit
+    # via pyobjc-framework-photos
+    # via pyobjc-framework-photosui
+    # via pyobjc-framework-preferencepanes
+    # via pyobjc-framework-pushkit
+    # via pyobjc-framework-quartz
+    # via pyobjc-framework-quicklookthumbnailing
+    # via pyobjc-framework-replaykit
+    # via pyobjc-framework-safariservices
+    # via pyobjc-framework-safetykit
+    # via pyobjc-framework-scenekit
+    # via pyobjc-framework-screencapturekit
+    # via pyobjc-framework-screensaver
+    # via pyobjc-framework-screentime
+    # via pyobjc-framework-security
+    # via pyobjc-framework-securityfoundation
+    # via pyobjc-framework-securityinterface
+    # via pyobjc-framework-securityui
+    # via pyobjc-framework-sensitivecontentanalysis
+    # via pyobjc-framework-servicemanagement
+    # via pyobjc-framework-sharedwithyoucore
+    # via pyobjc-framework-shazamkit
+    # via pyobjc-framework-social
+    # via pyobjc-framework-soundanalysis
+    # via pyobjc-framework-speech
+    # via pyobjc-framework-spritekit
+    # via pyobjc-framework-storekit
+    # via pyobjc-framework-symbols
+    # via pyobjc-framework-syncservices
+    # via pyobjc-framework-systemconfiguration
+    # via pyobjc-framework-systemextensions
+    # via pyobjc-framework-threadnetwork
+    # via pyobjc-framework-uniformtypeidentifiers
+    # via pyobjc-framework-usernotifications
+    # via pyobjc-framework-usernotificationsui
+    # via pyobjc-framework-videosubscriberaccount
+    # via pyobjc-framework-videotoolbox
+    # via pyobjc-framework-virtualization
+    # via pyobjc-framework-vision
+    # via pyobjc-framework-webkit
+pyobjc-framework-colorsync==12.1
+    # via pyobjc
+pyobjc-framework-contacts==12.1
+    # via pyobjc
+    # via pyobjc-framework-contactsui
+pyobjc-framework-contactsui==12.1
+    # via pyobjc
+pyobjc-framework-coreaudio==12.1
+    # via pyobjc
+    # via pyobjc-framework-avfoundation
+    # via pyobjc-framework-browserenginekit
+    # via pyobjc-framework-coreaudiokit
+pyobjc-framework-coreaudiokit==12.1
+    # via pyobjc
+pyobjc-framework-corebluetooth==12.1
+    # via pyobjc
+pyobjc-framework-coredata==12.1
+    # via pyobjc
+    # via pyobjc-framework-cloudkit
+    # via pyobjc-framework-syncservices
+pyobjc-framework-corehaptics==12.1
+    # via pyobjc
+pyobjc-framework-corelocation==12.1
+    # via pyobjc
+    # via pyobjc-framework-cloudkit
+    # via pyobjc-framework-mapkit
+pyobjc-framework-coremedia==12.1
+    # via pyobjc
+    # via pyobjc-framework-avfoundation
+    # via pyobjc-framework-browserenginekit
+    # via pyobjc-framework-cinematic
+    # via pyobjc-framework-mediaextension
+    # via pyobjc-framework-oslog
+    # via pyobjc-framework-screencapturekit
+    # via pyobjc-framework-videotoolbox
+pyobjc-framework-coremediaio==12.1
+    # via pyobjc
+pyobjc-framework-coremidi==12.1
+    # via pyobjc
+pyobjc-framework-coreml==12.1
+    # via pyobjc
+    # via pyobjc-framework-vision
+pyobjc-framework-coremotion==12.1
+    # via pyobjc
+pyobjc-framework-coreservices==12.1
+    # via pyobjc
+    # via pyobjc-framework-launchservices
+    # via pyobjc-framework-searchkit
+pyobjc-framework-corespotlight==12.1
+    # via pyobjc
+pyobjc-framework-coretext==12.1
+    # via pyobjc
+    # via pyobjc-framework-applicationservices
+pyobjc-framework-corewlan==12.1
+    # via pyobjc
+pyobjc-framework-cryptotokenkit==12.1
+    # via pyobjc
+pyobjc-framework-datadetection==12.1
+    # via pyobjc
+pyobjc-framework-devicecheck==12.1
+    # via pyobjc
+pyobjc-framework-devicediscoveryextension==12.1
+    # via pyobjc
+pyobjc-framework-discrecording==12.1
+    # via pyobjc
+    # via pyobjc-framework-discrecordingui
+pyobjc-framework-discrecordingui==12.1
+    # via pyobjc
+pyobjc-framework-diskarbitration==12.1
+    # via pyobjc
+pyobjc-framework-dvdplayback==12.1
+    # via pyobjc
+pyobjc-framework-eventkit==12.1
+    # via pyobjc
+pyobjc-framework-exceptionhandling==12.1
+    # via pyobjc
+pyobjc-framework-executionpolicy==12.1
+    # via pyobjc
+pyobjc-framework-extensionkit==12.1
+    # via pyobjc
+pyobjc-framework-externalaccessory==12.1
+    # via pyobjc
+pyobjc-framework-fileprovider==12.1
+    # via pyobjc
+    # via pyobjc-framework-fileproviderui
+pyobjc-framework-fileproviderui==12.1
+    # via pyobjc
+pyobjc-framework-findersync==12.1
+    # via pyobjc
+pyobjc-framework-fsevents==12.1
+    # via pyobjc-framework-coreservices
+pyobjc-framework-fskit==12.1
+    # via pyobjc
+pyobjc-framework-gamecenter==12.1
+    # via pyobjc
+pyobjc-framework-gamecontroller==12.1
+    # via pyobjc
+pyobjc-framework-gamekit==12.1
+    # via pyobjc
+pyobjc-framework-gameplaykit==12.1
+    # via pyobjc
+pyobjc-framework-healthkit==12.1
+    # via pyobjc
+pyobjc-framework-imagecapturecore==12.1
+    # via pyobjc
+pyobjc-framework-installerplugins==12.1
+    # via pyobjc
+pyobjc-framework-intents==12.1
+    # via pyobjc
+    # via pyobjc-framework-intentsui
+pyobjc-framework-intentsui==12.1
+    # via pyobjc
+pyobjc-framework-iobluetooth==12.1
+    # via pyobjc
+    # via pyobjc-framework-iobluetoothui
+pyobjc-framework-iobluetoothui==12.1
+    # via pyobjc
+pyobjc-framework-iosurface==12.1
+    # via pyobjc
+pyobjc-framework-ituneslibrary==12.1
+    # via pyobjc
+pyobjc-framework-kernelmanagement==12.1
+    # via pyobjc
+pyobjc-framework-latentsemanticmapping==12.1
+    # via pyobjc
+pyobjc-framework-launchservices==12.1
+    # via pyobjc
+pyobjc-framework-libdispatch==12.1
+    # via pyobjc
+pyobjc-framework-libxpc==12.1
+    # via pyobjc
+pyobjc-framework-linkpresentation==12.1
+    # via pyobjc
+pyobjc-framework-localauthentication==12.1
+    # via pyobjc
+    # via pyobjc-framework-localauthenticationembeddedui
+pyobjc-framework-localauthenticationembeddedui==12.1
+    # via pyobjc
+pyobjc-framework-mailkit==12.1
+    # via pyobjc
+pyobjc-framework-mapkit==12.1
+    # via pyobjc
+pyobjc-framework-mediaaccessibility==12.1
+    # via pyobjc
+pyobjc-framework-mediaextension==12.1
+    # via pyobjc
+pyobjc-framework-medialibrary==12.1
+    # via pyobjc
+pyobjc-framework-mediaplayer==12.1
+    # via pyobjc
+pyobjc-framework-mediatoolbox==12.1
+    # via pyobjc
+pyobjc-framework-metal==12.1
+    # via pyobjc
+    # via pyobjc-framework-cinematic
+    # via pyobjc-framework-metalfx
+    # via pyobjc-framework-metalkit
+    # via pyobjc-framework-metalperformanceshaders
+pyobjc-framework-metalfx==12.1
+    # via pyobjc
+pyobjc-framework-metalkit==12.1
+    # via pyobjc
+pyobjc-framework-metalperformanceshaders==12.1
+    # via pyobjc
+    # via pyobjc-framework-metalperformanceshadersgraph
+pyobjc-framework-metalperformanceshadersgraph==12.1
+    # via pyobjc
+pyobjc-framework-metrickit==12.1
+    # via pyobjc
+pyobjc-framework-mlcompute==12.1
+    # via pyobjc
+pyobjc-framework-modelio==12.1
+    # via pyobjc
+pyobjc-framework-multipeerconnectivity==12.1
+    # via pyobjc
+pyobjc-framework-naturallanguage==12.1
+    # via pyobjc
+pyobjc-framework-netfs==12.1
+    # via pyobjc
+pyobjc-framework-network==12.1
+    # via pyobjc
+pyobjc-framework-networkextension==12.1
+    # via pyobjc
+pyobjc-framework-notificationcenter==12.1
+    # via pyobjc
+pyobjc-framework-opendirectory==12.1
+    # via pyobjc
+pyobjc-framework-osakit==12.1
+    # via pyobjc
+pyobjc-framework-oslog==12.1
+    # via pyobjc
+pyobjc-framework-passkit==12.1
+    # via pyobjc
+pyobjc-framework-pencilkit==12.1
+    # via pyobjc
+pyobjc-framework-phase==12.1
+    # via pyobjc
+pyobjc-framework-photos==12.1
+    # via pyobjc
+pyobjc-framework-photosui==12.1
+    # via pyobjc
+pyobjc-framework-preferencepanes==12.1
+    # via pyobjc
+pyobjc-framework-pushkit==12.1
+    # via pyobjc
+pyobjc-framework-quartz==12.1
+    # via pyautogui
+    # via pyobjc
+    # via pyobjc-framework-accessibility
+    # via pyobjc-framework-applicationservices
+    # via pyobjc-framework-avfoundation
+    # via pyobjc-framework-avkit
+    # via pyobjc-framework-browserenginekit
+    # via pyobjc-framework-coretext
+    # via pyobjc-framework-gamekit
+    # via pyobjc-framework-linkpresentation
+    # via pyobjc-framework-mapkit
+    # via pyobjc-framework-medialibrary
+    # via pyobjc-framework-modelio
+    # via pyobjc-framework-oslog
+    # via pyobjc-framework-quicklookthumbnailing
+    # via pyobjc-framework-safetykit
+    # via pyobjc-framework-scenekit
+    # via pyobjc-framework-sensitivecontentanalysis
+    # via pyobjc-framework-spritekit
+    # via pyobjc-framework-videotoolbox
+    # via pyobjc-framework-vision
+pyobjc-framework-quicklookthumbnailing==12.1
+    # via pyobjc
+pyobjc-framework-replaykit==12.1
+    # via pyobjc
+pyobjc-framework-safariservices==12.1
+    # via pyobjc
+pyobjc-framework-safetykit==12.1
+    # via pyobjc
+pyobjc-framework-scenekit==12.1
+    # via pyobjc
+pyobjc-framework-screencapturekit==12.1
+    # via pyobjc
+pyobjc-framework-screensaver==12.1
+    # via pyobjc
+pyobjc-framework-screentime==12.1
+    # via pyobjc
+pyobjc-framework-searchkit==12.1
+    # via pyobjc
+pyobjc-framework-security==12.1
+    # via pyobjc
+    # via pyobjc-framework-localauthentication
+    # via pyobjc-framework-securityfoundation
+    # via pyobjc-framework-securityinterface
+    # via pyobjc-framework-securityui
+pyobjc-framework-securityfoundation==12.1
+    # via pyobjc
+pyobjc-framework-securityinterface==12.1
+    # via pyobjc
+pyobjc-framework-securityui==12.1
+    # via pyobjc
+pyobjc-framework-sensitivecontentanalysis==12.1
+    # via pyobjc
+pyobjc-framework-servicemanagement==12.1
+    # via pyobjc
+pyobjc-framework-sharedwithyou==12.1
+    # via pyobjc
+pyobjc-framework-sharedwithyoucore==12.1
+    # via pyobjc
+    # via pyobjc-framework-sharedwithyou
+pyobjc-framework-shazamkit==12.1
+    # via pyobjc
+pyobjc-framework-social==12.1
+    # via pyobjc
+pyobjc-framework-soundanalysis==12.1
+    # via pyobjc
+pyobjc-framework-speech==12.1
+    # via pyobjc
+pyobjc-framework-spritekit==12.1
+    # via pyobjc
+    # via pyobjc-framework-gameplaykit
+pyobjc-framework-storekit==12.1
+    # via pyobjc
+pyobjc-framework-symbols==12.1
+    # via pyobjc
+pyobjc-framework-syncservices==12.1
+    # via pyobjc
+pyobjc-framework-systemconfiguration==12.1
+    # via pyobjc
+pyobjc-framework-systemextensions==12.1
+    # via pyobjc
+pyobjc-framework-threadnetwork==12.1
+    # via pyobjc
+pyobjc-framework-uniformtypeidentifiers==12.1
+    # via pyobjc
+pyobjc-framework-usernotifications==12.1
+    # via pyobjc
+    # via pyobjc-framework-usernotificationsui
+pyobjc-framework-usernotificationsui==12.1
+    # via pyobjc
+pyobjc-framework-videosubscriberaccount==12.1
+    # via pyobjc
+pyobjc-framework-videotoolbox==12.1
+    # via pyobjc
+pyobjc-framework-virtualization==12.1
+    # via pyobjc
+pyobjc-framework-vision==12.1
+    # via pyobjc
+pyobjc-framework-webkit==12.1
+    # via pyobjc
+pyparsing==3.2.5
+    # via httplib2
+    # via matplotlib
+    # via pydot
+    # via rdflib
 pypdf==4.3.1
     # via will-inheritance
 pypdf2==3.0.1
@@ -169,7 +889,10 @@ pysocks==1.7.1
     # via urllib3
 python-dateutil==2.9.0.post0
     # via arrow
+    # via matplotlib
+    # via nipype
     # via pandas
+    # via prov
 python-dotenv==1.2.1
     # via uvicorn
     # via webdriver-manager
@@ -180,34 +903,43 @@ pytweening==1.2.0
     # via pyautogui
 pytz==2024.2
     # via pandas
-pywin32==311
-    # via xlwings
-pywin32-ctypes==0.2.3
-    # via pyinstaller
+pyxnat==1.6.4
+    # via fitz
 pyyaml==6.0.2
     # via cookiecutter
     # via uvicorn
 qrcode==7.4.2
     # via flet-cli
+rdflib==7.5.0
+    # via nipype
 repath==0.9.0
     # via flet
 reportlab==4.2.2
     # via will-inheritance
 requests==2.32.5
     # via cookiecutter
+    # via etelemetry
     # via pandas-datareader
+    # via pyxnat
     # via webdriver-manager
     # via will-inheritance
 rich==14.1.0
     # via cookiecutter
+rubicon-objc==0.5.2
+    # via mouseinfo
 ruff==0.12.10
     # via will-inheritance
+scipy==1.16.3
+    # via fitz
+    # via nipype
 selenium==4.24.0
     # via will-inheritance
 setuptools==75.0.0
     # via pyinstaller
     # via pyinstaller-hooks-contrib
     # via will-inheritance
+simplejson==3.20.2
+    # via nipype
 six==1.16.0
     # via python-dateutil
     # via repath
@@ -228,6 +960,8 @@ text-unidecode==1.3
     # via python-slugify
 toml==0.10.2
     # via flet-cli
+traits==7.0.2
+    # via nipype
 trio==0.26.2
     # via selenium
     # via trio-websocket
@@ -237,6 +971,7 @@ types-python-dateutil==2.9.0.20250822
     # via arrow
 typing-extensions==4.12.2
     # via fastapi
+    # via nibabel
     # via pydantic
     # via pydantic-core
     # via qrcode
@@ -253,6 +988,8 @@ urllib3==2.2.3
     # via selenium
 uvicorn==0.35.0
     # via flet-web
+uvloop==0.22.1
+    # via uvicorn
 watchdog==4.0.2
     # via flet-cli
 watchfiles==1.1.0
