@@ -46,7 +46,7 @@ MIGRATION_MAP: Dict[str, str] = {
     "assets": "assets",
 }
 
-# --- ユーティリティ関数 (省略なし) ---
+# --- ユーティリティ関数 ---
 
 
 def run_combine_code() -> None:
@@ -185,9 +185,13 @@ def migrate_files() -> List[str]:
 
 def main(page: Page):
     # 💡 ウィンドウ設定をここに集約
-    page.window.width = 1400
-    page.window.height = 850
-    page.window.center()
+    # 起動時にウィンドウを最大化する（フルスクリーンではなく、ウィンドウ枠ありの最大サイズ）
+    page.window.maximized = True
+    
+    # 固定サイズにしたい場合は以下を使用し、maximized = False にしてください
+    # page.window.width = 1400
+    # page.window.height = 850
+    # page.window.center()
 
     page.title = "遺産整理業務アプリ Launcher"
     page.vertical_alignment = MainAxisAlignment.CENTER

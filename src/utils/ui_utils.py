@@ -1,5 +1,4 @@
-# /components/utils/ui_utils.py
-
+# src/utils/ui_utils.py
 from flet import (
     AlertDialog,
     Colors,
@@ -48,5 +47,4 @@ def show_confirm_dialog(
     )
 
     page.open(dialog)
-    dialog.open = True
     page.update()

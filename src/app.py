@@ -8,9 +8,19 @@ from typing import List, Optional
 current_dir = Path(__file__).parent
 sys.path.append(str(current_dir.parent))
 
-from flet import Colors, Page, RouteChangeEvent, SnackBar, Text, View
+from flet import (
+    AppBar,
+    Colors,
+    IconButton,
+    Icons,
+    Page,
+    RouteChangeEvent,
+    SnackBar,
+    Text,
+    View,
+)
 
-# 💡 修正: 設定ファイルのインポート
+# 設定ファイルのインポート
 from src.config import APP_THEME, DEFAULT_THEME_MODE
 from src.views.case_hub import CaseHubView
 from src.views.editors import DeceasedEditView, HeirEditView
@@ -26,11 +36,9 @@ def main(page: Page) -> None:
     page.title = "遺産整理・相続業務システム"
     page.padding = 0
 
-    # 💡 テーマ設定の集約: configから読み込み、常にダークモードを適用
+    # テーマ設定の集約: configから読み込み
     page.theme_mode = DEFAULT_THEME_MODE
     page.theme = APP_THEME
-
-    # page.update() # main.pyからapp_main(page)が呼ばれるため、ここでは不要
 
     # エラーハンドリング用ラッパー
     def handle_error(e: Exception) -> None:
@@ -62,12 +70,12 @@ def main(page: Page) -> None:
 
         # --- 2. ルートマッチング開始 ---
 
-        # 💡 PDFツールへのルーティング
+        # PDFツールへのルーティング
         if e.route == "/pdf_tool":
             page.views.append(View(route="/pdf_tool", controls=[PdfToolView(page)], appbar=None))
             page.update()
 
-        # --- 3. 案件ハブ ---
+        # --- 3. 案件ハブ (詳細画面・サブ機能) ---
         elif re.match(r"^(/(detail|case)/(-?\d+))", e.route):
             match_hub = re.match(r"^(/(detail|case)/(-?\d+))", e.route)
             if match_hub:
@@ -76,36 +84,71 @@ def main(page: Page) -> None:
                 # 既存インスタンス再利用ロジック
                 hub_instance: Optional[CaseHubView] = None
                 is_same_case = False
+                current_hub_view: Optional[View] = None
+                
+                # 現在のトップビューを確認
                 if page.views:
                     top_view = page.views[-1]
+                    # カスタム属性 _hub_instance を持ち、かつ case_id が一致するか確認
                     if hasattr(top_view, "_hub_instance"):
                         hub_instance = top_view._hub_instance
                         if hub_instance.case_id == case_id:
                             is_same_case = True
 
                 if is_same_case and hub_instance:
+                    # 【再利用パターン】
+                    # URLルートのみ更新し、コンテンツを部分書き換えする
+                    print(f"Reuse Hub Instance for Case ID: {case_id}")
+                    current_hub_view = page.views[-1]
+                    current_hub_view.route = e.route  # Viewのルートを更新
                     hub_instance.route_to_content(e.route, update_ui=True)
-                    page.views[-1].route = e.route
+                    
                 else:
-                    # ホーム画面を残してスタッククリア
+                    # 【新規作成パターン】
+                    # ホーム画面("/")以外の履歴をクリアしてメモリを節約
+                    print(f"Create New Hub Instance for Case ID: {case_id}")
                     new_views = [v for v in page.views if v.route == "/"]
+                    
+                    # ホームがなければ作成して追加 (ダイレクトアクセス対策)
                     if not new_views:
                         new_views.append(View(route="/", controls=[CaseDashboardView(page)]))
 
                     page.views.clear()
                     page.views.extend(new_views)
 
+                    # 新しいHubインスタンスを生成
                     hub_instance = CaseHubView(page, case_id)
-                    hub_view = View(
+                    
+                    # 新しいViewを作成
+                    current_hub_view = View(
                         route=e.route,
                         controls=[hub_instance],
                         padding=0,
-                        appbar=None,
+                        # appbarは下で設定する
                     )
-                    setattr(hub_view, "_hub_instance", hub_instance)
-                    page.views.append(hub_view)
+                    # インスタンスをViewに紐付けておく（次回の再利用のため）
+                    setattr(current_hub_view, "_hub_instance", hub_instance)
+                    
+                    page.views.append(current_hub_view)
+                    
+                    # コンテンツを初期設定 (まだ画面に出ていないので update_ui=False)
                     hub_instance.route_to_content(e.route, update_ui=False)
-                    page.update()
+
+                # 💡 [重要] AppBarの強制設定
+                # 新規作成時も再利用時も、必ずAppBarを設定・更新する
+                if current_hub_view:
+                    client_name = getattr(hub_instance, "client_name", "")
+                    current_hub_view.appbar = AppBar(
+                        title=Text(f"{client_name}の詳細画面 (ID:{case_id})"),
+                        bgcolor=Colors.BLUE_GREY_700,
+                        leading=IconButton(
+                            Icons.ARROW_BACK, 
+                            on_click=lambda e: page.go("/"),
+                            tooltip="ホームに戻る"
+                        ),
+                    )
+                    
+                page.update()
 
         # --- 4. 被相続人編集ページ ---
         elif re.match(r"^/deceased_edit/(-?\d+)$", e.route):

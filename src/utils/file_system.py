@@ -1,7 +1,8 @@
 # src/utils/file_system.py
 import platform
 import subprocess
-from typing import Callable
+import threading
+from typing import Callable, Optional
 
 from flet import Colors, Page, SnackBar, Text
 
@@ -15,17 +16,22 @@ def run_ui_update(page: Page, func: Callable, *args, **kwargs):
         func(*args, **kwargs)
 
 
-def open_case_folder(page: Page, case_id: int, get_path_service: Callable[[int], str | None]):
+def open_case_folder(page: Page, case_id: int, get_path_service: Callable[[int], Optional[str]]):
     """
     案件IDに基づいてフォルダパスを取得し、OSに応じたコマンドでフォルダを開く。
+    :param page: FletのPageオブジェクト
+    :param case_id: 開きたい案件のID
+    :param get_path_service: フォルダパスを取得するサービス関数
     """
+
     try:
         folder_path = get_path_service(case_id)
     except Exception as e:
-        print(f"フォルダパス取得エラー: {e}")
+        print(f"Path retrieval failed: {e}")
         folder_path = None
 
     def show_snackbar(message: str, color=Colors.BLUE_700, duration=1500):
+        # メインスレッドでSnackBarを表示する
         try:
             page.open(
                 SnackBar(
@@ -35,20 +41,20 @@ def open_case_folder(page: Page, case_id: int, get_path_service: Callable[[int],
                 )
             )
             page.update()
-        except Exception as e:
-            print(f"SnackBar表示エラー: {e}")
+        except Exception:
+            pass
 
     if not folder_path:
         run_ui_update(
             page,
             show_snackbar,
-            "⚠️ フォルダパスが登録されていません。",
+            "⚠️ 案件のフォルダパスがデータベースに登録されていません。",
             Colors.ORANGE_700,
             3000,
         )
         return
 
-    _open_path_in_os(page, folder_path, show_snackbar)
+    open_path(page, folder_path)
 
 
 def open_path(page: Page, path: str):
@@ -64,14 +70,10 @@ def open_path(page: Page, path: str):
                 )
             )
             page.update()
-        except Exception as e:
-            print(f"SnackBar表示エラー: {e}")
+        except Exception:
+            pass
 
-    _open_path_in_os(page, path, show_snackbar)
-
-
-def _open_path_in_os(page: Page, path: str, snackbar_func: Callable):
-    """OSに応じたコマンドでパスを開く内部関数"""
+    # 1. OSに応じて適切なコマンドを選択
     current_os = platform.system()
     command = []
 
@@ -84,25 +86,27 @@ def _open_path_in_os(page: Page, path: str, snackbar_func: Callable):
     else:
         run_ui_update(
             page,
-            snackbar_func,
+            show_snackbar,
             f"⚠️ このOS ({current_os}) はサポートされていません。",
             Colors.RED_700,
             5000,
         )
         return
 
+    # 2. 外部プロセスとしてコマンドを実行
     try:
+        # Popen を使用してアプリケーションのフリーズを防ぐ
         subprocess.Popen(command)
         run_ui_update(
             page,
-            snackbar_func,
-            f"📁 開いています: {path}",
+            show_snackbar,
+            f"📁 フォルダを開いています: {path}",
             Colors.BLUE_700,
         )
     except FileNotFoundError:
         run_ui_update(
             page,
-            snackbar_func,
+            show_snackbar,
             f"エラー: '{command[0]}' コマンドが見つかりません。",
             Colors.RED_700,
             5000,
@@ -110,8 +114,8 @@ def _open_path_in_os(page: Page, path: str, snackbar_func: Callable):
     except Exception as ex:
         run_ui_update(
             page,
-            snackbar_func,
-            f"開くのに失敗しました: {ex}",
+            show_snackbar,
+            f"フォルダを開くのに失敗しました: {ex}",
             Colors.RED_700,
             5000,
         )

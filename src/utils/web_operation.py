@@ -1,8 +1,6 @@
-# components/utils/web_operation.py
-
+# src/utils/web_operation.py
 import os
 import threading
-from time import sleep
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
@@ -80,7 +78,7 @@ class Web:
                 options.add_argument(f"--user-data-dir={user_data_dir}")
                 
                 options.add_experimental_option('detach', True) # スクリプト終了後もブラウザを残す
-                
+        
                 # パフォーマンス向上のためのオプション
                 options.add_argument('--disable-background-networking')
                 options.add_argument('--disable-default-apps')
