@@ -1,64 +1,176 @@
-# src/utils/pdf_writer.py
+# utils/pdf_writer.py
 import os
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Optional
 
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfgen import canvas
+import fitz  # PyMuPDF
 
 
-class PdfWriter:
+class PdfFormWriter:
     """
-    PDFへの描画処理を担当するユーティリティクラス
+    Fletツールで取得した座標をもとに、PDFへテキストや図形を書き込むクラス。
     """
 
-    def __init__(self, font_path: str):
-        self.font_path = font_path
-        self.font_name = "JapaneseFont"
-        self._register_font()
+    # このファイルは utils/ にあるため、parent.parent がプロジェクトルート
+    DEFAULT_FONT_DIR = Path(__file__).parent.parent / "assets" / "fonts"
 
-    def _register_font(self) -> None:
-        """日本語フォントの登録"""
-        try:
-            if os.path.exists(self.font_path):
-                pdfmetrics.registerFont(TTFont(self.font_name, self.font_path))
-            else:
-                # フォントがない場合はデフォルトを使用（日本語は文字化けする可能性あり）
-                print(f"Warning: Font file not found at {self.font_path}")
-                self.font_name = "Helvetica"
-        except Exception as e:
-            print(f"Font registration error: {e}")
-            self.font_name = "Helvetica"
-
-    def create_overlay_pdf(self, output_path: str, data_list: List[Dict[str, Any]]) -> bool:
+    def __init__(self, input_pdf: str, output_pdf: str, font_path: Optional[str] = None):
         """
-        座標データに基づいてテキストを描画し、透明なPDFを生成する
-
         Args:
-            output_path: 出力先ファイルパス
-            data_list: 描画データのリスト [{'x': float, 'y': float, 'value': str}, ...]
-
-        Returns:
-            bool: 成功時 True
+            input_pdf: 読み込むPDFパス
+            output_pdf: 保存するPDFパス
+            font_path: フォントパス。Noneの場合は assets/fonts 内を探索、なければシステムフォントを使用。
         """
+        self.doc = fitz.open(input_pdf)
+        self.output_path = output_pdf
+        self.font_name = "custom_font"
+
+        # フォントパスの解決ロジック
+        self.font_path = self._resolve_font_path(font_path)
+
+        if not self.font_path:
+            print("Warning: 有効なフォントが見つかりません。日本語は文字化けする可能性があります。")
+
+    def _resolve_font_path(self, user_path: Optional[str]) -> Optional[str]:
+        """フォントパスを決定する"""
+        # 1. ユーザー指定がある場合
+        if user_path and os.path.exists(user_path):
+            return user_path
+
+        # 2. assets/fonts 内の代表的な日本語フォントを探す
+        candidates = ["msgothic.ttc", "msmincho.ttc", "meiryo.ttc", "YuGothR.ttc", "Harumart.ttf"]
+
+        if self.DEFAULT_FONT_DIR.exists():
+            for filename in candidates:
+                fpath = self.DEFAULT_FONT_DIR / filename
+                if fpath.exists():
+                    print(f"Font loaded from assets: {fpath}")
+                    return str(fpath)
+
+            # フォルダ内の拡張子が .ttc, .ttf の最初のファイルをフォールバックとして採用
+            for file in self.DEFAULT_FONT_DIR.iterdir():
+                if file.suffix.lower() in [".ttc", ".ttf", ".otf"]:
+                    print(f"Font loaded from assets (fallback): {file}")
+                    return str(file)
+
+        # 3. Windows標準フォント (フォールバック)
+        win_font = Path("C:/Windows/Fonts/msgothic.ttc")
+        if win_font.exists():
+            return str(win_font)
+
+        return None
+
+    def _get_scale(self, page_obj, ref_width: int) -> float:
+        """画像幅(px)とPDF幅(pt)の比率を計算"""
+        pdf_width_pt = page_obj.rect.width
+        return pdf_width_pt / ref_width
+
+    def draw_text(
+        self,
+        page: int,
+        x: int,
+        y: int,
+        text: str,
+        ref_width: int = 1654,
+        font_size: int = 11,
+        color: tuple = (0, 0, 0),
+    ):
+        """テキスト書き込み"""
+        if not (1 <= page <= len(self.doc)):
+            return
+        page_obj = self.doc[page - 1]
+        scale = self._get_scale(page_obj, ref_width)
+
+        args = {
+            "point": fitz.Point(x * scale, y * scale),
+            "text": str(text),
+            "fontsize": font_size,
+            "color": color,
+        }
+        if self.font_path:
+            args["fontfile"] = self.font_path
+            args["fontname"] = self.font_name
+
         try:
-            # ディレクトリが存在しない場合は作成
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-            c = canvas.Canvas(output_path, pagesize=A4)
-            c.setFont(self.font_name, 10)
-
-            for data in data_list:
-                x = data.get("x", 0.0)
-                y = data.get("y", 0.0)
-                text = str(data.get("value", ""))
-
-                # 座標は左下が(0,0)基準。必要に応じて変換ロジックを入れる
-                c.drawString(x, y, text)
-
-            c.save()
-            return True
+            page_obj.insert_text(**args, overlay=True)
         except Exception as e:
-            print(f"PDF drawing error: {e}")
-            raise e
+            print(f"Text Error: {e}")
+
+    def draw_rect(
+        self,
+        page: int,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        ref_width: int = 1654,
+        border_color: tuple = (1, 0, 0),
+        width: float = 2,
+    ):
+        """矩形描画"""
+        if not (1 <= page <= len(self.doc)):
+            return
+        page_obj = self.doc[page - 1]
+        scale = self._get_scale(page_obj, ref_width)
+
+        rect = fitz.Rect(x * scale, y * scale, (x + w) * scale, (y + h) * scale)
+        try:
+            shape = page_obj.new_shape()
+            shape.draw_rect(rect)
+            shape.finish(color=border_color, width=width)
+            shape.commit()
+        except Exception as e:
+            print(f"Rect Error: {e}")
+
+    def draw_circle(
+        self,
+        page: int,
+        x: int,
+        y: int,
+        ref_width: int = 1654,
+        radius: int = 15,
+        border_color: tuple = (1, 0, 0),
+        width: float = 2,
+    ):
+        """円描画"""
+        if not (1 <= page <= len(self.doc)):
+            return
+        page_obj = self.doc[page - 1]
+        scale = self._get_scale(page_obj, ref_width)
+
+        r = radius * scale
+        center = fitz.Point(x * scale, y * scale)
+
+        try:
+            shape = page_obj.new_shape()
+            shape.draw_circle(center, r)
+            shape.finish(color=border_color, width=width)
+            shape.commit()
+        except Exception as e:
+            print(f"Circle Error: {e}")
+
+    def draw_check(
+        self,
+        page: int,
+        x: int,
+        y: int,
+        ref_width: int = 1654,
+        size: int = 20,
+        color: tuple = (0, 0, 0),
+    ):
+        """チェックマーク(✔︎)を描画"""
+        self.draw_text(page, x, y, "✔", ref_width, font_size=size, color=color)
+
+    def save(self):
+        try:
+            self.doc.save(self.output_path)
+            self.doc.close()
+            print(f"Saved: {self.output_path}")
+        except Exception as e:
+            print(f"Save Error: {e}")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.doc.close()

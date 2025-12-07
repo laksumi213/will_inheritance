@@ -1,36 +1,38 @@
 # models/coordinate.py
-from sqlalchemy import Column, Float, Integer, String, create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
-
-# ベースクラスの作成
-Base = declarative_base()
+from dataclasses import dataclass
+from typing import Literal
 
 
-class Coordinate(Base):
+@dataclass
+class Coordinate:
     """
-    PDF上の入力座標を管理するデータモデル
+    画面上の操作ログおよび描画情報を保持するデータクラス
     """
 
-    __tablename__ = "coordinates"
+    id: int  # 識別用ID
+    page_number: int  # ページ番号 (1始まり)
+    type: Literal["text", "rect", "circle", "check"]  # 描画タイプ
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    label = Column(String, nullable=False, comment="項目名（例: 被相続人氏名）")
-    page_number = Column(Integer, default=1, comment="ページ番号")
-    x_point = Column(Float, nullable=False, comment="X座標")
-    y_point = Column(Float, nullable=False, comment="Y座標")
-    value = Column(String, nullable=True, comment="テスト用入力値")
+    # 座標情報 (実寸: PDF上のピクセル / UI: 画面上のピクセル)
+    ui_x: float
+    ui_y: float
+    real_x: int
+    real_y: int
 
-    def __repr__(self):
-        return f"<Coordinate(label='{self.label}', x={self.x_point}, y={self.y_point})>"
+    # 矩形用 (Width/Height)
+    real_w: int = 0
+    real_h: int = 0
 
+    # テキスト/設定用
+    text: str = ""
+    font_size: int = 11
 
-# DB初期化設定 (SQLite)
-# 実際の接続セッション管理はService層で行うか、ここからFactoryを提供する形にします
-DB_PATH = "sqlite:///inheritance_app.db"
-engine = create_engine(DB_PATH, echo=False)
-SessionLocal = sessionmaker(bind=engine)
-
-
-def init_db():
-    """データベースとテーブルの作成"""
-    Base.metadata.create_all(engine)
+    def __str__(self) -> str:
+        base = f"P{self.page_number} [{self.type.upper()}]"
+        if self.type == "rect":
+            return f"{base} Pos({self.real_x},{self.real_y}) Size({self.real_w}x{self.real_h})"
+        elif self.type == "text":
+            content = self.text if self.text else "..."
+            return f"{base} ({self.real_x},{self.real_y}) Size:{self.font_size}pt '{content}'"
+        else:
+            return f"{base} ({self.real_x},{self.real_y})"

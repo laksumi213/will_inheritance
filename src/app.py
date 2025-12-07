@@ -23,9 +23,12 @@ from flet import (
 # 設定ファイルのインポート
 from src.config import APP_THEME, DEFAULT_THEME_MODE
 from src.views.case_hub import CaseHubView
+
+# 💡 変更点: 旧ツール(pdf_tool)を廃止し、高機能版(coordinate_view)をインポート
+# from src.views.pdf_tool import PdfToolView
+from src.views.coordinate_view import CoordinateSelectorView
 from src.views.editors import DeceasedEditView, HeirEditView
 from src.views.home import CaseDashboardView
-from src.views.pdf_tool import PdfToolView
 from src.views.register import ClientRegisterView
 
 
@@ -70,9 +73,20 @@ def main(page: Page) -> None:
 
         # --- 2. ルートマッチング開始 ---
 
-        # PDFツールへのルーティング
+        # 💡 変更点: PDFツールへのルーティングを高機能版クラスに割り当て
         if e.route == "/pdf_tool":
-            page.views.append(View(route="/pdf_tool", controls=[PdfToolView(page)], appbar=None))
+            # 戻るボタン付きのAppBarを持つViewとして追加
+            page.views.append(
+                View(
+                    route="/pdf_tool",
+                    controls=[CoordinateSelectorView(page)],
+                    appbar=AppBar(
+                        title=Text("PDF座標取得・編集ツール"),
+                        bgcolor=Colors.BLUE_GREY_800,
+                        leading=IconButton(Icons.ARROW_BACK, on_click=lambda _: page.go("/")),
+                    ),
+                )
+            )
             page.update()
 
         # --- 3. 案件ハブ (詳細画面・サブ機能) ---
@@ -85,7 +99,7 @@ def main(page: Page) -> None:
                 hub_instance: Optional[CaseHubView] = None
                 is_same_case = False
                 current_hub_view: Optional[View] = None
-                
+
                 # 現在のトップビューを確認
                 if page.views:
                     top_view = page.views[-1]
@@ -102,13 +116,13 @@ def main(page: Page) -> None:
                     current_hub_view = page.views[-1]
                     current_hub_view.route = e.route  # Viewのルートを更新
                     hub_instance.route_to_content(e.route, update_ui=True)
-                    
+
                 else:
                     # 【新規作成パターン】
                     # ホーム画面("/")以外の履歴をクリアしてメモリを節約
                     print(f"Create New Hub Instance for Case ID: {case_id}")
                     new_views = [v for v in page.views if v.route == "/"]
-                    
+
                     # ホームがなければ作成して追加 (ダイレクトアクセス対策)
                     if not new_views:
                         new_views.append(View(route="/", controls=[CaseDashboardView(page)]))
@@ -118,7 +132,7 @@ def main(page: Page) -> None:
 
                     # 新しいHubインスタンスを生成
                     hub_instance = CaseHubView(page, case_id)
-                    
+
                     # 新しいViewを作成
                     current_hub_view = View(
                         route=e.route,
@@ -128,9 +142,9 @@ def main(page: Page) -> None:
                     )
                     # インスタンスをViewに紐付けておく（次回の再利用のため）
                     setattr(current_hub_view, "_hub_instance", hub_instance)
-                    
+
                     page.views.append(current_hub_view)
-                    
+
                     # コンテンツを初期設定 (まだ画面に出ていないので update_ui=False)
                     hub_instance.route_to_content(e.route, update_ui=False)
 
@@ -142,12 +156,12 @@ def main(page: Page) -> None:
                         title=Text(f"{client_name}の詳細画面 (ID:{case_id})"),
                         bgcolor=Colors.BLUE_GREY_700,
                         leading=IconButton(
-                            Icons.ARROW_BACK, 
+                            Icons.ARROW_BACK,
                             on_click=lambda e: page.go("/"),
-                            tooltip="ホームに戻る"
+                            tooltip="ホームに戻る",
                         ),
                     )
-                    
+
                 page.update()
 
         # --- 4. 被相続人編集ページ ---
@@ -193,13 +207,12 @@ def main(page: Page) -> None:
         # --- 9. 不明なルート ---
         else:
             print(f"Unknown route: {e.route}")
-            if e.route != "/pdf_tool":  # PDFツール以外の場合のみエラー
-                page.open(
-                    SnackBar(
-                        content=Text(f"不明なルートです: {e.route}", color=Colors.WHITE),
-                        bgcolor=Colors.RED,
-                    )
+            page.open(
+                SnackBar(
+                    content=Text(f"不明なルートです: {e.route}", color=Colors.WHITE),
+                    bgcolor=Colors.RED,
                 )
+            )
             if len(page.views) == 0:
                 page.go("/")
 

@@ -19,6 +19,10 @@ IGNORE_DIRS = {
     "node_modules",
     "assets",  # 画像などのリソースフォルダも除外推奨
     "generated_pdfs",  # 生成物も除外
+    "backup",
+    "assets",
+    "data",
+    "output",
 }
 
 # 無視するファイル名（完全一致）
@@ -30,6 +34,7 @@ IGNORE_FILES = {
     "tempCodeRunnerFile.py",
     "point_get.py",
     "all_code_context.txt",  # 自分自身を含めない
+    "migrate_project.py",
 }
 
 # ★追加: 無視するファイル名に含まれるキーワード（部分一致）

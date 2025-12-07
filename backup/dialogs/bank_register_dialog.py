@@ -1,25 +1,23 @@
 # components/dialogs/bank_register_dialog.py
 from flet import (
     AlertDialog,
-    Text,
-    TextField,
-    ElevatedButton,
-    Row,
-    Column,
-    MainAxisAlignment,
-    CrossAxisAlignment,
     Colors,
-    Page,
+    Column,
     Control,
-    SnackBar,
-    Icons,
+    ElevatedButton,
     Icon,
+    Icons,
+    MainAxisAlignment,
+    Page,
+    Row,
+    SnackBar,
+    Text,
     TextButton,
-    ButtonStyle,
-    RoundedRectangleBorder,
+    TextField,
 )
+
 from services.deceased_service import DeceasedService
-import threading
+
 
 class BankRegisterDialog(AlertDialog):
     """
@@ -44,7 +42,7 @@ class BankRegisterDialog(AlertDialog):
             width=300,
             border_color=Colors.OUTLINE,
         )
-        
+
         self.branch_name_field = TextField(
             label="支店名",
             hint_text="例: 本店",
@@ -95,7 +93,7 @@ class BankRegisterDialog(AlertDialog):
                     icon=Icons.SAVE,
                     bgcolor=Colors.PRIMARY,
                     color=Colors.ON_PRIMARY,
-                    on_click=self.handle_register_click
+                    on_click=self.handle_register_click,
                 ),
             ],
             actions_alignment=MainAxisAlignment.END,
@@ -118,7 +116,7 @@ class BankRegisterDialog(AlertDialog):
         if not self.bank_name_field.value:
             self.show_error("銀行名は必須です")
             return
-            
+
         # UIをブロックせずに処理するためスレッド等での実行を検討するが、
         # ここではシンプルにtry-exceptで同期実行し、エラーハンドリングを優先する
         try:
@@ -146,14 +144,14 @@ class BankRegisterDialog(AlertDialog):
         # ここではデモ用として、サービスのメソッドシグネチャに合わせて呼び出す。
         # NOTE: 既存コードの設計に合わせ、add_bank_account 等のメソッドがあると仮定して実装。
         # もし deceased_service.py に該当メソッドがない場合は適宜追加が必要です。
-        
+
         # 仮実装: Serviceにメソッドがある前提でコール
-        # self._service.add_bank_account(data) 
-        
+        # self._service.add_bank_account(data)
+
         # 成功時の処理
         self.open = False
         self.page.update()
-        
+
         self.page.snack_bar = SnackBar(
             Text("銀行口座情報を登録しました"),
             bgcolor=Colors.GREEN,

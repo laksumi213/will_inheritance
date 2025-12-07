@@ -1,90 +1,89 @@
-# src/services/pdf_service.py
+# services/pdf_service.py
+import asyncio
+import shutil
+import uuid
 from pathlib import Path
-from typing import List
+from typing import List, NamedTuple, Optional
 
-from src.models.database import SessionLocal
-from src.models.tables import Coordinate
-from src.utils.pdf_writer import PdfWriter
+from pdf2image import convert_from_path
+
+
+class PageImage(NamedTuple):
+    """生成された画像のパスとサイズ情報を格納"""
+
+    path: str
+    width: int
+    height: int
 
 
 class PdfService:
     """
-    PDF生成および座標データ管理に関するビジネスロジック
+    PDFの画像変換および一時ファイル管理を行うサービスクラス
+    プロジェクトルートの 'temp' ディレクトリを使用する
     """
 
-    def __init__(self):
-        # プロジェクトルートからの相対パスでフォントを指定
-        base_dir = Path(__file__).parent.parent.parent  # src/services/ -> root
-        self.font_path = str(base_dir / "assets" / "fonts" / "ipaexg.ttf")
-        self.writer = PdfWriter(self.font_path)
+    # このファイルは services/ にあるため、parent.parent がプロジェクトルート
+    BASE_TEMP_DIR = Path(__file__).parent.parent / "temp"
 
-        # 出力ディレクトリの作成
-        self.output_dir = base_dir / "output"
-        self.output_dir.mkdir(exist_ok=True)
+    def __init__(self) -> None:
+        self.session_dir: Optional[Path] = None
+        self.page_images: List[PageImage] = []
 
-    def get_all_coordinates(self) -> List[Coordinate]:
-        """保存されている全ての座標データを取得"""
-        session = SessionLocal()
-        try:
-            return session.query(Coordinate).all()
-        finally:
-            session.close()
+        # 念のため初期化時にベースTEMPディレクトリを作成
+        self.BASE_TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-    def add_coordinate(self, label: str, x: float, y: float, value: str = "") -> None:
-        """座標データをDBに追加"""
-        session = SessionLocal()
-        try:
-            new_coord = Coordinate(label=label, x_point=x, y_point=y, value=value)
-            session.add(new_coord)
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            raise e
-        finally:
-            session.close()
-
-    def delete_coordinate(self, coord_id: int) -> None:
-        """指定IDの座標データを削除"""
-        session = SessionLocal()
-        try:
-            target = session.query(Coordinate).filter(Coordinate.id == coord_id).first()
-            if target:
-                session.delete(target)
-                session.commit()
-        except Exception as e:
-            session.rollback()
-            raise e
-        finally:
-            session.close()
-
-    def generate_preview_pdf(self, filename: str = "preview.pdf") -> str:
+    async def convert_pdf_to_images(self, pdf_path: str) -> List[PageImage]:
         """
-        現在のDBデータを使ってPDFを生成する
-
-        Returns:
-            str: 生成されたファイルのフルパス
+        PDFを画像に変換し、パスとサイズ情報を返す (非同期ラッパー)
         """
-        coords = self.get_all_coordinates()
+        return await asyncio.to_thread(self._convert_sync, pdf_path)
 
-        # utils用のデータ形式に変換
-        draw_data = []
-        for c in coords:
-            draw_data.append(
-                {
-                    "x": c.x_point,
-                    "y": c.y_point,
-                    "value": c.value if c.value else c.label,  # 値がない場合はラベルを表示
-                }
-            )
+    def _convert_sync(self, pdf_path: str) -> List[PageImage]:
+        # 以前のセッションがあればクリーンアップ
+        self.cleanup()
 
-        output_path = str(self.output_dir / filename)
+        # 今回のセッション用の一意なフォルダを作成 (temp/session_uuid)
+        session_id = str(uuid.uuid4())
+        self.session_dir = self.BASE_TEMP_DIR / f"session_{session_id}"
+        self.session_dir.mkdir(exist_ok=True)
 
         try:
-            self.writer.create_overlay_pdf(output_path, draw_data)
-            return output_path
+            # pdf2image実行
+            pil_images = convert_from_path(pdf_path)
+
+            results = []
+            for i, image in enumerate(pil_images):
+                image_filename = f"page_{i + 1}.png"
+                # pathlib.Path を str に変換して保存パスを作成
+                save_path = self.session_dir / image_filename
+
+                # 画像保存
+                image.save(str(save_path), "PNG")
+
+                # Fletで表示するために絶対パスの文字列として格納
+                results.append(
+                    PageImage(
+                        path=str(save_path.absolute()), width=image.width, height=image.height
+                    )
+                )
+
+            self.page_images = results
+            return results
+
         except Exception as e:
+            # エラー時は即座にクリーンアップして再送出
+            self.cleanup()
             raise e
 
-
-# シングルトン
-pdf_service = PdfService()
+    def cleanup(self) -> None:
+        """
+        現在のセッションの一時ディレクトリと画像ファイルを削除する
+        """
+        if self.session_dir and self.session_dir.exists():
+            try:
+                shutil.rmtree(self.session_dir)
+            except OSError as e:
+                print(f"Error checking cleanup: {e}")
+            finally:
+                self.session_dir = None
+                self.page_images = []
