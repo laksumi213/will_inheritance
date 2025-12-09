@@ -13,8 +13,8 @@ wheels/
 .env
 __pycache__/
 
-# .gitignore
-# .json
+.gitignore
+.json
 
 # サービスアカウントキー (機密情報)
 prefab-surfer-480206-i1-14908c59d7a0.json
