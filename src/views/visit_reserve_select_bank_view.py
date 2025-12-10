@@ -1,15 +1,17 @@
 # src/views/visit_reserve_select_bank_view.py
 from flet import (
-    Colors,
     Column,
-    Container,
     Divider,
     ElevatedButton,
-    MainAxisAlignment,
     Page,
-    Row,
     Text,
-    border,
+    FontWeight,
+    ListTile,
+    Icon,
+    Icons,
+    RoundedRectangleBorder,
+    Container,
+    Colors
 )
 
 from src.services.deceased_service import get_financial_asset_by_case
@@ -21,35 +23,55 @@ class VisitReserveSelectBankView(Column):
         self.page = page
         self.case_id = case_id
 
+        # 資産データの取得
         assets = get_financial_asset_by_case(case_id)
         unique = {}
         for a in assets:
             if a.get("bank_code"):
                 unique[a["bank_code"]] = a.get("bank_name")
 
+        # 銀行リストの生成
         btn_col = Column(spacing=10)
         if unique:
             for code, name in unique.items():
                 btn_col.controls.append(
-                    Container(
-                        content=Row(
-                            [
-                                Text(f"🏦 {name}", weight="bold"),
-                                ElevatedButton(
-                                    "予約へ", on_click=lambda e, c=code: self._go_reserve(c)
-                                ),
-                            ],
-                            alignment=MainAxisAlignment.SPACE_BETWEEN,
+                    ListTile(
+                        leading=Icon(Icons.ACCOUNT_BALANCE, color="primary"),
+                        title=Text(
+                            f"{name}", 
+                            color="onSurface",
+                            weight=FontWeight.W_500
                         ),
-                        padding=15,
-                        bgcolor=Colors.WHITE,
-                        border=border.all(1, Colors.GREY_300),
+                        subtitle=Text(f"銀行コード: {code}", size=12),
+                        trailing=ElevatedButton(
+                            "予約へ",
+                            width=140, # 押しやすさを考慮して幅を維持
+                            bgcolor="primaryContainer",
+                            color="onPrimaryContainer",
+                            on_click=lambda e, c=code: self._go_reserve(c)
+                        ),
+                        bgcolor="surfaceVariant",
+                        shape=RoundedRectangleBorder(radius=5),
                     )
                 )
         else:
-            btn_col.controls.append(Text("銀行が見つかりません"))
+            btn_col.controls.append(
+                Container(
+                    Text("銀行が見つかりません", color=Colors.ERROR),
+                    padding=20
+                )
+            )
 
-        self.controls = [Text("📅 来店予約 - 銀行選択", size=24, weight="bold"), Divider(), btn_col]
+        self.controls = [
+            Text(
+                "📅 来店予約 - 銀行選択", 
+                size=24, 
+                weight=FontWeight.BOLD, 
+                color="onSurface"
+            ), 
+            Divider(), 
+            btn_col
+        ]
 
     def _go_reserve(self, code):
         if code == "0001":

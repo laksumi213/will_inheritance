@@ -1,5 +1,6 @@
 # src/config.py
 import os
+from dotenv import load_dotenv
 from pathlib import Path
 
 from flet import Colors, Theme, ThemeMode, VisualDensity  # テーマ関連のインポートを追加
@@ -11,6 +12,7 @@ APP_THEME = Theme(
 )
 DEFAULT_THEME_MODE = ThemeMode.DARK  # 常にダークモード
 
+load_dotenv()
 
 # --- アプリケーション設定 (既存のクラスを維持) ---
 class Config:
@@ -33,8 +35,24 @@ class Config:
     COLOR_SURFACE_VARIANT = "surfaceVariant"
 
     # 外部サービス設定
-    VERTEX_AI_PROJECT_ID = os.getenv("VERTEX_AI_PROJECT_ID", "your-project-id")
+    # VERTEX_AI_PROJECT_ID = os.getenv("VERTEX_AI_PROJECT_ID", "")
     SELENIUM_HEADLESS = False
+
+    # Google Cloud Project ID
+    GOOGLE_PROJECT_ID: str = os.getenv("GOOGLE_PROJECT_ID", "your-project-id")
+    
+    # Vertex AI Region
+    GOOGLE_LOCATION: str = os.getenv("GOOGLE_LOCATION", "us-central1")
+    
+    # サービスアカウントキーのパス (優先順位: 環境変数 -> ローカルのjsonファイル)
+    # 本番運用時は環境変数を推奨。開発時は直下のjsonを参照可能にする。
+    GOOGLE_CREDENTIALS_PATH: str = os.getenv(
+        "GOOGLE_APPLICATION_CREDENTIALS", 
+        os.path.join(os.getcwd(), "service_account.json")
+    )
+
+    # Gemini モデル名
+    GEMINI_MODEL_NAME: str = "gemini-1.5-flash"
 
 
 # シングルトンとして使用可能 (DBやサービス層で使用)

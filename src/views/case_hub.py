@@ -44,7 +44,7 @@ from src.utils.file_system import open_case_folder
 def PlaceholderView(page: Page, title: str, content: str) -> Control:
     return Column(
         controls=[
-            Text(title, size=24, weight="bold", color="onSurface"),
+            Text(title, size=24, weight=FontWeight.BOLD, color="onSurface"),
             Divider(),
             Text(content, size=16, color="onSurface"),
         ],
@@ -208,30 +208,22 @@ class CaseHubView(Row):
         content_control = None
         
         # 1. 書類作成画面かつ、特定の銀行ルートが指定されている場合
-        # specific_routeの例: /case/123/doc/balance_cert/smbc
         if key == "balance_cert_doc" and specific_route:
-            
-            # SMBCのルートパターンにマッチするか確認
             smbc_route_suffix = "/smbc"
             mizuho_route_suffix = "/mizuho"
             
             if specific_route.endswith(smbc_route_suffix):
-                # 三井住友銀行 (0009)
                 content_control = SmbcBalanceDocView(self.page, self.case_id, "0009")
             elif specific_route.endswith(mizuho_route_suffix):
-                # みずほ銀行 (0001)
                 content_control = MizuhoBalanceDocView(self.page, self.case_id, "0001")
-            # 他の銀行もここに追加可能
             
-            # 特定ルートで画面が切り替わった場合、キャッシュは使用しない（都度新しい状態を取得）
             if content_control is not None:
-                 # コンテンツの差し替えを実行し、ここでリターン
                 self._replace_main_content(content_control)
                 return
 
-
-        # 2. 特定ルートに該当しない、または特定ルート指定がない場合は通常表示
-        if key in self.views_cache:
+        # 2. コンテンツの生成またはキャッシュからの取得
+        # 💡 修正: "overview" (案件概要) はデータ更新頻度が高いためキャッシュを使わない
+        if key != "overview" and key in self.views_cache:
             content_control = self.views_cache[key]
         else:
             view_func = self.destinations[key]["view_func"]
@@ -241,17 +233,14 @@ class CaseHubView(Row):
             if isinstance(raw_content, View):
                 content_control = Column(controls=raw_content.controls, expand=True, scroll="auto")
             elif isinstance(raw_content, list):
-                content_control = Column(controls=raw_content, expand=True, scroll="auto")
+                content_control = Column(controls=raw_content.controls, expand=True, scroll="auto")
             else:
-                # BalanceCertDocViewのようにControlを継承している場合
+                # UserControl/Controlを継承している場合
                 content_control = raw_content
             
-            # 💡 修正: ViewFuncがControlsを継承している場合、キャッシュ前に page へのアタッチを待つ
-            # BalanceCertDocView はここで self.update() を呼び出すのをやめたため、
-            # 次の self._replace_main_content でページにアタッチされる。
-            # その後、did_mount が呼び出され、内部で更新される。
-            
-            self.views_cache[key] = content_control
+            # キャッシュに保存 (overview以外)
+            if key != "overview":
+                self.views_cache[key] = content_control
 
         # コンテンツの差し替え
         self._replace_main_content(content_control)
@@ -306,7 +295,7 @@ class CaseHubView(Row):
             self.selected_index = self.destination_keys.index(target_key)
             self.nav_rail.selected_index = self.selected_index
         
-        # 3. コンテンツの更新（ルート情報を渡すことでサブ画面分岐を有効化）
+        # 3. コンテンツの更新
         self._update_main_content(target_key, specific_route=route)
 
         if update_ui:

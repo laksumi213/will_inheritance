@@ -17,6 +17,7 @@ from src.models.tables import (
     Case,
     CaseStatus,
     Contact,
+    D_AddressHistory,
     D_ContactLink,
     Deceased,
     FinancialAsset,
@@ -31,7 +32,6 @@ from src.utils.date_utils import (
 )
 
 # --- パス正規化ロジック ---
-
 
 def normalize_folder_path(raw_path: str) -> str:
     """
@@ -107,6 +107,10 @@ def get_contracting_party_name(case_id: int) -> str:
 
 
 def get_case_folder_path(case_id: int) -> Optional[str]:
+    """
+    案件フォルダのパスを取得する。
+    取得時にパスが正規化されていない場合、自動的に正規化してDBに保存する。
+    """
     db = SessionLocal()
     try:
         case = db.query(Case).filter(Case.case_id == case_id).first()
@@ -120,6 +124,11 @@ def get_case_folder_path_service(case_id: int) -> Optional[str]:
 
 
 def update_case_folder_path(case_id: int, folder_path: str) -> bool:
+    """
+    案件フォルダパスを更新する。保存前に正規化を行う。
+    空文字が渡された場合は、意図的な削除でない限り保存しないように制御は呼び出し元で行うこと。
+    ここでは渡された値を正規化して保存する。
+    """
     db = SessionLocal()
     try:
         case = db.query(Case).filter(Case.case_id == case_id).first()
@@ -674,6 +683,7 @@ def get_contact_info(target_type: str, target_id: int) -> List[dict]:
         db.close()
 
 
+
 # --- 内部ヘルパー ---
 
 
@@ -852,6 +862,7 @@ def get_bank_cert_document_data(case_id: int, bank_code: str) -> dict:
         return res
     finally:
         db.close()
+
 
 
 def get_financial_asset_automation_data(case_id: int, bank_code: str) -> dict:
@@ -1293,16 +1304,28 @@ def get_case_list(search_term="", status_id=None, user_id=None):
                 Task.last_updated_at,
             )
             .join(Case.deceased_ref, isouter=True)
+            .join(Deceased.heirs, isouter=True)  # 相続人テーブルを結合
             .join(Case.status_ref, isouter=True)
             .join(Task, Case.case_id == Task.case_id, isouter=True)
             .order_by(Case.contract_date.desc())
         )
 
         if search_term:
+            term = f"%{search_term}%"
             query = query.filter(
-                (Case.case_number.ilike(f"%{search_term}%"))
-                | (Case.client_name.ilike(f"%{search_term}%"))
-                | (Case.client_name_kana.ilike(f"%{search_term}%"))
+                (Case.case_number.ilike(term))
+                | (Case.client_name.ilike(term))
+                | (Case.client_name_kana.ilike(term))
+                # 被相続人検索 (姓、名、姓名連結)
+                | (Deceased.name_last.ilike(term))
+                | (Deceased.name_first.ilike(term))
+                | (Deceased.name_last_kana.ilike(term))
+                | (Deceased.name_first_kana.ilike(term))
+                # 相続人検索 (姓、名、姓名連結)
+                | (Heir.name_last.ilike(term))
+                | (Heir.name_first.ilike(term))
+                | (Heir.name_last_kana.ilike(term))
+                | (Heir.name_first_kana.ilike(term))
             )
 
         if status_id:

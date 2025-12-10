@@ -203,12 +203,21 @@ class Case(Base):
     certs_of_seal_count = Column(Integer, default=0)
     power_of_attorney_count = Column(Integer, default=0)
 
+    # 日付関連
     date_of_death = Column(Date)
     interview_date = Column(DateTime)
     contract_date = Column(Date)
     tax_deadline = Column(DateTime)
     created_at = Column(DateTime, default=datetime.now)
 
+    # --- 新規追加カラム (紹介情報・SOL連携) ---
+    sol_case_number = Column(String, nullable=True, comment="SOL案件No")
+    introduction_date = Column(Date, nullable=True, comment="紹介日")
+    referral_sec_branch_name = Column(String, nullable=True, comment="証券会社支店名")
+    referral_sec_rep_name = Column(String, nullable=True, comment="証券会社担当者名")
+    consent_date = Column(Date, nullable=True, comment="同意書日付")
+
+    # リレーション定義
     manager = relationship("User", foreign_keys=[manager_id])
     operator = relationship("User", foreign_keys=[operator_id])
     status_ref = relationship("CaseStatus")

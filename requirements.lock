@@ -11,16 +11,14 @@
 
 -e file:.
 altgraph==0.17.4
-    # via macholib
     # via pyinstaller
 annotated-types==0.7.0
     # via pydantic
-anyio==4.4.0
+anyio==4.12.0
+    # via google-genai
     # via httpx
     # via starlette
     # via watchfiles
-appscript==1.4.0
-    # via xlwings
 arrow==1.3.0
     # via cookiecutter
 attrs==24.2.0
@@ -39,6 +37,8 @@ certifi==2024.8.30
     # via httpx
     # via requests
     # via selenium
+cffi==2.0.0
+    # via trio
 chardet==5.2.0
     # via binaryornot
     # via reportlab
@@ -47,12 +47,23 @@ charset-normalizer==3.3.2
 click==8.2.1
     # via cookiecutter
     # via uvicorn
+colorama==0.4.6
+    # via click
+    # via qrcode
+    # via tqdm
+    # via uvicorn
+configobj==5.0.9
+    # via fitz
+configparser==7.2.0
+    # via fitz
 contourpy==1.3.3
     # via matplotlib
 cookiecutter==2.6.0
     # via flet-cli
 cycler==0.12.1
     # via matplotlib
+docstring-parser==0.17.0
+    # via google-cloud-aiplatform
 docx==0.2.4
     # via will-inheritance
 et-xmlfile==1.1.0
@@ -77,6 +88,11 @@ google-ai-generativelanguage==0.6.15
 google-api-core==2.28.1
     # via google-ai-generativelanguage
     # via google-api-python-client
+    # via google-cloud-aiplatform
+    # via google-cloud-bigquery
+    # via google-cloud-core
+    # via google-cloud-resource-manager
+    # via google-cloud-storage
     # via google-generativeai
 google-api-python-client==2.187.0
     # via google-generativeai
@@ -97,6 +113,49 @@ greenlet==3.1.1
     # via sqlalchemy
 grpcio==1.76.0
     # via google-api-core
+    # via google-cloud-aiplatform
+    # via google-cloud-bigquery
+    # via google-cloud-core
+    # via google-cloud-resource-manager
+    # via google-cloud-storage
+    # via google-genai
+    # via google-generativeai
+google-auth-httplib2==0.2.1
+    # via google-api-python-client
+google-cloud-aiplatform==1.129.0
+    # via will-inheritance
+google-cloud-bigquery==3.38.0
+    # via google-cloud-aiplatform
+google-cloud-core==2.5.0
+    # via google-cloud-bigquery
+    # via google-cloud-storage
+google-cloud-resource-manager==1.15.0
+    # via google-cloud-aiplatform
+google-cloud-storage==3.6.0
+    # via google-cloud-aiplatform
+google-crc32c==1.7.1
+    # via google-cloud-storage
+    # via google-resumable-media
+google-genai==1.53.0
+    # via google-cloud-aiplatform
+google-generativeai==0.8.5
+    # via will-inheritance
+google-resumable-media==2.8.0
+    # via google-cloud-bigquery
+    # via google-cloud-storage
+googleapis-common-protos==1.72.0
+    # via google-api-core
+    # via grpc-google-iam-v1
+    # via grpcio-status
+greenlet==3.1.1
+    # via sqlalchemy
+grpc-google-iam-v1==0.14.3
+    # via google-cloud-resource-manager
+grpcio==1.76.0
+    # via google-api-core
+    # via google-cloud-resource-manager
+    # via googleapis-common-protos
+    # via grpc-google-iam-v1
     # via grpcio-status
 grpcio-status==1.71.2
     # via google-api-core
@@ -107,12 +166,14 @@ h11==0.14.0
 httpcore==1.0.5
     # via httpx
 httplib2==0.31.0
+    # via fitz
     # via google-api-python-client
     # via google-auth-httplib2
 httptools==0.6.4
     # via uvicorn
-httpx==0.27.2
+httpx==0.28.1
     # via flet
+    # via google-genai
 idna==3.10
     # via anyio
     # via httpx
@@ -127,11 +188,11 @@ keyboard==0.13.5
 kiwisolver==1.4.9
     # via matplotlib
 lxml==5.3.0
-    # via appscript
     # via docx
     # via pandas-datareader
 macholib==1.16.4
     # via pyinstaller
+    # via pyxnat
 markdown-it-py==4.0.0
     # via rich
 markupsafe==3.0.2
@@ -148,6 +209,8 @@ numpy==2.3.2
     # via contourpy
     # via matplotlib
     # via pandas
+    # via scipy
+    # via shapely
     # via will-inheritance
 oauthlib==3.2.2
     # via flet
@@ -156,7 +219,11 @@ openpyxl==3.1.5
 outcome==1.3.0.post0
     # via trio
 packaging==23.2
+packaging==25.0
+    # via etelemetry
     # via flet-cli
+    # via google-cloud-aiplatform
+    # via google-cloud-bigquery
     # via matplotlib
     # via pyinstaller
     # via pyinstaller-hooks-contrib
@@ -170,6 +237,8 @@ pdf2image==1.17.0
     # via will-inheritance
 pdfminer==20191125
     # via will-inheritance
+pefile==2023.2.7
+    # via pyinstaller
 pillow==10.4.0
     # via docx
     # via matplotlib
@@ -188,6 +257,25 @@ protobuf==5.29.5
     # via proto-plus
 psutil==7.1.3
     # via xlwings
+proto-plus==1.26.1
+    # via google-ai-generativelanguage
+    # via google-api-core
+    # via google-cloud-aiplatform
+    # via google-cloud-resource-manager
+protobuf==5.29.5
+    # via google-ai-generativelanguage
+    # via google-api-core
+    # via google-cloud-aiplatform
+    # via google-cloud-resource-manager
+    # via google-generativeai
+    # via googleapis-common-protos
+    # via grpc-google-iam-v1
+    # via grpcio-status
+    # via proto-plus
+prov==2.1.1
+    # via nipype
+puremagic==1.30
+    # via nipype
 pyasn1==0.6.1
     # via pyasn1-modules
     # via rsa
@@ -195,10 +283,14 @@ pyasn1-modules==0.4.2
     # via google-auth
 pyautogui==0.9.54
     # via will-inheritance
+pycparser==2.23
+    # via cffi
 pycryptodome==3.20.0
     # via pdfminer
 pydantic==2.11.7
     # via fastapi
+    # via google-cloud-aiplatform
+    # via google-genai
     # via google-generativeai
 pydantic-core==2.33.2
     # via pydantic
@@ -892,6 +984,7 @@ pysocks==1.7.1
     # via urllib3
 python-dateutil==2.9.0.post0
     # via arrow
+    # via google-cloud-bigquery
     # via matplotlib
     # via pandas
 python-dotenv==1.2.1
@@ -904,6 +997,12 @@ pytweening==1.2.0
     # via pyautogui
 pytz==2024.2
     # via pandas
+pywin32==311
+    # via xlwings
+pywin32-ctypes==0.2.3
+    # via pyinstaller
+pyxnat==1.6.4
+    # via fitz
 pyyaml==6.0.2
     # via cookiecutter
     # via uvicorn
@@ -916,6 +1015,12 @@ reportlab==4.2.2
 requests==2.32.5
     # via cookiecutter
     # via google-api-core
+    # via etelemetry
+    # via google-api-core
+    # via google-auth
+    # via google-cloud-bigquery
+    # via google-cloud-storage
+    # via google-genai
     # via pandas-datareader
     # via webdriver-manager
     # via will-inheritance
@@ -933,13 +1038,15 @@ setuptools==75.0.0
     # via pyinstaller
     # via pyinstaller-hooks-contrib
     # via will-inheritance
+shapely==2.1.2
+    # via google-cloud-aiplatform
+simplejson==3.20.2
+    # via nipype
 six==1.16.0
     # via python-dateutil
     # via repath
     # via zengin-code
 sniffio==1.3.1
-    # via anyio
-    # via httpx
     # via trio
 sortedcontainers==2.4.0
     # via trio
@@ -949,12 +1056,16 @@ sqlalchemy==2.0.43
     # via will-inheritance
 starlette==0.47.3
     # via fastapi
+tenacity==9.1.2
+    # via google-genai
 text-unidecode==1.3
     # via python-slugify
 toml==0.10.2
     # via flet-cli
 tqdm==4.67.1
     # via google-generativeai
+traits==7.0.2
+    # via nipype
 trio==0.26.2
     # via selenium
     # via trio-websocket
@@ -963,9 +1074,15 @@ trio-websocket==0.11.1
 types-python-dateutil==2.9.0.20250822
     # via arrow
 typing-extensions==4.12.2
+    # via anyio
     # via fastapi
     # via google-generativeai
     # via grpcio
+    # via google-cloud-aiplatform
+    # via google-genai
+    # via google-generativeai
+    # via grpcio
+    # via nibabel
     # via pydantic
     # via pydantic-core
     # via qrcode
@@ -984,8 +1101,6 @@ urllib3==2.2.3
     # via selenium
 uvicorn==0.35.0
     # via flet-web
-uvloop==0.22.1
-    # via uvicorn
 watchdog==4.0.2
     # via flet-cli
 watchfiles==1.1.0
@@ -995,6 +1110,7 @@ webdriver-manager==4.0.2
 websocket-client==1.8.0
     # via selenium
 websockets==15.0.1
+    # via google-genai
     # via uvicorn
 wsproto==1.2.0
     # via trio-websocket
