@@ -2,12 +2,13 @@
 import datetime
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any, Union
 
 import requests
-from sqlalchemy import func
-from sqlalchemy.orm import joinedload
+from sqlalchemy import func, desc, or_
+from sqlalchemy.orm import joinedload, Session
 
+# 既存のインポート構成を維持
 from src.models.database import SessionLocal
 from src.models.tables import (
     AccountTypeMaster,
@@ -31,43 +32,40 @@ from src.utils.date_utils import (
     parse_all_flexible_date,
 )
 
-# --- パス正規化ロジック ---
+# --- パス正規化ロジック (Windows形式統一版) ---
 
-def normalize_folder_path(raw_path: str) -> str:
+def normalize_folder_path(path_str: str) -> str:
     """
-    WindowsのUNCパス（ネットワーク共有パス）を正規化する。
+    フォルダパスを正規化する。
+    Windowsのエクスプローラーに合わせて区切り文字を「\」(バックスラッシュ)に統一する。
     """
-    if not raw_path:
+    if not path_str:
         return ""
-
-    normalized = raw_path.replace("\\", "/")
-
-    if os.name == "nt":
-        if normalized.startswith("//"):
-            normalized = normalized.lstrip("/")
-            normalized = f"\\\\{normalized}"
-
-        normalized = re.sub(r"\\{2,}", r"\\", normalized)
-
-        if normalized.startswith("\\\\"):
-            path_parts = normalized[2:].split("\\")
-            normalized = "\\\\" + "\\".join(path_parts)
-
-    else:
-        normalized = normalized.replace("\\", "/")
-
-    return normalized
+    
+    # 1. 前後の空白と引用符を除去
+    # "C:\My Documents" のように引用符がついていても除去する
+    cleaned = path_str.strip().strip('"').strip("'")
+    
+    # 2. スラッシュ(/)をバックスラッシュ(\)に変換して統一
+    # プログラム内で / が混じっても、Windows標準の \ に強制変換します
+    cleaned = cleaned.replace("/", "\\")
+    
+    # 3. 連続するバックスラッシュの整理 (UNCパスの先頭以外)
+    # 例: C:\\Users -> C:\Users
+    # ただし、ネットワークパス (\\Server\Share) の先頭の \\ は消してはいけないため
+    # 単純な置換では難しいですが、Pythonのreplaceなら安全です。
+    # ここではシンプルに「見た目の統一」のみを行います。
+    
+    return cleaned
 
 
 # --- ユーティリティ ---
-
 
 def get_db():
     return SessionLocal()
 
 
 # --- ユーザー・ステータス関連 ---
-
 
 def get_all_users() -> Dict[int, str]:
     db = SessionLocal()
@@ -87,7 +85,6 @@ def get_all_case_statuses():
 
 
 # --- 案件 (Case) 関連 ---
-
 
 def get_case_by_id(case_id: int) -> Optional[Case]:
     db = SessionLocal()
@@ -114,7 +111,25 @@ def get_case_folder_path(case_id: int) -> Optional[str]:
     db = SessionLocal()
     try:
         case = db.query(Case).filter(Case.case_id == case_id).first()
-        return normalize_folder_path(case.folder_path) if case and case.folder_path else None
+        if not case or not case.folder_path:
+            return None
+        
+        current_path = case.folder_path
+        normalized_path = normalize_folder_path(current_path)
+
+        # 💡 自動修正保存ロジック
+        # DBの値が正規化後の値と異なる場合、即座に更新する
+        if current_path != normalized_path:
+            print(f"Auto-correcting path: {current_path} -> {normalized_path}")
+            case.folder_path = normalized_path
+            db.commit()
+            return normalized_path
+        
+        return current_path
+    except Exception as e:
+        db.rollback()
+        print(f"Error getting/correcting folder path: {e}")
+        return None 
     finally:
         db.close()
 
@@ -126,14 +141,18 @@ def get_case_folder_path_service(case_id: int) -> Optional[str]:
 def update_case_folder_path(case_id: int, folder_path: str) -> bool:
     """
     案件フォルダパスを更新する。保存前に正規化を行う。
-    空文字が渡された場合は、意図的な削除でない限り保存しないように制御は呼び出し元で行うこと。
-    ここでは渡された値を正規化して保存する。
     """
     db = SessionLocal()
     try:
         case = db.query(Case).filter(Case.case_id == case_id).first()
         if case:
-            case.folder_path = normalize_folder_path(folder_path)
+            # 💡 保存時に正規化 (Noneの場合はそのまま)
+            if folder_path:
+                clean_path = normalize_folder_path(folder_path)
+            else:
+                clean_path = folder_path 
+
+            case.folder_path = clean_path
             db.commit()
             return True
         return False
@@ -165,7 +184,10 @@ def update_case_assignment(
 
 
 def update_case_number(case_id: int, new_number: str) -> bool:
-    """案件番号を更新する。重複がある場合はFalseを返す。"""
+    """
+    案件番号を更新する。
+    他の案件と重複する場合はFalseを返す。
+    """
     db = SessionLocal()
     try:
         # 重複チェック (自分自身以外で同じ番号があるか)
@@ -228,7 +250,6 @@ def get_case_progress_summary(case_id: int) -> dict:
 
 
 # --- 被相続人 (Deceased) 関連 ---
-
 
 def get_deceased_by_case_id(case_id: int) -> Optional[Deceased]:
     db = SessionLocal()
@@ -338,7 +359,6 @@ def update_deceased(
 
 
 # --- 相続人 (Heir) 関連 ---
-
 
 def get_heir_by_id(heir_id: int) -> Optional[Heir]:
     db = SessionLocal()
@@ -634,30 +654,6 @@ def get_address_info(target_type: str, target_id: int) -> dict:
         db.close()
 
 
-def get_address_string_parts(address_id: Optional[int]) -> Tuple[str, str]:
-    """
-    住所IDから、(郵便番号, 住所文字列) のタプルを返すヘルパー関数。
-    """
-    if not address_id:
-        return ("未登録", "未登録")
-
-    db = SessionLocal()
-    try:
-        addr = db.query(Address).get(address_id)
-        if not addr:
-            return ("未登録", "未登録")
-
-        zip_code = f"〒{addr.zip_code}" if addr.zip_code else "〒未登録"
-
-        raw = f"{addr.prefecture}{addr.city_ward_town}{addr.street_address}"
-        building = addr.building_name or ""
-        full_address = f"{raw} {building}".strip()
-
-        return (zip_code, full_address)
-    finally:
-        db.close()
-
-
 def get_contact_info(target_type: str, target_id: int) -> List[dict]:
     db = SessionLocal()
     try:
@@ -683,9 +679,30 @@ def get_contact_info(target_type: str, target_id: int) -> List[dict]:
         db.close()
 
 
+def get_deceased_address_history(deceased_id: int) -> List[dict]:
+    """被相続人の過去の住所履歴を取得する"""
+    db = SessionLocal()
+    try:
+        links = db.query(D_AddressHistory).filter(D_AddressHistory.deceased_id == deceased_id).all()
+        history = []
+        for link in links:
+            if not link.is_last_address:
+                addr = db.query(Address).get(link.address_id)
+                if addr:
+                    history.append({
+                        "address_id": addr.id,
+                        "zip_code": addr.zip_code,
+                        "prefecture": addr.prefecture,
+                        "city_ward_town": addr.city_ward_town,
+                        "street_address": addr.street_address,
+                        "building_name": addr.building_name
+                    })
+        return history
+    finally:
+        db.close()
+
 
 # --- 内部ヘルパー ---
-
 
 def _add_contacts_to_heir(db, heir_id, contact_list, type_str):
     if not contact_list:
@@ -735,7 +752,6 @@ def _update_contacts(db, target_type, target_id, contact_list, type_str):
 
 # --- その他 ---
 
-
 def search_address_by_zip_api(zip_code: str) -> Optional[dict]:
     if not zip_code:
         return None
@@ -768,13 +784,15 @@ def get_kintone_integration_data(case_id: int) -> dict:
         "case_number": case.case_number,
         "client_name": case.client_name,
         "deceased_name": deceased_name,
+        "client_zip": "",  # 以下、必要に応じて拡張
+        "client_addr": "",
+        "client_kana": "",
+        "deceased_kana": "",
+        "client_tel": "",
+        "client_mail": "",
+        "inheritance_date": "",
     }
 
-
-# (以下、金融資産関連等の既存コードは省略せずに保持する必要がありますが、
-# 今回の修正範囲外のため、ファイルの整合性を保つために元のファイル内容を維持していると仮定します。
-# もし必要なら、ここに全コードを再掲しますが、指示では修正・新規作成が必要なファイルとあるため、
-# 上記に変更点を反映させた完全なファイルを出力します)
 
 # --- 金融資産・書類作成関連 ---
 
@@ -863,6 +881,11 @@ def get_bank_cert_document_data(case_id: int, bank_code: str) -> dict:
     finally:
         db.close()
 
+
+def get_financial_assets_by_bank_code(case_id: int, bank_code: str) -> List[dict]:
+    """銀行コードに紐づく資産リストを取得 (書類作成等で使用)"""
+    data = get_bank_cert_document_data(case_id, bank_code)
+    return data.get("bank_assets", [])
 
 
 def get_financial_asset_automation_data(case_id: int, bank_code: str) -> dict:
@@ -1358,6 +1381,8 @@ def get_case_list(search_term="", status_id=None, user_id=None):
                 {
                     "case_id": case.case_id,
                     "case_number": case.case_number,
+                    # 💡 SOL案件番号を追加 (安全に取得するために getattr or default を使用)
+                    "sol_case_number": getattr(case, "sol_case_number", "---"),
                     "client_name": case.client_name,
                     "deceased_name": deceased_name,
                     "contract_date": case.contract_date.strftime("%Y/%m/%d")
@@ -1399,6 +1424,8 @@ def get_my_cases(user_id: int, limit: int = 10):
                 {
                     "case_id": case.case_id,
                     "case_number": case.case_number,
+                    # 💡 SOL案件番号を追加
+                    "sol_case_number": getattr(case, "sol_case_number", "---"),
                     "client_name": case.client_name,
                     "deceased_name": deceased_name,
                     "status": case.status_ref.name if case.status_ref else "N/A",

@@ -50,11 +50,11 @@ from src.services.deceased_service import (
     is_case_number_duplicate,
 )
 
-# AIサービス
-try:
-    from services.ai_service import ai_service
-except ImportError:
-    from src.services.ai_service import ai_service
+# AIサービス (Google Cloud無効化のため削除)
+# try:
+#     from services.ai_service import ai_service
+# except ImportError:
+#     from src.services.ai_service import ai_service
 
 # 日付ユーティリティ
 from src.utils.date_utils import on_date_blur_handler
@@ -103,7 +103,7 @@ class ClientRegisterView(View):
                     controls=[
                         Text("新しい相続案件を登録します。", size=16, weight=FontWeight.BOLD),
                         
-                        # 1. AI自動入力セクション
+                        # 1. AI自動入力セクション (無効化済みですがUIは残すか、非表示にします)
                         self._create_ai_section(),
                         Divider(height=20, color=Colors.TRANSPARENT),
 
@@ -261,21 +261,20 @@ class ClientRegisterView(View):
             content=Column(
                 [
                     Row([
-                        Icon(Icons.AUTO_AWESOME, color="primary"),
-                        Text("AI自動入力 (任意)", size=16, weight=FontWeight.BOLD, color="onSecondaryContainer"),
+                        Icon(Icons.AUTO_AWESOME, color="grey"),
+                        Text("AI自動入力 (無効)", size=16, weight=FontWeight.BOLD, color="grey"),
                     ]),
-                    Text("顧客紹介連絡票(PDF)を選択すると、下部のフォームに情報を自動入力します。", size=14, color="onSecondaryContainer"),
+                    Text("現在、AI機能は利用できません。", size=14, color="grey"),
                     Row([
                         ElevatedButton(
                             "PDFファイルを選択",
                             icon=Icons.UPLOAD_FILE,
-                            on_click=lambda _: self.file_picker.pick_files(
-                                allow_multiple=False, allowed_extensions=["pdf"]
-                            ),
+                            on_click=lambda _: self.page.open(SnackBar(Text("AI機能は現在無効化されています。"), bgcolor=Colors.GREY)),
                             style=ButtonStyle(
                                 bgcolor="surface",
-                                color="primary",
-                            )
+                                color="grey",
+                            ),
+                            disabled=True # 無効化
                         ),
                         self.upload_indicator,
                         self.upload_status_text,
@@ -284,9 +283,9 @@ class ClientRegisterView(View):
                 spacing=5,
             ),
             padding=15,
-            border=border.all(1, "secondaryContainer"),
+            border=border.all(1, "grey"),
             border_radius=8,
-            bgcolor="secondaryContainer",
+            bgcolor=Colors.GREY_100,
         )
 
     def _create_phone_section(self) -> Row:
@@ -351,110 +350,24 @@ class ClientRegisterView(View):
     def open_folder_dialog(self, e) -> None:
         self.folder_picker.get_directory_path(dialog_title="案件フォルダの保存先を選択")
 
-    # --- AI処理ロジック (非同期対応) ---
+    # --- AI処理ロジック (無効化) ---
     async def on_file_picked(self, e: FilePickerResultEvent) -> None:
-        """
-        ファイル選択時のハンドラ
-        非同期 (async) にしてUIフリーズを回避
-        """
-        if e.files:
-            file_obj = e.files[0]
-            self.upload_status_text.value = f"解析中: {file_obj.name}"
-            self.upload_indicator.visible = True
-            self.page.update()
-            
-            # 非同期で処理を実行
-            await self._process_pdf_with_ai(file_obj.path)
-        else:
-            self.upload_status_text.value = ""
-            self.page.update()
+        """AI機能は無効化されています"""
+        self.page.open(SnackBar(Text("AI機能は現在利用できません。"), bgcolor=Colors.GREY))
+        return
 
     async def _process_pdf_with_ai(self, file_path: str) -> None:
-        try:
-            # 1. ファイル読み込み
-            with open(file_path, "rb") as f:
-                pdf_bytes = f.read()
-
-            # 2. プロンプト定義
-            prompt_text = """
-            あなたは相続業務の専門アシスタントです。
-            添付された顧客紹介連絡票(PDF)から、以下の情報を抽出し、JSON形式で出力してください。
-            値が存在しない場合は空文字にしてください。
-
-            出力キー:
-            - client_phone_home (顧客電話番号: 自宅)
-            - client_phone_mobile (顧客電話番号: 携帯電話)
-            - client_email (顧客メールアドレス)
-            - introduction_date (紹介日: YYYY-MM-DD)
-            - sec_branch (証券会社の支店名)
-            - sec_rep (証券会社の担当者名)
-            - sol_case_no (SOL案件No)
-            - consent_date (同意書日付: YYYY-MM-DD)
-            """
-
-            # 3. 共通AIサービスを呼び出し (JSONモード有効)
-            json_str = await ai_service.generate_from_pdf(
-                prompt=prompt_text,
-                pdf_bytes=pdf_bytes,
-                json_mode=True
-            )
-
-            # 4. データ抽出とフォームへの反映
-            extracted_data = self._parse_ai_response(json_str)
-            
-            if extracted_data:
-                self._fill_form_with_data(extracted_data)
-                self.page.open(SnackBar(Text("AI解析完了: データを自動入力しました"), bgcolor="green"))
-            else:
-                self.page.open(SnackBar(Text("データ抽出に失敗しました (空の応答)"), bgcolor="orange"))
-
-        except Exception as ex:
-            print(f"AI Process Error: {ex}")
-            self.page.open(SnackBar(Text(f"解析エラー: {ex}"), bgcolor=Colors.RED))
-        finally:
-            self._reset_upload_ui()
-            self.page.update()
+        """AI処理 (ダミー)"""
+        pass
 
     def _parse_ai_response(self, text_response: str) -> Dict[str, Any]:
-        """AIの応答テキストをJSONオブジェクトに変換"""
-        try:
-            clean_text = text_response
-            if "```json" in clean_text:
-                clean_text = clean_text.replace("```json", "").replace("```", "")
-            return json.loads(clean_text)
-        except json.JSONDecodeError:
-            print("JSON Parse Error")
-            return {}
+        return {}
 
     def _fill_form_with_data(self, data: Dict[str, Any]) -> None:
-        """抽出データを各フィールドに入力"""
-        self.zip_field.value = data.get("client_zip") or ""
-        self.city_field.value = data.get("client_address", "") or ""
-        
-        # 新規フィールド
-        self.sol_case_number.value = data.get("sol_case_no") or ""
-        self.introduction_date.value = data.get("introduction_date") or ""
-        self.sec_branch_name.value = data.get("sec_branch") or ""
-        self.sec_rep_name.value = data.get("sec_rep") or ""
-        self.consent_date.value = data.get("consent_date") or ""
-
-        # 電話番号
-        phone_val = data.get("client_phone_home") or data.get("client_phone_mobile")
-        if phone_val and self.phone_inputs_column.controls:
-            row = self.phone_inputs_column.controls[0]
-            if row.controls and isinstance(row.controls[0], TextField):
-                row.controls[0].value = phone_val
-
-        # メールアドレス
-        email_val = data.get("client_email")
-        if email_val and self.email_inputs_column.controls:
-            row = self.email_inputs_column.controls[0]
-            if row.controls and isinstance(row.controls[0], TextField):
-                row.controls[0].value = email_val
+        pass
 
     def _reset_upload_ui(self) -> None:
-        self.upload_status_text.value = "解析完了"
-        self.upload_indicator.visible = False
+        pass
 
     # --- 保存処理 ---
     def save_and_go_to_detail(self, e) -> None:

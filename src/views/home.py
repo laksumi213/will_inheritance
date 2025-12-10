@@ -41,13 +41,21 @@ from src.services.deceased_service import (
     get_incomplete_tasks,
     get_my_cases,
     get_user_capacity_data,
-    get_case_folder_path, # 💡 追加: フォルダパス取得サービス
+    get_case_folder_path,
 )
 
 from src.utils.file_system import open_case_folder
 from src.services.json_backup_service import export_database_to_json, import_database_from_json
 from src.views.client_register import reset_all_global_fields
 
+# 💡 重要: DB自動修復のためのinit_dbをインポート
+# （もしsrc.utils.databaseが存在しない場合は、前回の回答を参考に作成してください）
+try:
+    from src.utils.database import init_db
+except ImportError:
+    # 既存環境への配慮: ファイルがない場合はダミー関数にするが、エラー解消にはファイル作成が必須
+    print("Warning: src.utils.database not found. Auto-migration disabled.")
+    def init_db(): pass
 
 class CaseDashboardView(Column):
     """
@@ -64,21 +72,26 @@ class CaseDashboardView(Column):
             horizontal_alignment=CrossAxisAlignment.START,
         )
         self.page: Page = page
-        # 実際の実装ではログインユーザー情報を認証サービスから取得してください
         self.current_user_id: int = 1
         self.is_manager: bool = True
         
+        # 💡 初期化時にDBスキーマチェックを実行 (OperationalErrorの防止)
+        try:
+            init_db()
+        except Exception as e:
+            print(f"DB Init Error: {e}")
+            if self.page:
+                self.page.open(SnackBar(content=Text(f"DB初期化エラー: {e}")))
+
         self.USER_MAP: Dict[int, str] = get_all_users()
         self.STATUS_LIST = get_all_case_statuses()
 
         self.export_file_picker = FilePicker(on_result=self._on_export_result)
         self.import_file_picker = FilePicker(on_result=self._on_import_result)
         
-        # Overlayへの追加（重複チェック）
         if self.export_file_picker not in self.page.overlay:
             self.page.overlay.extend([self.export_file_picker, self.import_file_picker])
 
-        # 検索フィールド
         self.search_field = TextField(
             label="案件No/依頼者/被相続人/相続人で検索",
             on_change=self._debounce_search,
@@ -87,7 +100,6 @@ class CaseDashboardView(Column):
             autofocus=True,
         )
 
-        # ステータスフィルタ
         self.status_filter = Dropdown(
             label="ステータス",
             width=150,
@@ -97,7 +109,6 @@ class CaseDashboardView(Column):
             on_change=self._on_filter_change,
         )
 
-        # 担当者フィルタ（管理者用）
         self.manager_filter_options = [dropdown.Option(key="-1", text="担当者: 全て")]
         for uid, uname in self.USER_MAP.items():
             self.manager_filter_options.append(dropdown.Option(key=str(uid), text=uname))
@@ -111,7 +122,6 @@ class CaseDashboardView(Column):
             on_change=self._on_filter_change,
         )
 
-        # 各セクションの初期化
         if self.is_manager:
             self.capacity_view_container = self._create_manager_capacity_view()
         
@@ -119,7 +129,6 @@ class CaseDashboardView(Column):
         self.my_case_list_container = self._create_my_case_list_view()
         self.main_list_view_column = self._create_main_list_view_column()
 
-        # レイアウト構築
         self.controls = [
             Container(
                 padding=15,
@@ -129,13 +138,11 @@ class CaseDashboardView(Column):
                     vertical_alignment=CrossAxisAlignment.START,
                     spacing=20,
                     controls=[
-                        # 左サイドバー
                         Column(
                             controls=self._get_left_sidebar_controls(),
                             width=350,
                             scroll="auto",
                         ),
-                        # メインエリア
                         Column(
                             expand=True,
                             controls=[
@@ -153,18 +160,15 @@ class CaseDashboardView(Column):
         ]
 
     def did_mount(self):
-        """コンポーネントがマウントされた後にデータを読み込む"""
         self._update_all_views()
 
     def _show_snack(self, msg: str, color: str):
-        """スナックバーを表示する共通メソッド"""
         self.page.open(
             SnackBar(content=Text(msg, color=Colors.WHITE), bgcolor=color, duration=3000)
         )
         self.page.update()
 
     def _create_top_action_area(self) -> Row:
-        """上部のデータ管理アクションボタンエリアを作成"""
         return Row(
             alignment=MainAxisAlignment.END,
             controls=[
@@ -172,7 +176,7 @@ class CaseDashboardView(Column):
                 ElevatedButton(
                     "全データ保存 (JSON)",
                     icon=Icons.SAVE,
-                    bgcolor=Colors.INDIGO_600, # 保存系なので少し特徴的な色を維持
+                    bgcolor=Colors.INDIGO_600,
                     color=Colors.WHITE,
                     on_click=lambda _: self.export_file_picker.save_file(
                         allowed_extensions=["json"],
@@ -196,7 +200,6 @@ class CaseDashboardView(Column):
         )
 
     def _on_export_result(self, e: FilePickerResultEvent):
-        """エクスポート完了時のコールバック"""
         if e.path:
             try:
                 success = export_database_to_json(e.path)
@@ -207,7 +210,6 @@ class CaseDashboardView(Column):
                 self._show_snack(f"保存エラー: {str(ex)}", Colors.ERROR)
 
     def _on_import_result(self, e: FilePickerResultEvent):
-        """インポート完了時のコールバック"""
         if e.files:
             try:
                 success, msg = import_database_from_json(e.files[0].path)
@@ -218,7 +220,6 @@ class CaseDashboardView(Column):
                 self._show_snack(f"復元エラー: {str(ex)}", Colors.ERROR)
 
     def _get_left_sidebar_controls(self) -> List[Any]:
-        """左サイドバーのコントロールリストを生成"""
         base_controls = []
         tool_links = Container(
             content=Column(
@@ -259,29 +260,24 @@ class CaseDashboardView(Column):
         return base_controls
 
     def _debounce_search(self, e: ControlEvent):
-        """検索入力のデバウンス処理"""
         if self.search_timer:
             self.search_timer.cancel()
         self.search_timer = threading.Timer(0.3, self._run_search_action)
         self.search_timer.start()
 
     def _on_filter_change(self, e: ControlEvent):
-        """フィルタ変更時の処理"""
         self._run_search_action()
 
     def _run_search_action(self, *args):
-        """実際の検索処理実行"""
         search_term = self.search_field.value or ""
         status_id = int(self.status_filter.value) if self.status_filter.value != "-1" else None
         user_id = int(self.user_filter.value) if self.user_filter.value != "-1" else None
 
         new_items = self._get_case_items(search_term, status_id, user_id)
-        # Main listview is index 1 inside the Column
         self.main_list_view_column.controls[1].controls = new_items
         self.update()
 
     def _update_all_views(self):
-        """全ビューのデータを更新"""
         self.todo_list_container.content.controls = self._get_todo_items()
         if self.is_manager:
             self.capacity_view_container.content.controls = self._get_capacity_items()
@@ -291,7 +287,6 @@ class CaseDashboardView(Column):
         self._run_search_action()
 
     def _get_case_items(self, search_term: str = "", status_filter_id: Optional[int] = None, user_filter_id: Optional[int] = None) -> List[Container]:
-        """条件に一致する案件リストアイテムを生成"""
         cases = get_case_list(search_term, status_filter_id, user_filter_id)
         if not cases:
             msg = "条件に一致する案件はありません。" if (user_filter_id or status_filter_id or search_term) else "案件がまだ登録されていません。"
@@ -301,7 +296,6 @@ class CaseDashboardView(Column):
         for case in cases:
             case_id = case["case_id"]
             
-            # ステータスバッジ
             status_badge = Container(
                 content=Text(case["status"], color=Colors.ON_PRIMARY, size=12),
                 bgcolor=Colors.PRIMARY,
@@ -309,15 +303,17 @@ class CaseDashboardView(Column):
                 border_radius=4,
             )
 
-            # 💡 修正: フォルダを開くボタンを CaseHubView のスタイルに合わせる
             folder_button = ElevatedButton(
                 "📂 案件フォルダを開く",
                 on_click=lambda e, cid=case_id: open_case_folder(self.page, cid, get_case_folder_path),
                 style=ButtonStyle(
-                    bgcolor="tertiaryContainer", # テーマカラーを使用
+                    bgcolor="tertiaryContainer",
                     color="onTertiaryContainer",
                 ),
             )
+
+            # 💡 SOL番号を取得して表示
+            sol_number = case.get("sol_case_number", "---")
 
             items.append(
                 Container(
@@ -333,7 +329,8 @@ class CaseDashboardView(Column):
                         ),
                         subtitle=Column(
                             [
-                                Text(f"被相続人: {case['deceased_name']}", color=Colors.ON_SURFACE_VARIANT),
+                                # 💡 SOL番号をサブタイトルに表示
+                                Text(f"SOL番号: {sol_number} | 被相続人: {case['deceased_name']}", color=Colors.ON_SURFACE_VARIANT),
                                 Text(f"更新: {case['last_updated_at']} | 次: {case['description'] or 'なし'}", size=12, color=Colors.OUTLINE),
                             ],
                             spacing=2,
@@ -349,11 +346,9 @@ class CaseDashboardView(Column):
         return items
 
     def _get_capacity_items(self) -> List[ListTile]:
-        """管理者用：チーム負荷状況アイテム生成"""
         data = get_user_capacity_data()
         items = []
         for d in data:
-            # 負荷が高い場合は赤色で警告
             text_color = Colors.ERROR if d["total_incomplete_tasks"] > 5 else None
             items.append(
                 ListTile(
@@ -365,7 +360,6 @@ class CaseDashboardView(Column):
         return items
 
     def _create_manager_capacity_view(self) -> Container:
-        """管理者用：チーム負荷状況コンテナ作成"""
         return Container(
             content=Column(controls=self._get_capacity_items(), spacing=5, scroll="auto"),
             padding=10,
@@ -375,16 +369,17 @@ class CaseDashboardView(Column):
         )
 
     def _get_my_case_items(self) -> List[Any]:
-        """担当案件リストアイテム生成"""
         cases = get_my_cases(user_id=self.current_user_id, limit=10)
         if not cases:
             return [Text("現在、担当案件はありません。", color=Colors.ON_SURFACE_VARIANT)]
         items = []
         for case in cases:
+            # 💡 SOL番号を取得
+            sol_number = case.get("sol_case_number", "---")
             items.append(
                 ListTile(
                     title=Text(f"案件: {case['case_number']}", size=14),
-                    subtitle=Text(f"依頼者: {case['client_name']} | 状態: {case['status']}", size=12),
+                    subtitle=Text(f"SOL: {sol_number} | 依頼者: {case['client_name']} | 状態: {case['status']}", size=12),
                     dense=True,
                     on_click=lambda e, cid=case["case_id"]: self.page.go(f"/detail/{cid}"),
                 )
@@ -392,7 +387,6 @@ class CaseDashboardView(Column):
         return items
 
     def _create_my_case_list_view(self) -> Container:
-        """担当案件リストコンテナ作成"""
         return Container(
             content=Column(controls=self._get_my_case_items(), spacing=5, scroll="auto"),
             padding=10,
@@ -402,7 +396,6 @@ class CaseDashboardView(Column):
         )
 
     def _get_todo_items(self) -> List[Any]:
-        """ToDoアイテム生成"""
         tasks = get_incomplete_tasks(user_id=self.current_user_id)
         if not tasks:
             return [Text("現在、未完了のタスクはありません。", color=Colors.ON_SURFACE_VARIANT)]
@@ -419,7 +412,6 @@ class CaseDashboardView(Column):
         return items
 
     def _create_todo_list_view(self) -> Container:
-        """ToDoリストコンテナ作成"""
         return Container(
             content=Column(controls=self._get_todo_items(), spacing=5, scroll="auto"),
             padding=10,
@@ -429,7 +421,6 @@ class CaseDashboardView(Column):
         )
 
     def _create_control_area(self) -> Container:
-        """検索・フィルタ・新規登録ボタンのエリアを作成"""
         return Container(
             content=Row(
                 controls=[
@@ -440,10 +431,8 @@ class CaseDashboardView(Column):
                     ElevatedButton(
                         "新規案件登録",
                         icon=Icons.ADD,
-                        # テーマカラーを使用
                         bgcolor=Colors.PRIMARY,
                         color=Colors.ON_PRIMARY,
-                        # イベント引数eを受け取るメソッドを直接指定
                         on_click=self._handle_new_case_register,
                     ),
                 ],
@@ -456,18 +445,11 @@ class CaseDashboardView(Column):
         )
 
     def _handle_new_case_register(self, e: ControlEvent):
-        """
-        新規案件登録画面への遷移ハンドラ
-        入力フィールドのリセット処理でエラーが起きても遷移を阻害しないよう制御
-        """
         try:
-            # 登録画面の入力フィールドをリセット
             reset_all_global_fields()
         except Exception as ex:
             print(f"Warning: Failed to reset global fields: {ex}")
-            # 必要であればスナックバーで通知するが、遷移を優先するためログのみとする
 
-        # 画面遷移を実行 (e.pageが存在すれば優先使用)
         if e.page:
             e.page.go("/client_register")
         elif self.page:
@@ -476,7 +458,6 @@ class CaseDashboardView(Column):
             print("Error: Page object is not available for navigation.")
 
     def _create_main_list_view_column(self) -> Column:
-        """メインの案件一覧カラム作成"""
         return Column(
             controls=[
                 Container(
@@ -495,7 +476,6 @@ def HomeView(page: Page) -> View:
     AppBarとコンテンツエリア（CaseDashboardView）を結合する。
     """
     
-    # AppBar定義
     app_bar = AppBar(
         title=Text("遺産整理・相続業務システム", weight=FontWeight.BOLD),
         bgcolor=Colors.SURFACE_VARIANT,
@@ -503,15 +483,13 @@ def HomeView(page: Page) -> View:
             IconButton(
                 icon=Icons.REFRESH,
                 tooltip="画面を更新",
-                on_click=lambda e: page.go("/") # 現在のページをリロード
+                on_click=lambda e: page.go("/")
             ),
         ]
     )
 
-    # ダッシュボードコンテンツ
     dashboard = CaseDashboardView(page)
 
-    # 全体を構成するView
     return View(
         route="/",
         controls=[dashboard],

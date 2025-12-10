@@ -26,11 +26,6 @@ from src.config import APP_THEME, DEFAULT_THEME_MODE
 
 # Viewのインポート
 from src.views.case_hub import CaseHubView
-
-# 💡 変更点: 旧ツール(pdf_tool)を廃止し、高機能版(coordinate_view)をインポート
-# from src.views.pdf_tool import PdfToolView
-from src.views.coordinate_view import CoordinateSelectorView
-from src.views.editors import DeceasedEditView, HeirEditView
 from src.views.home import CaseDashboardView
 from src.views.register import ClientRegisterView
 from src.services.deceased_service import get_case_id_by_deceased_id
@@ -39,7 +34,7 @@ from src.services.deceased_service import get_case_id_by_deceased_id
 from src.views.deceased_edit import DeceasedEditView
 from src.views.heir_edit import HeirEditView
 
-# 💡 修正: 正しいクラス名をインポート
+# 💡 変更点: 旧ツール(pdf_tool)を廃止し、高機能版(coordinate_view)を採用
 from src.views.coordinate_view import CoordinateSelectorView
 
 
@@ -70,7 +65,7 @@ def main(page: Page) -> None:
     init_db()
 
     # -------------------------------------------------------------------------
-    # 画面スタック構築ヘルパー
+    # 画面スタック構築ヘルパー (Uploaded版のロジックを採用)
     # -------------------------------------------------------------------------
     def _ensure_base_stack(case_id: int = None):
         """
@@ -121,8 +116,10 @@ def main(page: Page) -> None:
                 page.views.append(hub_view)
 
 
-    # ==================================================================    # ルーティング処理 (page.on_route_change)
-    # ==================================================================    def route_change(e: RouteChangeEvent) -> None:
+    # =========================================================================
+    # ルーティング処理 (page.on_route_change)
+    # =========================================================================
+    def route_change(e: RouteChangeEvent) -> None:
         print(f"Route changing to: {e.route}")
 
         # --- 1. View スタックのクリーニング ---
@@ -131,25 +128,17 @@ def main(page: Page) -> None:
 
         # --- 2. ルートマッチング ---
 
-        # 💡 変更点: PDFツールへのルーティングを高機能版クラスに割り当て
-        if e.route == "/pdf_tool":
-            # 戻るボタン付きのAppBarを持つViewとして追加
-            page.views.append(
-                View(
-                    route="/pdf_tool",
-        # 💡 PDF座標取得ツール
+        # 💡 変更点: PDF座標取得ツール
         if e.route == "/pdf_tool":
             _ensure_base_stack() # ホームを下に敷く
             page.views.append(
                 View(
                     route="/pdf_tool", 
-                    # 💡 修正されたクラスを使用
                     controls=[CoordinateSelectorView(page)],
                     appbar=AppBar(
                         title=Text("PDF座標取得・編集ツール"),
                         bgcolor=Colors.BLUE_GREY_800,
                         leading=IconButton(Icons.ARROW_BACK, on_click=lambda _: page.go("/")),
-                    ),
                     )
                 )
             )
@@ -161,19 +150,6 @@ def main(page: Page) -> None:
             if match_hub:
                 case_id = int(match_hub.group(3))
 
-                # 既存インスタンス再利用ロジック
-                hub_instance: Optional[CaseHubView] = None
-                is_same_case = False
-                current_hub_view: Optional[View] = None
-
-                # 現在のトップビューを確認
-                if page.views:
-                    top_view = page.views[-1]
-                    # カスタム属性 _hub_instance を持ち、かつ case_id が一致するか確認
-                    if hasattr(top_view, "_hub_instance"):
-                        hub_instance = top_view._hub_instance
-                        if hub_instance.case_id == case_id:
-                            is_same_case = True
                 # ホーム画面を確保
                 if not page.views or page.views[0].route != "/":
                     page.views.clear()
@@ -198,41 +174,8 @@ def main(page: Page) -> None:
                     
                     target_view.route = e.route
                     hub_instance.route_to_content(e.route, update_ui=True)
-
+                    
                 else:
-                    # 【新規作成パターン】
-                    # ホーム画面("/")以外の履歴をクリアしてメモリを節約
-                    print(f"Create New Hub Instance for Case ID: {case_id}")
-                    new_views = [v for v in page.views if v.route == "/"]
-
-                    # ホームがなければ作成して追加 (ダイレクトアクセス対策)
-                    if not new_views:
-                        new_views.append(View(route="/", controls=[CaseDashboardView(page)]))
-
-                    page.views.clear()
-                    page.views.extend(new_views)
-
-                    # 新しいHubインスタンスを生成
-                    hub_instance = CaseHubView(page, case_id)
-
-                    # 新しいViewを作成
-                    current_hub_view = View(
-                        route=e.route,
-                        controls=[hub_instance],
-                        padding=0,
-                        # appbarは下で設定する
-                    )
-                    # インスタンスをViewに紐付けておく（次回の再利用のため）
-                    setattr(current_hub_view, "_hub_instance", hub_instance)
-
-                    page.views.append(current_hub_view)
-
-                    # コンテンツを初期設定 (まだ画面に出ていないので update_ui=False)
-                    hub_instance.route_to_content(e.route, update_ui=False)
-
-                # 💡 [重要] AppBarの強制設定
-                # 新規作成時も再利用時も、必ずAppBarを設定・更新する
-                if current_hub_view:
                     # 【新規作成】
                     hub_instance = CaseHubView(page, case_id)
                     new_view = View(route=e.route, controls=[hub_instance], padding=0)
@@ -243,12 +186,6 @@ def main(page: Page) -> None:
                     new_view.appbar = AppBar(
                         title=Text(f"{client_name}の詳細画面 (ID:{case_id})"),
                         bgcolor=Colors.BLUE_GREY_700,
-                        leading=IconButton(
-                            Icons.ARROW_BACK,
-                            on_click=lambda e: page.go("/"),
-                            tooltip="ホームに戻る",
-                        ),
-                    )
                         leading=IconButton(Icons.ARROW_BACK, on_click=lambda e: page.go("/")),
                     )
                     
@@ -342,12 +279,12 @@ def main(page: Page) -> None:
                     bgcolor=Colors.RED,
                 )
             )
-            if len(page.views) == 0:
-                page.go("/")
             page.update()
 
-    # ==================================================================    # イベントハンドラ設定と初期起動
-    # ==================================================================    page.on_route_change = route_change
+    # =========================================================================
+    # イベントハンドラ設定と初期起動
+    # =========================================================================
+    page.on_route_change = route_change
     
     def view_pop(e):
         page.views.pop()
@@ -364,6 +301,4 @@ def main(page: Page) -> None:
 
 if __name__ == "__main__":
     from flet import app
-
-    app(target=main)
     app(target=main)
