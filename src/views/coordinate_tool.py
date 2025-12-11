@@ -16,8 +16,8 @@ from flet import (
     padding,
 )
 
-# 注意: この画面はDB連携やプレビュー生成機能を持つ簡易版です
-# 実際の座標取得は coordinate_view.py を使用することを推奨します
+# 実際の操作は coordinate_view.py を使用するため、ここは管理用モックアップ
+# または DB連携を行う場所
 
 
 class PdfToolView(Column):
@@ -48,7 +48,6 @@ class PdfToolView(Column):
             rows=[],
         )
 
-        # 画面構成
         self.controls = [
             Container(
                 content=Text("PDF座標設定管理", size=24, weight="bold"), padding=padding.all(10)
@@ -77,54 +76,8 @@ class PdfToolView(Column):
             Container(height=20),
             Text("登録済み座標一覧", size=18, weight="bold"),
             self.data_table,
-            Container(height=20),
-            Row(
-                controls=[
-                    ElevatedButton(
-                        "プレビューPDF生成",
-                        icon=Icons.PICTURE_AS_PDF,
-                        bgcolor=Colors.GREEN_600,
-                        color=Colors.WHITE,
-                        on_click=self._generate_pdf,
-                    )
-                ]
-            ),
         ]
 
-    def did_mount(self):
-        """画面表示時にデータをロード"""
-        # DB接続機能が実装されている前提のモック
-        pass
-
-    def _load_data(self):
-        """DBから座標データを読み込んでテーブルを更新"""
-        # 実装略
-        pass
-
     def _add_coordinate(self, e):
-        """座標を追加"""
-        # 実装略
-        self._show_success("座標を追加しました（デモ）")
-
-    def _generate_pdf(self, e):
-        """PDFを生成して開く"""
-        # 実装略
-        self._show_success("PDF生成機能は未実装です")
-
-    def _show_error(self, msg: str):
-        self.page.open(
-            SnackBar(
-                content=Text(msg, color=Colors.WHITE),
-                bgcolor=Colors.RED,
-            )
-        )
-        self.page.update()
-
-    def _show_success(self, msg: str):
-        self.page.open(
-            SnackBar(
-                content=Text(msg, color=Colors.WHITE),
-                bgcolor=Colors.GREEN,
-            )
-        )
+        self.page.open(SnackBar(Text("デモ: 座標を追加しました"), bgcolor=Colors.GREEN))
         self.page.update()

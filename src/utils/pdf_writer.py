@@ -1,4 +1,4 @@
-# utils/pdf_writer.py
+# src/utils/pdf_writer.py
 import os
 from pathlib import Path
 from typing import Optional
@@ -11,8 +11,8 @@ class PdfFormWriter:
     Fletツールで取得した座標をもとに、PDFへテキストや図形を書き込むクラス。
     """
 
-    # このファイルは utils/ にあるため、parent.parent がプロジェクトルート
-    DEFAULT_FONT_DIR = Path(__file__).parent.parent / "assets" / "fonts"
+    # プロジェクトルートからの相対パスでフォントディレクトリを指定
+    DEFAULT_FONT_DIR = Path(__file__).parent.parent.parent / "assets" / "fonts"
 
     def __init__(self, input_pdf: str, output_pdf: str, font_path: Optional[str] = None):
         """
@@ -38,7 +38,14 @@ class PdfFormWriter:
             return user_path
 
         # 2. assets/fonts 内の代表的な日本語フォントを探す
-        candidates = ["msgothic.ttc", "msmincho.ttc", "meiryo.ttc", "YuGothR.ttc", "Harumart.ttf"]
+        candidates = [
+            "msgothic.ttc",
+            "msmincho.ttc",
+            "meiryo.ttc",
+            "YuGothR.ttc",
+            "Harumart.ttf",
+            "ipaexg.ttf",
+        ]
 
         if self.DEFAULT_FONT_DIR.exists():
             for filename in candidates:
@@ -71,15 +78,26 @@ class PdfFormWriter:
         x: int,
         y: int,
         text: str,
-        ref_width: int = 1654,
+        ref_width: int = 800,  # ツール側のDISPLAY_WIDTHに合わせる
         font_size: int = 11,
         color: tuple = (0, 0, 0),
     ):
         """テキスト書き込み"""
+        if not self.doc or self.doc.is_closed:
+            return
+
         if not (1 <= page <= len(self.doc)):
             return
+
         page_obj = self.doc[page - 1]
         scale = self._get_scale(page_obj, ref_width)
+
+        # フォント登録（初回のみ）
+        if self.font_path:
+            try:
+                page_obj.insert_font(fontname=self.font_name, fontfile=self.font_path)
+            except Exception:
+                pass  # 既に登録されている場合などは無視
 
         args = {
             "point": fitz.Point(x * scale, y * scale),
@@ -87,8 +105,8 @@ class PdfFormWriter:
             "fontsize": font_size,
             "color": color,
         }
+
         if self.font_path:
-            args["fontfile"] = self.font_path
             args["fontname"] = self.font_name
 
         try:
@@ -103,11 +121,14 @@ class PdfFormWriter:
         y: int,
         w: int,
         h: int,
-        ref_width: int = 1654,
+        ref_width: int = 800,
         border_color: tuple = (1, 0, 0),
         width: float = 2,
     ):
         """矩形描画"""
+        if not self.doc or self.doc.is_closed:
+            return
+
         if not (1 <= page <= len(self.doc)):
             return
         page_obj = self.doc[page - 1]
@@ -127,12 +148,15 @@ class PdfFormWriter:
         page: int,
         x: int,
         y: int,
-        ref_width: int = 1654,
+        ref_width: int = 800,
         radius: int = 15,
         border_color: tuple = (1, 0, 0),
         width: float = 2,
     ):
         """円描画"""
+        if not self.doc or self.doc.is_closed:
+            return
+
         if not (1 <= page <= len(self.doc)):
             return
         page_obj = self.doc[page - 1]
@@ -154,18 +178,33 @@ class PdfFormWriter:
         page: int,
         x: int,
         y: int,
-        ref_width: int = 1654,
+        ref_width: int = 800,
         size: int = 20,
         color: tuple = (0, 0, 0),
     ):
         """チェックマーク(✔︎)を描画"""
         self.draw_text(page, x, y, "✔", ref_width, font_size=size, color=color)
 
+    def close(self):
+        """ドキュメントを安全に閉じる（多重呼び出し対応）"""
+        # 修正箇所: if self.doc -> if self.doc is not None
+        if self.doc is not None and not self.doc.is_closed:
+            try:
+                self.doc.close()
+            except Exception as e:
+                print(f"Close Error: {e}")
+
     def save(self):
+        """保存処理"""
+        # 修正箇所: if not self.doc -> if self.doc is None
+        if self.doc is None or self.doc.is_closed:
+            print("Document is already closed.")
+            return
+
         try:
             self.doc.save(self.output_path)
-            self.doc.close()
             print(f"Saved: {self.output_path}")
+            self.close()
         except Exception as e:
             print(f"Save Error: {e}")
 
@@ -173,4 +212,4 @@ class PdfFormWriter:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.doc.close()
+        self.close()

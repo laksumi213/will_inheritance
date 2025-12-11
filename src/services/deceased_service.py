@@ -1,12 +1,10 @@
 # src/services/deceased_service.py
 import datetime
-import os
-import re
-from typing import Dict, List, Optional, Tuple, Any, Union
+from typing import Dict, List, Optional
 
 import requests
-from sqlalchemy import func, desc, or_
-from sqlalchemy.orm import joinedload, Session
+from sqlalchemy import func, or_
+from sqlalchemy.orm import aliased, joinedload
 
 # 既存のインポート構成を維持
 from src.models.database import SessionLocal
@@ -34,6 +32,7 @@ from src.utils.date_utils import (
 
 # --- パス正規化ロジック (Windows形式統一版) ---
 
+
 def normalize_folder_path(path_str: str) -> str:
     """
     フォルダパスを正規化する。
@@ -41,31 +40,26 @@ def normalize_folder_path(path_str: str) -> str:
     """
     if not path_str:
         return ""
-    
+
     # 1. 前後の空白と引用符を除去
     # "C:\My Documents" のように引用符がついていても除去する
     cleaned = path_str.strip().strip('"').strip("'")
-    
+
     # 2. スラッシュ(/)をバックスラッシュ(\)に変換して統一
-    # プログラム内で / が混じっても、Windows標準の \ に強制変換します
     cleaned = cleaned.replace("/", "\\")
-    
-    # 3. 連続するバックスラッシュの整理 (UNCパスの先頭以外)
-    # 例: C:\\Users -> C:\Users
-    # ただし、ネットワークパス (\\Server\Share) の先頭の \\ は消してはいけないため
-    # 単純な置換では難しいですが、Pythonのreplaceなら安全です。
-    # ここではシンプルに「見た目の統一」のみを行います。
-    
+
     return cleaned
 
 
 # --- ユーティリティ ---
+
 
 def get_db():
     return SessionLocal()
 
 
 # --- ユーザー・ステータス関連 ---
+
 
 def get_all_users() -> Dict[int, str]:
     db = SessionLocal()
@@ -85,6 +79,7 @@ def get_all_case_statuses():
 
 
 # --- 案件 (Case) 関連 ---
+
 
 def get_case_by_id(case_id: int) -> Optional[Case]:
     db = SessionLocal()
@@ -113,23 +108,22 @@ def get_case_folder_path(case_id: int) -> Optional[str]:
         case = db.query(Case).filter(Case.case_id == case_id).first()
         if not case or not case.folder_path:
             return None
-        
+
         current_path = case.folder_path
         normalized_path = normalize_folder_path(current_path)
 
         # 💡 自動修正保存ロジック
-        # DBの値が正規化後の値と異なる場合、即座に更新する
         if current_path != normalized_path:
             print(f"Auto-correcting path: {current_path} -> {normalized_path}")
             case.folder_path = normalized_path
             db.commit()
             return normalized_path
-        
+
         return current_path
     except Exception as e:
         db.rollback()
         print(f"Error getting/correcting folder path: {e}")
-        return None 
+        return None
     finally:
         db.close()
 
@@ -150,7 +144,7 @@ def update_case_folder_path(case_id: int, folder_path: str) -> bool:
             if folder_path:
                 clean_path = normalize_folder_path(folder_path)
             else:
-                clean_path = folder_path 
+                clean_path = folder_path
 
             case.folder_path = clean_path
             db.commit()
@@ -250,6 +244,7 @@ def get_case_progress_summary(case_id: int) -> dict:
 
 
 # --- 被相続人 (Deceased) 関連 ---
+
 
 def get_deceased_by_case_id(case_id: int) -> Optional[Deceased]:
     db = SessionLocal()
@@ -359,6 +354,7 @@ def update_deceased(
 
 
 # --- 相続人 (Heir) 関連 ---
+
 
 def get_heir_by_id(heir_id: int) -> Optional[Heir]:
     db = SessionLocal()
@@ -689,20 +685,23 @@ def get_deceased_address_history(deceased_id: int) -> List[dict]:
             if not link.is_last_address:
                 addr = db.query(Address).get(link.address_id)
                 if addr:
-                    history.append({
-                        "address_id": addr.id,
-                        "zip_code": addr.zip_code,
-                        "prefecture": addr.prefecture,
-                        "city_ward_town": addr.city_ward_town,
-                        "street_address": addr.street_address,
-                        "building_name": addr.building_name
-                    })
+                    history.append(
+                        {
+                            "address_id": addr.id,
+                            "zip_code": addr.zip_code,
+                            "prefecture": addr.prefecture,
+                            "city_ward_town": addr.city_ward_town,
+                            "street_address": addr.street_address,
+                            "building_name": addr.building_name,
+                        }
+                    )
         return history
     finally:
         db.close()
 
 
 # --- 内部ヘルパー ---
+
 
 def _add_contacts_to_heir(db, heir_id, contact_list, type_str):
     if not contact_list:
@@ -751,6 +750,7 @@ def _update_contacts(db, target_type, target_id, contact_list, type_str):
 
 
 # --- その他 ---
+
 
 def search_address_by_zip_api(zip_code: str) -> Optional[dict]:
     if not zip_code:
@@ -1317,6 +1317,12 @@ def get_incomplete_tasks(user_id=None):
 def get_case_list(search_term="", status_id=None, user_id=None):
     db = SessionLocal()
     try:
+        # 💡 連絡先検索のためのエイリアス定義
+        HeirContactLink = aliased(H_ContactLink)
+        DeceasedContactLink = aliased(D_ContactLink)
+        HeirContact = aliased(Contact)
+        DeceasedContact = aliased(Contact)
+
         query = (
             db.query(
                 Case,
@@ -1330,25 +1336,36 @@ def get_case_list(search_term="", status_id=None, user_id=None):
             .join(Deceased.heirs, isouter=True)  # 相続人テーブルを結合
             .join(Case.status_ref, isouter=True)
             .join(Task, Case.case_id == Task.case_id, isouter=True)
+            # 💡 連絡先情報の結合 (被相続人)
+            .outerjoin(DeceasedContactLink, Deceased.id == DeceasedContactLink.deceased_id)
+            .outerjoin(DeceasedContact, DeceasedContactLink.contact_id == DeceasedContact.id)
+            # 💡 連絡先情報の結合 (相続人)
+            .outerjoin(HeirContactLink, Heir.id == HeirContactLink.heir_id)
+            .outerjoin(HeirContact, HeirContactLink.contact_id == HeirContact.id)
             .order_by(Case.contract_date.desc())
         )
 
         if search_term:
             term = f"%{search_term}%"
             query = query.filter(
-                (Case.case_number.ilike(term))
-                | (Case.client_name.ilike(term))
-                | (Case.client_name_kana.ilike(term))
-                # 被相続人検索 (姓、名、姓名連結)
-                | (Deceased.name_last.ilike(term))
-                | (Deceased.name_first.ilike(term))
-                | (Deceased.name_last_kana.ilike(term))
-                | (Deceased.name_first_kana.ilike(term))
-                # 相続人検索 (姓、名、姓名連結)
-                | (Heir.name_last.ilike(term))
-                | (Heir.name_first.ilike(term))
-                | (Heir.name_last_kana.ilike(term))
-                | (Heir.name_first_kana.ilike(term))
+                or_(
+                    Case.case_number.ilike(term),
+                    Case.client_name.ilike(term),
+                    Case.client_name_kana.ilike(term),
+                    # 被相続人検索
+                    Deceased.name_last.ilike(term),
+                    Deceased.name_first.ilike(term),
+                    Deceased.name_last_kana.ilike(term),
+                    Deceased.name_first_kana.ilike(term),
+                    # 相続人検索
+                    Heir.name_last.ilike(term),
+                    Heir.name_first.ilike(term),
+                    Heir.name_last_kana.ilike(term),
+                    Heir.name_first_kana.ilike(term),
+                    # 💡 電話番号検索 (被相続人 & 相続人)
+                    DeceasedContact.value.ilike(term),
+                    HeirContact.value.ilike(term),
+                )
             )
 
         if status_id:

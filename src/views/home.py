@@ -1,17 +1,22 @@
 # src/views/home.py
-import threading
 import datetime
-from typing import List, Optional, Dict, Any
+import threading
+from typing import Any, Dict, List, Optional
 
 from flet import (
     AppBar,
+    ButtonStyle,
     Colors,
     Column,
     Container,
+    ControlEvent,
     CrossAxisAlignment,
     Divider,
     Dropdown,
     ElevatedButton,
+    FilePicker,
+    FilePickerResultEvent,
+    FontWeight,
     Icon,
     IconButton,
     Icons,
@@ -26,36 +31,32 @@ from flet import (
     View,
     border,
     dropdown,
-    FilePicker,
-    FilePickerResultEvent,
-    FontWeight,
-    ButtonStyle,
     padding,
-    ControlEvent,
 )
 
 from src.services.deceased_service import (
     get_all_case_statuses,
     get_all_users,
+    get_case_folder_path,
     get_case_list,
     get_incomplete_tasks,
     get_my_cases,
     get_user_capacity_data,
-    get_case_folder_path,
 )
-
-from src.utils.file_system import open_case_folder
 from src.services.json_backup_service import export_database_to_json, import_database_from_json
+from src.utils.file_system import open_case_folder
 from src.views.client_register import reset_all_global_fields
 
 # 💡 重要: DB自動修復のためのinit_dbをインポート
-# （もしsrc.utils.databaseが存在しない場合は、前回の回答を参考に作成してください）
 try:
     from src.utils.database import init_db
 except ImportError:
-    # 既存環境への配慮: ファイルがない場合はダミー関数にするが、エラー解消にはファイル作成が必須
+    # 既存環境への配慮: ファイルがない場合はダミー関数にする
     print("Warning: src.utils.database not found. Auto-migration disabled.")
-    def init_db(): pass
+
+    def init_db():
+        pass
+
 
 class CaseDashboardView(Column):
     """
@@ -74,8 +75,8 @@ class CaseDashboardView(Column):
         self.page: Page = page
         self.current_user_id: int = 1
         self.is_manager: bool = True
-        
-        # 💡 初期化時にDBスキーマチェックを実行 (OperationalErrorの防止)
+
+        # 💡 初期化時にDBスキーマチェックを実行
         try:
             init_db()
         except Exception as e:
@@ -88,12 +89,13 @@ class CaseDashboardView(Column):
 
         self.export_file_picker = FilePicker(on_result=self._on_export_result)
         self.import_file_picker = FilePicker(on_result=self._on_import_result)
-        
+
         if self.export_file_picker not in self.page.overlay:
             self.page.overlay.extend([self.export_file_picker, self.import_file_picker])
 
+        # 💡 ラベルを修正: 電話番号を追加
         self.search_field = TextField(
-            label="案件No/依頼者/被相続人/相続人で検索",
+            label="案件No/依頼者/被相続人/相続人/電話番号で検索",
             on_change=self._debounce_search,
             width=400,
             prefix_icon=Icons.SEARCH,
@@ -124,7 +126,7 @@ class CaseDashboardView(Column):
 
         if self.is_manager:
             self.capacity_view_container = self._create_manager_capacity_view()
-        
+
         self.todo_list_container = self._create_todo_list_view()
         self.my_case_list_container = self._create_my_case_list_view()
         self.main_list_view_column = self._create_main_list_view_column()
@@ -283,19 +285,28 @@ class CaseDashboardView(Column):
             self.capacity_view_container.content.controls = self._get_capacity_items()
         else:
             self.my_case_list_container.content.controls = self._get_my_case_items()
-        
+
         self._run_search_action()
 
-    def _get_case_items(self, search_term: str = "", status_filter_id: Optional[int] = None, user_filter_id: Optional[int] = None) -> List[Container]:
+    def _get_case_items(
+        self,
+        search_term: str = "",
+        status_filter_id: Optional[int] = None,
+        user_filter_id: Optional[int] = None,
+    ) -> List[Container]:
         cases = get_case_list(search_term, status_filter_id, user_filter_id)
         if not cases:
-            msg = "条件に一致する案件はありません。" if (user_filter_id or status_filter_id or search_term) else "案件がまだ登録されていません。"
+            msg = (
+                "条件に一致する案件はありません。"
+                if (user_filter_id or status_filter_id or search_term)
+                else "案件がまだ登録されていません。"
+            )
             return [Container(content=Text(msg, color=Colors.ON_SURFACE_VARIANT), padding=20)]
 
         items = []
         for case in cases:
             case_id = case["case_id"]
-            
+
             status_badge = Container(
                 content=Text(case["status"], color=Colors.ON_PRIMARY, size=12),
                 bgcolor=Colors.PRIMARY,
@@ -305,14 +316,16 @@ class CaseDashboardView(Column):
 
             folder_button = ElevatedButton(
                 "📂 案件フォルダを開く",
-                on_click=lambda e, cid=case_id: open_case_folder(self.page, cid, get_case_folder_path),
+                on_click=lambda e, cid=case_id: open_case_folder(
+                    self.page, cid, get_case_folder_path
+                ),
                 style=ButtonStyle(
                     bgcolor="tertiaryContainer",
                     color="onTertiaryContainer",
                 ),
             )
 
-            # 💡 SOL番号を取得して表示
+            # SOL番号を取得して表示
             sol_number = case.get("sol_case_number", "---")
 
             items.append(
@@ -329,9 +342,15 @@ class CaseDashboardView(Column):
                         ),
                         subtitle=Column(
                             [
-                                # 💡 SOL番号をサブタイトルに表示
-                                Text(f"SOL番号: {sol_number} | 被相続人: {case['deceased_name']}", color=Colors.ON_SURFACE_VARIANT),
-                                Text(f"更新: {case['last_updated_at']} | 次: {case['description'] or 'なし'}", size=12, color=Colors.OUTLINE),
+                                Text(
+                                    f"SOL番号: {sol_number} | 被相続人: {case['deceased_name']}",
+                                    color=Colors.ON_SURFACE_VARIANT,
+                                ),
+                                Text(
+                                    f"更新: {case['last_updated_at']} | 次: {case['description'] or 'なし'}",
+                                    size=12,
+                                    color=Colors.OUTLINE,
+                                ),
                             ],
                             spacing=2,
                         ),
@@ -352,8 +371,16 @@ class CaseDashboardView(Column):
             text_color = Colors.ERROR if d["total_incomplete_tasks"] > 5 else None
             items.append(
                 ListTile(
-                    title=Text(f"{d['name']} ({d['role']})", weight=FontWeight.BOLD, color=text_color, size=14),
-                    subtitle=Text(f"未完了: {d['total_incomplete_tasks']} | 案件: {d['total_cases_handled']}", size=12),
+                    title=Text(
+                        f"{d['name']} ({d['role']})",
+                        weight=FontWeight.BOLD,
+                        color=text_color,
+                        size=14,
+                    ),
+                    subtitle=Text(
+                        f"未完了: {d['total_incomplete_tasks']} | 案件: {d['total_cases_handled']}",
+                        size=12,
+                    ),
                     dense=True,
                 )
             )
@@ -374,12 +401,14 @@ class CaseDashboardView(Column):
             return [Text("現在、担当案件はありません。", color=Colors.ON_SURFACE_VARIANT)]
         items = []
         for case in cases:
-            # 💡 SOL番号を取得
             sol_number = case.get("sol_case_number", "---")
             items.append(
                 ListTile(
                     title=Text(f"案件: {case['case_number']}", size=14),
-                    subtitle=Text(f"SOL: {sol_number} | 依頼者: {case['client_name']} | 状態: {case['status']}", size=12),
+                    subtitle=Text(
+                        f"SOL: {sol_number} | 依頼者: {case['client_name']} | 状態: {case['status']}",
+                        size=12,
+                    ),
                     dense=True,
                     on_click=lambda e, cid=case["case_id"]: self.page.go(f"/detail/{cid}"),
                 )
@@ -462,7 +491,7 @@ class CaseDashboardView(Column):
             controls=[
                 Container(
                     content=Row([Text("案件一覧", size=20, weight=FontWeight.BOLD)]),
-                    padding=padding.only(left=10)
+                    padding=padding.only(left=10),
                 ),
                 ListView(expand=True, spacing=5, padding=10, auto_scroll=False),
             ],
@@ -475,25 +504,15 @@ def HomeView(page: Page) -> View:
     ホーム画面全体を構築して返す関数。
     AppBarとコンテンツエリア（CaseDashboardView）を結合する。
     """
-    
+
     app_bar = AppBar(
         title=Text("遺産整理・相続業務システム", weight=FontWeight.BOLD),
         bgcolor=Colors.SURFACE_VARIANT,
         actions=[
-            IconButton(
-                icon=Icons.REFRESH,
-                tooltip="画面を更新",
-                on_click=lambda e: page.go("/")
-            ),
-        ]
+            IconButton(icon=Icons.REFRESH, tooltip="画面を更新", on_click=lambda e: page.go("/")),
+        ],
     )
 
     dashboard = CaseDashboardView(page)
 
-    return View(
-        route="/",
-        controls=[dashboard],
-        appbar=app_bar,
-        padding=0,
-        spacing=0
-    )
+    return View(route="/", controls=[dashboard], appbar=app_bar, padding=0, spacing=0)

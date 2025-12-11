@@ -1,89 +1,99 @@
-# services/pdf_service.py
+# src/services/pdf_service.py
 import asyncio
+import base64
+import io
 import shutil
-import uuid
-from pathlib import Path
 from typing import List, NamedTuple, Optional
 
+# pdf2imageライブラリを使用 (pip install pdf2image)
 from pdf2image import convert_from_path
+from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError
 
 
 class PageImage(NamedTuple):
-    """生成された画像のパスとサイズ情報を格納"""
+    """
+    PDFの1ページを表す画像データとメタデータを保持する構造体。
+    FletのImageコントロールに渡すBase64文字列、ページ番号、寸法を含む。
+    """
 
-    path: str
+    page_number: int
+    base64_image: str
     width: int
     height: int
 
 
-class PdfService:
-    """
-    PDFの画像変換および一時ファイル管理を行うサービスクラス
-    プロジェクトルートの 'temp' ディレクトリを使用する
-    """
+class PDFService:
+    """PDF操作に関するビジネスロジックを扱うサービスクラス"""
 
-    # このファイルは services/ にあるため、parent.parent がプロジェクトルート
-    BASE_TEMP_DIR = Path(__file__).parent.parent / "temp"
+    def _get_poppler_path(self) -> Optional[str]:
+        """
+        システムのPopplerパスを探索して返す。
+        """
+        # 一般的なパスをチェック
+        possible_paths = [
+            r"C:\Program Files\poppler\bin",  # Windows (Typical)
+            r"C:\poppler\bin",  # Windows (Simple)
+            "/opt/homebrew/bin",  # Apple Silicon Mac
+            "/usr/local/bin",  # Intel Mac
+            "/usr/bin",
+        ]
 
-    def __init__(self) -> None:
-        self.session_dir: Optional[Path] = None
-        self.page_images: List[PageImage] = []
+        if shutil.which("pdfinfo"):
+            return None  # PATHが通っている
 
-        # 念のため初期化時にベースTEMPディレクトリを作成
-        self.BASE_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        for path in possible_paths:
+            if shutil.which("pdfinfo", path=path):
+                return path
+
+        return None
 
     async def convert_pdf_to_images(self, pdf_path: str) -> List[PageImage]:
         """
-        PDFを画像に変換し、パスとサイズ情報を返す (非同期ラッパー)
+        PDFを画像のリストに変換する (非同期ラッパー)
         """
         return await asyncio.to_thread(self._convert_sync, pdf_path)
 
     def _convert_sync(self, pdf_path: str) -> List[PageImage]:
-        # 以前のセッションがあればクリーンアップ
-        self.cleanup()
-
-        # 今回のセッション用の一意なフォルダを作成 (temp/session_uuid)
-        session_id = str(uuid.uuid4())
-        self.session_dir = self.BASE_TEMP_DIR / f"session_{session_id}"
-        self.session_dir.mkdir(exist_ok=True)
+        """
+        PDF変換の同期実行部
+        """
+        page_images_list: List[PageImage] = []
+        poppler_path = self._get_poppler_path()
 
         try:
-            # pdf2image実行
-            pil_images = convert_from_path(pdf_path)
+            # dpi=200 に固定して、座標計算の基準を安定させる
+            pil_images = convert_from_path(
+                pdf_path,
+                dpi=200,  # 解像度を固定
+                fmt="jpeg",
+                poppler_path=poppler_path,
+            )
 
-            results = []
-            for i, image in enumerate(pil_images):
-                image_filename = f"page_{i + 1}.png"
-                # pathlib.Path を str に変換して保存パスを作成
-                save_path = self.session_dir / image_filename
+            for idx, img in enumerate(pil_images):
+                buffered = io.BytesIO()
+                img.save(buffered, format="JPEG")
+                img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-                # 画像保存
-                image.save(str(save_path), "PNG")
-
-                # Fletで表示するために絶対パスの文字列として格納
-                results.append(
-                    PageImage(
-                        path=str(save_path.absolute()), width=image.width, height=image.height
-                    )
+                page_image = PageImage(
+                    page_number=idx + 1, base64_image=img_str, width=img.width, height=img.height
                 )
+                page_images_list.append(page_image)
 
-            self.page_images = results
-            return results
+            return page_images_list
 
+        except PDFInfoNotInstalledError:
+            raise RuntimeError(
+                "システムに 'poppler' が見つかりません。\n"
+                "Windowsの場合: PopplerをインストールしてPATHを通してください。\n"
+                "Macの場合: `brew install poppler` を実行してください。"
+            )
+        except PDFPageCountError:
+            raise ValueError(
+                "PDFファイルのページ数を取得できませんでした。破損の可能性があります。"
+            )
         except Exception as e:
-            # エラー時は即座にクリーンアップして再送出
-            self.cleanup()
-            raise e
+            raise RuntimeError(f"PDF変換エラー: {str(e)}")
 
-    def cleanup(self) -> None:
-        """
-        現在のセッションの一時ディレクトリと画像ファイルを削除する
-        """
-        if self.session_dir and self.session_dir.exists():
-            try:
-                shutil.rmtree(self.session_dir)
-            except OSError as e:
-                print(f"Error checking cleanup: {e}")
-            finally:
-                self.session_dir = None
-                self.page_images = []
+
+# シングルトン
+pdf_service = PDFService()
