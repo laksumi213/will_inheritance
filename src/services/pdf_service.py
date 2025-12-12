@@ -3,19 +3,20 @@ import asyncio
 import base64
 import io
 import shutil
+import os
+import sys
+from pathlib import Path
 from typing import List, NamedTuple, Optional
 
-# pdf2imageライブラリを使用 (pip install pdf2image)
+# pdf2imageライブラリを使用
 from pdf2image import convert_from_path
 from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError
-
 
 class PageImage(NamedTuple):
     """
     PDFの1ページを表す画像データとメタデータを保持する構造体。
     FletのImageコントロールに渡すBase64文字列、ページ番号、寸法を含む。
     """
-
     page_number: int
     base64_image: str
     width: int
@@ -23,33 +24,55 @@ class PageImage(NamedTuple):
 
 
 class PDFService:
-    """PDF操作に関するビジネスロジックを扱うサービスクラス"""
+    """
+    PDF操作に関するビジネスロジックを扱うサービスクラス。
+    Popplerのパス解決と画像変換を担当します。
+    """
 
     def _get_poppler_path(self) -> Optional[str]:
         """
-        システムのPopplerパスを探索して返す。
+        Popplerのbinディレクトリパスを解決して返します。
+        
+        優先順位:
+        1. プロジェクト内: project_root/libs/poppler/bin
+        2. プロジェクト内: project_root/libs/poppler/**/bin (Library/binなど)
+        3. システムPATH: 環境変数PATHに通っている場合
         """
-        # 一般的なパスをチェック
-        possible_paths = [
-            r"C:\Program Files\poppler\bin",  # Windows (Typical)
-            r"C:\poppler\bin",  # Windows (Simple)
-            "/opt/homebrew/bin",  # Apple Silicon Mac
-            "/usr/local/bin",  # Intel Mac
-            "/usr/bin",
-        ]
+        # 現在のファイル (src/services/pdf_service.py) から見たプロジェクトルート
+        base_dir = Path(__file__).resolve().parent.parent.parent
+        libs_dir = base_dir / "libs"
 
+        # 1. libs/poppler/bin を直接チェック
+        direct_path = libs_dir / "poppler" / "bin"
+        if direct_path.exists() and (direct_path / "pdfinfo.exe").exists():
+            print(f"DEBUG: Poppler found at {direct_path}")
+            return str(direct_path)
+
+        # 2. libs/poppler 配下を探索 (Library/bin などのパターン対応)
+        poppler_root = libs_dir / "poppler"
+        if poppler_root.exists():
+            for path in poppler_root.rglob("bin"):
+                if (path / "pdfinfo.exe").exists():
+                    print(f"DEBUG: Poppler found at {path}")
+                    return str(path)
+
+        # 3. システムPATHのチェック
         if shutil.which("pdfinfo"):
-            return None  # PATHが通っている
+            print("DEBUG: Poppler found in system PATH")
+            return None  # pdf2imageはNoneを渡すとPATHを使用します
 
-        for path in possible_paths:
-            if shutil.which("pdfinfo", path=path):
-                return path
-
+        # 見つからない場合
         return None
 
     async def convert_pdf_to_images(self, pdf_path: str) -> List[PageImage]:
         """
         PDFを画像のリストに変換する (非同期ラッパー)
+        
+        Args:
+            pdf_path (str): PDFファイルの絶対パス
+
+        Returns:
+            List[PageImage]: ページごとの画像データリスト
         """
         return await asyncio.to_thread(self._convert_sync, pdf_path)
 
@@ -58,42 +81,62 @@ class PDFService:
         PDF変換の同期実行部
         """
         page_images_list: List[PageImage] = []
+        
+        # パスの解決
         poppler_path = self._get_poppler_path()
+        
+        # 解決できなかった場合に例外を投げる準備（詳細なメッセージ付き）
+        if poppler_path is None and not shutil.which("pdfinfo"):
+             raise RuntimeError(
+                "システムに 'Poppler' が見つかりません。\n"
+                "以下の手順で配置してください：\n"
+                "1. プロジェクトルートに 'libs' フォルダを作成\n"
+                "2. ダウンロードしたPopplerを 'libs/poppler' に配置\n"
+                "3. 'libs/poppler/bin/pdfinfo.exe' が存在することを確認"
+            )
 
         try:
             # dpi=200 に固定して、座標計算の基準を安定させる
+            # poppler_path を明示的に渡すことでWindowsのPATH設定不要にする
             pil_images = convert_from_path(
                 pdf_path,
-                dpi=200,  # 解像度を固定
+                dpi=200,
                 fmt="jpeg",
                 poppler_path=poppler_path,
             )
 
             for idx, img in enumerate(pil_images):
                 buffered = io.BytesIO()
-                img.save(buffered, format="JPEG")
+                # JPEG形式で軽量化
+                img.save(buffered, format="JPEG", quality=85)
                 img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
                 page_image = PageImage(
-                    page_number=idx + 1, base64_image=img_str, width=img.width, height=img.height
+                    page_number=idx + 1, 
+                    base64_image=img_str, 
+                    width=img.width, 
+                    height=img.height
                 )
                 page_images_list.append(page_image)
 
             return page_images_list
 
         except PDFInfoNotInstalledError:
+            # pdf2imageが投げる特定エラーのキャッチ
             raise RuntimeError(
-                "システムに 'poppler' が見つかりません。\n"
-                "Windowsの場合: PopplerをインストールしてPATHを通してください。\n"
-                "Macの場合: `brew install poppler` を実行してください。"
+                "Popplerの実行ファイルが見つかりません。\n"
+                f"検索パス: {poppler_path if poppler_path else 'System PATH'}\n"
+                "libs/poppler/bin フォルダの中身を確認してください。"
             )
         except PDFPageCountError:
             raise ValueError(
-                "PDFファイルのページ数を取得できませんでした。破損の可能性があります。"
+                "PDFファイルのページ数を取得できませんでした。\n"
+                "ファイルが破損しているか、パスが間違っている可能性があります。"
             )
         except Exception as e:
-            raise RuntimeError(f"PDF変換エラー: {str(e)}")
+            # その他の予期せぬエラー
+            raise RuntimeError(f"PDF変換中にエラーが発生しました: {str(e)}")
 
 
-# シングルトン
+# シングルトンインスタンス
 pdf_service = PDFService()

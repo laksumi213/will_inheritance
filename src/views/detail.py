@@ -595,6 +595,17 @@ def DeceasedDetailView(page: Page, case_id: int) -> View:
             # 連絡先・住所取得ロジック
             contacts = get_contact_info("heir", heir.id)
             address_info = get_address_info("heir", heir.id)
+
+            # メールアドレス
+            email = "未登録"
+            for sub in ["Primary", "PC", "携帯"]:
+                found = next((c["value"] for c in contacts if c["type"] == "EMAIL" and c["sub_type"] == sub), None)
+                if found:
+                    email = found
+                    break
+            if email == "未登録":
+                found = next((c["value"] for c in contacts if c["type"] == "EMAIL"), None)
+                if found: email = found
             
             # 電話番号
             phone = "未登録"
@@ -629,6 +640,13 @@ def DeceasedDetailView(page: Page, case_id: int) -> View:
                     ),
                     # 続柄
                     Text(heir.relationship_type or "-", width=60),
+
+                    # メールアドレス (追加)
+                    Container(
+                        content=Text(f"📧 {email}", width=200, size=13, overflow="ellipsis"),
+                        on_click=lambda e, t=email: copy_to_clipboard_and_notify(e, page, t),
+                        tooltip="メールアドレスをコピー"
+                    ),
                     
                     # 電話番号
                     Container(
