@@ -376,10 +376,31 @@ class FinancialAsset(Base):
 
 class RealEstateAsset(Base):
     __tablename__ = "real_estate_assets"
-    real_estate_id = Column(Integer, primary_key=True)
-    case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
-    municipality_name = Column(String, nullable=False)
 
+    id = Column(Integer, primary_key=True)
+    case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
+
+    # 区分: Land(土地) / Building(建物) / Condo(区分所有)
+    property_type = Column(String, default="Land")
+
+    # 登記簿上の表示
+    location = Column(String, comment="所在")
+    lot_number = Column(String, comment="地番")  # 土地用
+    land_category = Column(String, comment="地目")  # 土地用
+    land_area = Column(Float, comment="地積")  # 土地用
+
+    house_number = Column(String, comment="家屋番号")  # 建物用
+    structure = Column(String, comment="構造")  # 建物用
+    floor_area = Column(String, comment="床面積")  # 建物用
+
+    # 💡 追加: 持分カラム
+    ownership_share = Column(String, nullable=True, comment="被相続人の持分")
+
+    # ファイルパス管理 (新規追加)
+    registry_pdf_path = Column(String, nullable=True, comment="登記情報PDFパス")
+    registry_image_path = Column(String, nullable=True, comment="Word貼付用画像パス")
+
+    # リレーション
     case_ref = relationship("Case", back_populates="real_estates")
 
 
@@ -445,7 +466,7 @@ class CaseSubmissionDoc(Base):
     case_ref = relationship("Case", back_populates="submitted_docs")
 
 
-# --- 8. PDF座標管理用テーブル (新規追加) ---
+# --- 8. PDF座標管理用テーブル ---
 
 
 class Coordinate(Base):

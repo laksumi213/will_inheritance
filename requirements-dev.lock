@@ -60,11 +60,9 @@ distro==1.9.0
     # via google-genai
 docstring-parser==0.17.0
     # via google-cloud-aiplatform
-docx==0.2.4
-    # via will-inheritance
 et-xmlfile==2.0.0
     # via openpyxl
-fastapi==0.124.2
+fastapi==0.124.4
     # via flet-web
 flet==0.28.3
     # via flet-cli
@@ -172,8 +170,8 @@ kiwisolver==1.4.9
     # via matplotlib
 lxml==6.0.2
     # via appscript
-    # via docx
     # via pandas-datareader
+    # via python-docx
 macholib==1.16.4
     # via pyinstaller
 markdown-it-py==4.0.0
@@ -219,7 +217,6 @@ pdf2image==1.17.0
 pdfminer==20191125
     # via will-inheritance
 pillow==10.4.0
-    # via docx
     # via matplotlib
     # via pdf2image
     # via reportlab
@@ -950,6 +947,8 @@ python-dateutil==2.9.0.post0
     # via google-cloud-bigquery
     # via matplotlib
     # via pandas
+python-docx==1.2.0
+    # via will-inheritance
 python-dotenv==1.2.1
     # via uvicorn
     # via webdriver-manager
@@ -1032,6 +1031,7 @@ typing-extensions==4.15.0
     # via grpcio
     # via pydantic
     # via pydantic-core
+    # via python-docx
     # via qrcode
     # via selenium
     # via sqlalchemy

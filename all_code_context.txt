@@ -302,6 +302,53 @@ if __name__ == "__main__":
     run_flet_app()
 
 ==================================================
+FILE_PATH: ./tools/add_ownership_column.py
+==================================================
+
+# tools/add_ownership_column.py
+import os
+import sqlite3
+
+# DBファイルのパス (環境に合わせて調整してください)
+DB_PATH = "database.sqlite"
+
+
+def add_column():
+    if not os.path.exists(DB_PATH):
+        print(f"Error: Database file '{DB_PATH}' not found.")
+        return
+
+    print(f"Connecting to {DB_PATH}...")
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    try:
+        # 現在のカラムを確認
+        cursor.execute("PRAGMA table_info(real_estate_assets)")
+        columns = [info[1] for info in cursor.fetchall()]
+        print(f"Current columns: {columns}")
+
+        # ownership_share がなければ追加
+        if "ownership_share" not in columns:
+            print("Adding column 'ownership_share'...")
+            cursor.execute("ALTER TABLE real_estate_assets ADD COLUMN ownership_share TEXT")
+            conn.commit()
+            print("✅ Column added successfully.")
+        else:
+            print("ℹ️ Column already exists.")
+
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Error: {e}")
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    add_column()
+
+
+==================================================
 FILE_PATH: ./tools/fix_db_schema.py
 ==================================================
 
@@ -2385,10 +2432,31 @@ class FinancialAsset(Base):
 
 class RealEstateAsset(Base):
     __tablename__ = "real_estate_assets"
-    real_estate_id = Column(Integer, primary_key=True)
-    case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
-    municipality_name = Column(String, nullable=False)
 
+    id = Column(Integer, primary_key=True)
+    case_id = Column(Integer, ForeignKey("cases.case_id"), nullable=False)
+
+    # 区分: Land(土地) / Building(建物) / Condo(区分所有)
+    property_type = Column(String, default="Land")
+
+    # 登記簿上の表示
+    location = Column(String, comment="所在")
+    lot_number = Column(String, comment="地番")  # 土地用
+    land_category = Column(String, comment="地目")  # 土地用
+    land_area = Column(Float, comment="地積")  # 土地用
+
+    house_number = Column(String, comment="家屋番号")  # 建物用
+    structure = Column(String, comment="構造")  # 建物用
+    floor_area = Column(String, comment="床面積")  # 建物用
+
+    # 💡 追加: 持分カラム
+    ownership_share = Column(String, nullable=True, comment="被相続人の持分")
+
+    # ファイルパス管理 (新規追加)
+    registry_pdf_path = Column(String, nullable=True, comment="登記情報PDFパス")
+    registry_image_path = Column(String, nullable=True, comment="Word貼付用画像パス")
+
+    # リレーション
     case_ref = relationship("Case", back_populates="real_estates")
 
 
@@ -2454,7 +2522,7 @@ class CaseSubmissionDoc(Base):
     case_ref = relationship("Case", back_populates="submitted_docs")
 
 
-# --- 8. PDF座標管理用テーブル (新規追加) ---
+# --- 8. PDF座標管理用テーブル ---
 
 
 class Coordinate(Base):
@@ -2468,6 +2536,7 @@ class Coordinate(Base):
     y_point = Column(Float, nullable=False, comment="Y座標")
     value = Column(String, nullable=True, comment="テスト値")
     description = Column(String, nullable=True, comment="備考")
+
 
 ==================================================
 FILE_PATH: ./src/models/base.py
@@ -2509,6 +2578,85 @@ def init_db() -> None:
         print("Database initialized successfully.")
     except Exception as e:
         print(f"Database initialization failed: {e}")
+
+
+==================================================
+FILE_PATH: ./src/components/registry_uploader.py
+==================================================
+
+# src/views/components/registry_uploader.py (コンポーネント化の例)
+from flet import (
+    Colors,
+    Column,
+    ElevatedButton,
+    FilePicker,
+    FilePickerResultEvent,
+    Icons,
+    Image,
+    Row,
+    SnackBar,
+    Text,
+)
+
+from src.services.real_estate_service import get_real_estate_image, save_registry_document
+
+
+class RegistryUploader(Column):
+    def __init__(self, page, case_id, real_estate_id):
+        super().__init__()
+        self.page = page
+        self.case_id = case_id
+        self.real_estate_id = real_estate_id
+
+        self.file_picker = FilePicker(on_result=self.on_file_picked)
+        self.page.overlay.append(self.file_picker)
+
+        self.img_preview = Image(src="", width=300, height=200, fit="contain", visible=False)
+
+        # 初期表示
+        self._load_current_image()
+
+        self.controls = [
+            Text("登記情報 (表題部)"),
+            Row(
+                [
+                    ElevatedButton(
+                        "PDFを選択して登録",
+                        icon=Icons.UPLOAD_FILE,
+                        on_click=lambda _: self.file_picker.pick_files(
+                            allow_multiple=False, allowed_extensions=["pdf"]
+                        ),
+                    ),
+                ]
+            ),
+            self.img_preview,
+        ]
+
+    def _load_current_image(self):
+        path = get_real_estate_image(self.real_estate_id)
+        if path:
+            self.img_preview.src = path
+            self.img_preview.visible = True
+        else:
+            self.img_preview.visible = False
+
+    def on_file_picked(self, e: FilePickerResultEvent):
+        if e.files:
+            pdf_path = e.files[0].path
+            # 処理中表示
+            self.page.open(SnackBar(Text("処理中..."), bgcolor=Colors.BLUE))
+            self.page.update()
+
+            success = save_registry_document(self.case_id, self.real_estate_id, pdf_path)
+
+            if success:
+                self._load_current_image()
+                self.update()
+                self.page.open(SnackBar(Text("登録完了"), bgcolor=Colors.GREEN))
+            else:
+                self.page.open(SnackBar(Text("エラーが発生しました"), bgcolor=Colors.RED))
+
+            self.page.update()
 
 
 ==================================================
@@ -2599,6 +2747,364 @@ def collect_contacts(column: Column) -> list[dict]:
             if value:
                 contacts.append({"value": value, "sub_type": sub_type})
     return contacts
+
+==================================================
+FILE_PATH: ./src/views/inheritance_doc_view.py
+==================================================
+
+# src/views/inheritance_doc_view.py
+from flet import (
+    Colors,
+    Column,
+    Container,
+    ControlEvent,
+    Divider,
+    ElevatedButton,
+    FontWeight,
+    Icon,
+    Icons,
+    ListTile,
+    Page,
+    RoundedRectangleBorder,
+    SnackBar,
+    Text,
+)
+
+from src.services.deceased_service import get_financial_asset_by_case
+from src.services.pdf.pdf_factory import generate_pdf_for_bank
+from src.utils.file_system import open_path
+
+
+class InheritanceDocView(Column):
+    """
+    相続届・遺産分割協議書作成画面（各銀行の書類作成メニュー）
+    """
+
+    def __init__(self, page: Page, case_id: int):
+        super().__init__(expand=True, scroll="auto", spacing=20)
+        self.page = page
+        self.case_id = case_id
+
+        # 銀行リストコンテナ
+        self.bank_list_container = Column(spacing=10)
+
+        self.controls = [
+            Text(
+                "📑 相続届・解約書類作成",
+                size=24,
+                weight=FontWeight.BOLD,
+                color="onSurface",
+            ),
+            Divider(),
+            Text("書類を作成する金融機関を選択してください。", size=16),
+            self.bank_list_container,
+        ]
+
+    def did_mount(self):
+        self._load_bank_list()
+
+    def _load_bank_list(self):
+        # 案件の資産から銀行リストを取得
+        assets = get_financial_asset_by_case(self.case_id)
+
+        # 重複排除
+        unique_banks = {}
+        for a in assets:
+            if a.get("bank_code"):
+                unique_banks[a["bank_code"]] = a.get("bank_name")
+
+        self.bank_list_container.controls.clear()
+
+        if unique_banks:
+            for code, name in unique_banks.items():
+                # 共通のデータ（クリックイベント用）
+                bank_data = {"code": code, "name": name}
+
+                self.bank_list_container.controls.append(
+                    ListTile(
+                        leading=Icon(Icons.DESCRIPTION, color="primary"),
+                        title=Text(f"{name} (Code: {code})", weight=FontWeight.W_500),
+                        subtitle=Text("相続届 / 解約依頼書"),
+                        # 右側のボタン
+                        trailing=ElevatedButton(
+                            "作成",
+                            icon=Icons.PICTURE_AS_PDF,
+                            bgcolor="primaryContainer",
+                            color="onPrimaryContainer",
+                            data=bank_data,
+                            on_click=self._on_create_pdf,
+                        ),
+                        bgcolor="surfaceVariant",
+                        shape=RoundedRectangleBorder(radius=5),
+                        data=bank_data,
+                        on_click=self._on_create_pdf,
+                    )
+                )
+        else:
+            self.bank_list_container.controls.append(
+                Container(Text("登録された金融機関がありません。", color=Colors.ERROR), padding=10)
+            )
+        self.page.update()
+
+    def _on_create_pdf(self, e: ControlEvent):
+        # ボタンクリック時は e.control は ElevatedButton
+        # リストクリック時は e.control は ListTile
+        bank_info = e.control.data
+        if not bank_info:
+            return
+
+        try:
+            # Factory経由でPDF作成を実行
+            output_path = generate_pdf_for_bank(
+                self.case_id, bank_code=bank_info["code"], bank_name=bank_info["name"]
+            )
+
+            self.page.open(SnackBar(Text(f"作成完了: {output_path}"), bgcolor=Colors.GREEN))
+            open_path(self.page, output_path)
+
+        except ValueError as ve:
+            self.page.open(
+                SnackBar(
+                    Text(f"この銀行の書類フォーマットは未対応です: {ve}"), bgcolor=Colors.ORANGE
+                )
+            )
+        except Exception as ex:
+            self.page.open(SnackBar(Text(f"エラー: {ex}"), bgcolor=Colors.RED))
+
+        self.page.update()
+
+
+==================================================
+FILE_PATH: ./src/views/real_estate_edit.py
+==================================================
+
+# src/views/real_estate_edit.py
+import os
+
+from flet import (
+    Card,
+    Colors,
+    Column,
+    Container,
+    Divider,
+    Dropdown,
+    ElevatedButton,
+    FilePicker,
+    FilePickerResultEvent,
+    FontWeight,
+    IconButton,
+    Icons,
+    Image,
+    Page,
+    Row,
+    SnackBar,
+    Text,
+    TextField,
+    alignment,
+    border,
+    dropdown,
+)
+
+from src.services.real_estate_service import (
+    add_real_estate,
+    delete_real_estate,
+    get_real_estates_by_case,
+    save_registry_document,
+)
+
+
+class RealEstateEditView(Column):
+    """不動産情報・登記情報管理画面"""
+
+    def __init__(self, page: Page, case_id: int):
+        super().__init__(expand=True, scroll="auto")
+        self.page = page
+        self.case_id = case_id
+
+        # --- UI Components ---
+        self.type_dropdown = Dropdown(
+            label="種類",
+            width=150,
+            options=[
+                dropdown.Option("Land", "土地"),
+                dropdown.Option("Building", "建物"),
+                dropdown.Option("Condo", "区分所有"),
+            ],
+            value="Land",
+        )
+        self.location_field = TextField(label="所在 (例: 東京都千代田区...)", expand=True)
+
+        self.asset_list = Column(spacing=10)
+
+        self.file_picker = FilePicker(on_result=self._on_file_picked)
+        # Note: did_mountでoverlayに追加することを推奨
+
+        # --- Layout ---
+        self.controls = [
+            Text("🏠 不動産・登記情報管理", size=24, weight=FontWeight.BOLD),
+            Divider(),
+            # 新規登録エリア
+            Card(
+                content=Container(
+                    content=Column(
+                        [
+                            Text("新規不動産追加", weight=FontWeight.BOLD),
+                            Row(
+                                [
+                                    self.type_dropdown,
+                                    self.location_field,
+                                    ElevatedButton(
+                                        "追加", icon=Icons.ADD, on_click=self._add_asset
+                                    ),
+                                ]
+                            ),
+                        ]
+                    ),
+                    padding=15,
+                )
+            ),
+            Divider(),
+            Text("登録済み不動産一覧", size=16, weight=FontWeight.BOLD),
+            self.asset_list,
+        ]
+
+        # アップロード対象の一時保存用ID
+        self._target_asset_id = None
+
+    def did_mount(self):
+        if self.file_picker not in self.page.overlay:
+            self.page.overlay.append(self.file_picker)
+        self._load_assets()
+
+    def _load_assets(self):
+        self.asset_list.controls.clear()
+        assets = get_real_estates_by_case(self.case_id)
+
+        if not assets:
+            self.asset_list.controls.append(Text("登録された不動産はありません"))
+
+        for asset in assets:
+            self.asset_list.controls.append(self._create_asset_card(asset))
+
+        self.update()
+
+    def _create_asset_card(self, asset):
+        # 画像パスの確認
+        img_src = ""
+        img_visible = False
+        if asset.registry_image_path and os.path.exists(asset.registry_image_path):
+            img_src = asset.registry_image_path
+            img_visible = True
+
+        type_map = {"Land": "土地", "Building": "建物", "Condo": "区分所有"}
+
+        return Card(
+            content=Container(
+                padding=10,
+                content=Column(
+                    [
+                        Row(
+                            [
+                                Container(
+                                    content=Text(
+                                        type_map.get(asset.property_type, "その他"),
+                                        color=Colors.WHITE,
+                                        size=12,
+                                    ),
+                                    bgcolor=Colors.BLUE_GREY,
+                                    padding=5,
+                                    border_radius=4,
+                                ),
+                                Text(asset.location, weight=FontWeight.BOLD, size=16, expand=True),
+                                IconButton(
+                                    Icons.DELETE,
+                                    icon_color=Colors.RED,
+                                    on_click=lambda e: self._delete_asset(asset.id),
+                                ),
+                            ]
+                        ),
+                        Divider(),
+                        Row(
+                            [
+                                # 左側：詳細情報（将来的にフィールド追加）
+                                Column(
+                                    [
+                                        Text(f"ID: {asset.id}"),
+                                        ElevatedButton(
+                                            "登記PDF登録/更新",
+                                            icon=Icons.UPLOAD_FILE,
+                                            on_click=lambda e: self._open_picker(asset.id),
+                                        ),
+                                        Text(
+                                            f"PDF: {'あり' if asset.registry_pdf_path else 'なし'}",
+                                            size=12,
+                                            color=Colors.GREY,
+                                        ),
+                                    ],
+                                    expand=True,
+                                ),
+                                # 右側：プレビュー画像
+                                Container(
+                                    content=Image(
+                                        src=img_src,
+                                        width=200,
+                                        height=140,
+                                        fit="contain",
+                                        border_radius=5,
+                                    )
+                                    if img_visible
+                                    else Container(
+                                        content=Text("No Image", color=Colors.GREY),
+                                        width=200,
+                                        height=140,
+                                        bgcolor=Colors.GREY_100,
+                                        alignment=alignment.center,
+                                    ),
+                                    border=border.all(1, Colors.GREY_300),
+                                ),
+                            ],
+                            alignment="start",
+                            vertical_alignment="start",
+                        ),
+                    ]
+                ),
+            )
+        )
+
+    def _add_asset(self, e):
+        if not self.location_field.value:
+            self.page.open(SnackBar(Text("所在を入力してください"), bgcolor=Colors.RED))
+            return
+
+        add_real_estate(self.case_id, self.type_dropdown.value, self.location_field.value)
+        self.location_field.value = ""
+        self._load_assets()
+        self.page.open(SnackBar(Text("追加しました"), bgcolor=Colors.GREEN))
+
+    def _delete_asset(self, asset_id):
+        delete_real_estate(asset_id)
+        self._load_assets()
+
+    def _open_picker(self, asset_id):
+        self._target_asset_id = asset_id
+        self.file_picker.pick_files(allow_multiple=False, allowed_extensions=["pdf"])
+
+    def _on_file_picked(self, e: FilePickerResultEvent):
+        if not e.files or not self._target_asset_id:
+            return
+
+        file_path = e.files[0].path
+        self.page.open(SnackBar(Text("PDFを処理中..."), bgcolor=Colors.BLUE))
+        self.page.update()
+
+        success = save_registry_document(self.case_id, self._target_asset_id, file_path)
+
+        if success:
+            self._load_assets()
+            self.page.open(SnackBar(Text("登記情報を登録しました"), bgcolor=Colors.GREEN))
+        else:
+            self.page.open(SnackBar(Text("登録に失敗しました"), bgcolor=Colors.RED))
+
 
 ==================================================
 FILE_PATH: ./src/views/coordinate_tool.py
@@ -3561,12 +4067,280 @@ class BankEditView(Column):
         self.page.update()
 
 ==================================================
+FILE_PATH: ./src/views/inheritance_division_view.py
+==================================================
+
+# src/views/inheritance_division_view.py
+import datetime
+import os
+import platform
+
+from flet import (
+    Card,
+    Colors,
+    Column,
+    Container,
+    Divider,
+    Dropdown,
+    ElevatedButton,
+    FontWeight,
+    Icon,
+    Icons,
+    ListTile,
+    Page,
+    Row,
+    SnackBar,
+    Text,
+    dropdown,
+)
+
+from src.config import settings
+from src.services.deceased_service import (
+    get_case_by_id,  # 💡 追加: 案件番号取得用
+    get_case_folder_path,
+    get_deceased_by_case_id,
+    get_financial_asset_by_case,
+)
+from src.services.doc_generator import generate_division_agreement_doc
+from src.utils.file_system import open_path
+
+
+class InheritanceDivisionView(Column):
+    """
+    遺産分割協議書 作成・指定画面
+    """
+
+    def __init__(self, page: Page, case_id: int):
+        super().__init__(expand=True, scroll="auto", spacing=20)
+        self.page = page
+        self.case_id = case_id
+
+        # 1. データのロード
+        self.deceased = get_deceased_by_case_id(case_id)
+        self.financial_assets = get_financial_asset_by_case(case_id)
+
+        try:
+            from src.services.real_estate_service import get_real_estates_by_case
+
+            self.real_estates = get_real_estates_by_case(case_id)
+        except ImportError:
+            self.real_estates = []
+
+        # 2. 状態管理用辞書 (AssetKey -> HeirID)
+        self.allocations = {}
+
+        # 3. 相続人選択肢の作成
+        self.heir_options = []
+        if self.deceased and self.deceased.heirs:
+            for h in self.deceased.heirs:
+                self.heir_options.append(
+                    dropdown.Option(key=str(h.id), text=f"{h.name_last} {h.name_first}")
+                )
+
+        # 4. UI構築
+        self.controls = [
+            Text(
+                "🤝 遺産分割協議書の作成",
+                size=24,
+                weight=FontWeight.BOLD,
+                color="onSurface",
+            ),
+            Divider(),
+            # 相続人確認
+            Card(
+                content=Container(
+                    content=Column(
+                        [
+                            Row(
+                                [
+                                    Icon(Icons.PEOPLE),
+                                    Text("対象となる相続人", weight=FontWeight.BOLD),
+                                ]
+                            ),
+                            self._create_heir_list_text(),
+                        ],
+                        spacing=10,
+                    ),
+                    padding=15,
+                )
+            ),
+            Text("財産の分割指定", size=18, weight=FontWeight.BOLD),
+            Text("各財産を取得する相続人を選択してください。", size=14, color=Colors.GREY),
+            self._create_asset_allocation_list(),
+            Divider(),
+            # アクションボタン
+            Row(
+                [
+                    ElevatedButton(
+                        "遺産分割協議書を出力 (Word)",
+                        icon=Icons.DESCRIPTION,
+                        bgcolor=Colors.INDIGO_600,
+                        color=Colors.WHITE,
+                        on_click=self._on_generate_click,
+                    ),
+                ],
+                spacing=20,
+            ),
+        ]
+
+    def _create_heir_list_text(self):
+        if not self.deceased or not self.deceased.heirs:
+            return Text("相続人が登録されていません", color=Colors.RED)
+        names = [f"{h.name_last} {h.name_first}" for h in self.deceased.heirs]
+        return Text("、".join(names), size=16)
+
+    def _on_allocation_change(self, e, asset_key):
+        """ドロップダウン変更時のハンドラ"""
+        selected_heir_id = int(e.control.value)
+        self.allocations[asset_key] = selected_heir_id
+
+    def _create_asset_allocation_list(self):
+        items = Column(spacing=10)
+
+        # -- 金融資産 --
+        if self.financial_assets:
+            items.controls.append(
+                Text("【金融資産】", weight=FontWeight.BOLD, color=Colors.BLUE_GREY)
+            )
+            for asset in self.financial_assets:
+                asset_key = f"BANK_{asset['id']}"
+
+                dd = Dropdown(
+                    width=200,
+                    label="取得者を選択",
+                    options=self.heir_options,
+                    on_change=lambda e, k=asset_key: self._on_allocation_change(e, k),
+                    dense=True,
+                )
+
+                items.controls.append(
+                    Card(
+                        content=ListTile(
+                            leading=Icon(Icons.ACCOUNT_BALANCE_WALLET, color=Colors.BLUE),
+                            title=Text(f"{asset['bank_name']} {asset['branch_name']}"),
+                            subtitle=Text(f"{asset['account_type']} : {asset['account_number']}"),
+                            trailing=dd,
+                        )
+                    )
+                )
+
+        # -- 不動産 --
+        if self.real_estates:
+            items.controls.append(
+                Text("【不動産】", weight=FontWeight.BOLD, color=Colors.BLUE_GREY)
+            )
+            for re in self.real_estates:
+                asset_key = f"RE_{re.id}"
+
+                dd = Dropdown(
+                    width=200,
+                    label="取得者を選択",
+                    options=self.heir_options,
+                    on_change=lambda e, k=asset_key: self._on_allocation_change(e, k),
+                    dense=True,
+                )
+
+                # 画像有無アイコン
+                has_pdf = re.registry_image_path and os.path.exists(re.registry_image_path)
+                icon = Icons.IMAGE if has_pdf else Icons.IMAGE_NOT_SUPPORTED
+                icon_col = Colors.GREEN if has_pdf else Colors.GREY
+
+                items.controls.append(
+                    Card(
+                        content=ListTile(
+                            leading=Icon(Icons.HOME, color=Colors.ORANGE),
+                            title=Text(f"{re.location}"),
+                            subtitle=Row(
+                                [
+                                    Icon(icon, size=16, color=icon_col),
+                                    Text(
+                                        f"{re.property_type} (画像: {'あり' if has_pdf else 'なし'})"
+                                    ),
+                                ]
+                            ),
+                            trailing=dd,
+                        )
+                    )
+                )
+
+        if not items.controls:
+            return Container(
+                content=Text("分割対象となる財産が登録されていません。", color=Colors.RED),
+                padding=20,
+            )
+
+        return items
+
+    def _on_generate_click(self, e):
+        """作成ボタンクリック時"""
+        self.page.open(SnackBar(Text("Wordファイルを生成しています..."), bgcolor=Colors.BLUE))
+        self.page.update()
+
+        try:
+            # 1. 保存先フォルダの決定 (OS分岐)
+            if platform.system() == "Darwin":  # macOSの場合
+                folder_path = os.path.join(settings.BASE_DIR, "output")
+                os.makedirs(folder_path, exist_ok=True)
+                print(f"macOS detected: Saving to {folder_path}")
+            else:
+                # Windows (その他) の場合: DBの案件パスを使用
+                folder_path = get_case_folder_path(self.case_id)
+                if not folder_path:
+                    folder_path = os.getcwd()  # フォールバック
+
+            # 2. ファイル名生成ロジック変更
+            # {案件番号}{被相続人氏名}様_遺産分割協議書_{今日の日付}
+            case = get_case_by_id(self.case_id)
+            case_num = case.case_number if case else str(self.case_id)
+            d_name = (
+                f"{self.deceased.name_last}{self.deceased.name_first}"
+                if self.deceased
+                else "未登録"
+            )
+            today_str = datetime.datetime.now().strftime("%Y%m%d")
+
+            filename = f"{case_num}{d_name}様_遺産分割協議書_{today_str}.docx"
+            output_path = os.path.join(folder_path, filename)
+
+            # 3. 生成実行
+            saved_path = generate_division_agreement_doc(
+                self.case_id, self.allocations, output_path
+            )
+
+            self.page.open(
+                SnackBar(
+                    content=Text(f"作成完了: {os.path.basename(saved_path)}"),
+                    action="フォルダを開く",
+                    on_action=lambda _: self._open_folder(folder_path),
+                    bgcolor=Colors.GREEN,
+                )
+            )
+
+            # 自動的に開く
+            open_path(self.page, saved_path)
+
+        except Exception as ex:
+            import traceback
+
+            traceback.print_exc()
+            self.page.open(SnackBar(Text(f"エラーが発生しました: {ex}"), bgcolor=Colors.RED))
+
+        self.page.update()
+
+    def _open_folder(self, path):
+        from src.utils.file_system import open_path
+
+        open_path(self.page, path)
+
+
+==================================================
 FILE_PATH: ./src/views/home.py
 ==================================================
 
 # src/views/home.py
 import datetime
 import threading
+import traceback
 from typing import Any, Dict, List, Optional
 
 from flet import (
@@ -3613,11 +4387,9 @@ from src.services.json_backup_service import export_database_to_json, import_dat
 from src.utils.file_system import open_case_folder
 from src.views.client_register import reset_all_global_fields
 
-# 💡 重要: DB自動修復のためのinit_dbをインポート
 try:
     from src.utils.database import init_db
 except ImportError:
-    # 既存環境への配慮: ファイルがない場合はダミー関数にする
     print("Warning: src.utils.database not found. Auto-migration disabled.")
 
     def init_db():
@@ -3626,7 +4398,7 @@ except ImportError:
 
 class CaseDashboardView(Column):
     """
-    メインダッシュボード画面 (Todoリスト、コントロール、案件一覧を統合)
+    メインダッシュボード画面
     """
 
     search_timer: Optional[threading.Timer] = None
@@ -3642,7 +4414,6 @@ class CaseDashboardView(Column):
         self.current_user_id: int = 1
         self.is_manager: bool = True
 
-        # 💡 初期化時にDBスキーマチェックを実行
         try:
             init_db()
         except Exception as e:
@@ -3653,13 +4424,10 @@ class CaseDashboardView(Column):
         self.USER_MAP: Dict[int, str] = get_all_users()
         self.STATUS_LIST = get_all_case_statuses()
 
+        # --- FilePicker の初期化 ---
         self.export_file_picker = FilePicker(on_result=self._on_export_result)
         self.import_file_picker = FilePicker(on_result=self._on_import_result)
 
-        if self.export_file_picker not in self.page.overlay:
-            self.page.overlay.extend([self.export_file_picker, self.import_file_picker])
-
-        # 💡 ラベルを修正: 電話番号を追加
         self.search_field = TextField(
             label="案件No/依頼者/被相続人/相続人/電話番号で検索",
             on_change=self._debounce_search,
@@ -3694,6 +4462,7 @@ class CaseDashboardView(Column):
             self.capacity_view_container = self._create_manager_capacity_view()
 
         self.todo_list_container = self._create_todo_list_view()
+        # ここでエラーになっていました。メソッドを追加したので解消します。
         self.my_case_list_container = self._create_my_case_list_view()
         self.main_list_view_column = self._create_main_list_view_column()
 
@@ -3728,7 +4497,19 @@ class CaseDashboardView(Column):
         ]
 
     def did_mount(self):
+        """画面が表示されたタイミングで実行される"""
+        print("✅ CaseDashboardView mounted")
+        self._ensure_file_pickers()
         self._update_all_views()
+
+    def _ensure_file_pickers(self):
+        """FilePickerがoverlayに存在することを確認・追加する"""
+        if self.page:
+            if self.export_file_picker not in self.page.overlay:
+                self.page.overlay.append(self.export_file_picker)
+            if self.import_file_picker not in self.page.overlay:
+                self.page.overlay.append(self.import_file_picker)
+            self.page.update()
 
     def _show_snack(self, msg: str, color: str):
         self.page.open(
@@ -3746,11 +4527,7 @@ class CaseDashboardView(Column):
                     icon=Icons.SAVE,
                     bgcolor=Colors.INDIGO_600,
                     color=Colors.WHITE,
-                    on_click=lambda _: self.export_file_picker.save_file(
-                        allowed_extensions=["json"],
-                        file_name=f"backup_{datetime.date.today()}.json",
-                        dialog_title="バックアップファイルの保存先を選択",
-                    ),
+                    on_click=self._open_export_dialog,
                 ),
                 Container(width=10),
                 ElevatedButton(
@@ -3758,16 +4535,46 @@ class CaseDashboardView(Column):
                     icon=Icons.RESTORE,
                     bgcolor=Colors.TEAL_700,
                     color=Colors.WHITE,
-                    on_click=lambda _: self.import_file_picker.pick_files(
-                        allow_multiple=False,
-                        allowed_extensions=["json"],
-                        dialog_title="復元するJSONファイルを選択",
-                    ),
+                    on_click=self._open_import_dialog,
                 ),
             ],
         )
 
+    def _open_export_dialog(self, e):
+        """保存ダイアログを開く"""
+        print("🔘 Export button clicked")
+        self._ensure_file_pickers()
+
+        try:
+            self.export_file_picker.save_file(
+                allowed_extensions=["json"],
+                file_name=f"backup_{datetime.date.today()}.json",
+                dialog_title="バックアップファイルの保存先を選択",
+            )
+            print("🚀 FilePicker.save_file called")
+        except Exception as ex:
+            print(f"❌ Failed to open export dialog: {ex}")
+            traceback.print_exc()
+
+    def _open_import_dialog(self, e):
+        """読込ダイアログを開く"""
+        print("🔘 Import button clicked")
+        self._ensure_file_pickers()
+
+        try:
+            self.import_file_picker.pick_files(
+                allow_multiple=False,
+                allowed_extensions=["json"],
+                dialog_title="復元するJSONファイルを選択",
+            )
+            print("🚀 FilePicker.pick_files called")
+        except Exception as ex:
+            print(f"❌ Failed to open import dialog: {ex}")
+            traceback.print_exc()
+
     def _on_export_result(self, e: FilePickerResultEvent):
+        """保存先が選択された後の処理"""
+        print(f"📂 Export Result: {e.path}")
         if e.path:
             try:
                 success = export_database_to_json(e.path)
@@ -3775,9 +4582,17 @@ class CaseDashboardView(Column):
                 color = Colors.GREEN if success else Colors.ERROR
                 self._show_snack(msg, color)
             except Exception as ex:
+                print("--------------------------------------------------")
+                print("❌ JSON Export Error Detail:")
+                traceback.print_exc()
+                print("--------------------------------------------------")
                 self._show_snack(f"保存エラー: {str(ex)}", Colors.ERROR)
+        else:
+            print("⚠️ Export cancelled")
 
     def _on_import_result(self, e: FilePickerResultEvent):
+        """ファイルが選択された後の処理"""
+        print(f"📂 Import Result: {e.files}")
         if e.files:
             try:
                 success, msg = import_database_from_json(e.files[0].path)
@@ -3785,7 +4600,13 @@ class CaseDashboardView(Column):
                 if success:
                     self._update_all_views()
             except Exception as ex:
+                print("--------------------------------------------------")
+                print("❌ JSON Import Error Detail:")
+                traceback.print_exc()
+                print("--------------------------------------------------")
                 self._show_snack(f"復元エラー: {str(ex)}", Colors.ERROR)
+        else:
+            print("⚠️ Import cancelled")
 
     def _get_left_sidebar_controls(self) -> List[Any]:
         base_controls = []
@@ -3891,7 +4712,6 @@ class CaseDashboardView(Column):
                 ),
             )
 
-            # SOL番号を取得して表示
             sol_number = case.get("sol_case_number", "---")
 
             items.append(
@@ -4080,6 +4900,10 @@ def HomeView(page: Page) -> View:
     )
 
     dashboard = CaseDashboardView(page)
+
+    # View作成時にもFilePickerを登録しておく（念のため）
+    page.overlay.append(dashboard.export_file_picker)
+    page.overlay.append(dashboard.import_file_picker)
 
     return View(route="/", controls=[dashboard], appbar=app_bar, padding=0, spacing=0)
 
@@ -5902,12 +6726,15 @@ class CoordinateSelectorView(Column):
             controls=[
                 Text("定型文:", size=12, weight="bold"),
                 ElevatedButton(
-                    "会社名", on_click=lambda _: self._set_preset_text("株式会社サンプル")
+                    "会社名",
+                    on_click=lambda _: self._set_preset_text(
+                        "行政書士法人チェスター 代表社員 清水 茜作"
+                    ),
                 ),
                 ElevatedButton(
-                    "住所", on_click=lambda _: self._set_preset_text("東京都千代田区1-1")
+                    "住所", on_click=lambda _: self._set_preset_text("東京都中央区八重洲1-7-20")
                 ),
-                ElevatedButton("電話", on_click=lambda _: self._set_preset_text("03-1234-5678")),
+                ElevatedButton("電話", on_click=lambda _: self._set_preset_text("03-6868-8328")),
                 ElevatedButton(
                     "クリア",
                     on_click=lambda _: self._set_preset_text(""),
@@ -7049,44 +7876,53 @@ FILE_PATH: ./src/views/case_hub.py
 
 # src/views/case_hub.py
 import time
-from typing import Dict, Any, Optional
+import traceback
+from typing import Dict
 
 from flet import (
     ButtonStyle,
     Colors,
     Column,
     Container,
+    Control,
     CrossAxisAlignment,
     Divider,
     ElevatedButton,
+    FontWeight,
+    Icon,  # 💡 ここに追加しました
     Icons,
     NavigationRail,
     NavigationRailDestination,
     Page,
     Row,
+    SnackBar,
     Text,
     VerticalDivider,
     View,
-    Control,
     alignment,
     padding,
 )
 
-# 各種ビューのインポート
-from src.views.detail import DeceasedDetailView
-from src.views.freeze_proc_view import FreezeProcView
-from src.views.mizuho_balance_doc_view import MizuhoBalanceDocView
-from src.views.securities_edit import SecuritiesEditView
-from src.views.smbc_balance_doc_view import SmbcBalanceDocView
-from src.views.task_management_view import TaskManagementView
-from src.views.visit_reserve_mizuho_view import VisitReserveMizuhoView
-from src.views.visit_reserve_select_bank_view import VisitReserveSelectBankView
-from src.views.bank_edit import BankEditView 
-from src.views.balance_cert_doc import BalanceCertDocView # 銀行選択画面
-
 # サービス・ユーティリティ
 from src.services.deceased_service import get_case_folder_path, get_contracting_party_name
 from src.utils.file_system import open_case_folder
+from src.views.any_view import AnyView
+from src.views.balance_cert_doc import BalanceCertDocView
+from src.views.bank_edit import BankEditView
+
+# 各種ビューのインポート
+from src.views.detail import DeceasedDetailView
+from src.views.freeze_proc_view import FreezeProcView
+
+# 遺産分割協議書画面のインポート
+from src.views.inheritance_division_view import InheritanceDivisionView
+from src.views.inheritance_doc_view import InheritanceDocView
+from src.views.mizuho_balance_doc_view import MizuhoBalanceDocView
+from src.views.real_estate_edit import RealEstateEditView
+from src.views.securities_edit import SecuritiesEditView
+from src.views.smbc_balance_doc_view import SmbcBalanceDocView
+from src.views.task_management_view import TaskManagementView
+from src.views.visit_reserve_select_bank_view import VisitReserveSelectBankView
 
 
 # 未実装機能用のプレースホルダー
@@ -7129,77 +7965,88 @@ class CaseHubView(Row):
             "overview": {
                 "icon": Icons.INFO_OUTLINE,
                 "label": "案件概要/相続人",
-                "route_suffix": "overview", 
-                "view_func": lambda: DeceasedDetailView(self.page, self.case_id)
+                "route_suffix": "overview",
+                "view_func": lambda: DeceasedDetailView(self.page, self.case_id),
             },
             "tasks": {
                 "icon": Icons.TASK_ALT,
                 "label": "タスク管理",
                 "route_suffix": "tasks",
-                "view_func": lambda: TaskManagementView(self.page, self.case_id)
+                "view_func": lambda: TaskManagementView(self.page, self.case_id),
             },
             "bank_reg": {
                 "icon": Icons.ACCOUNT_BALANCE,
                 "label": "銀行登録",
                 "route_suffix": "bank/add",
-                "view_func": lambda: BankEditView(self.page, self.case_id)
+                "view_func": lambda: BankEditView(self.page, self.case_id),
             },
             "securities_reg": {
                 "icon": Icons.ACCOUNT_BALANCE_WALLET,
                 "label": "証券登録",
                 "route_suffix": "securities/add",
-                "view_func": lambda: SecuritiesEditView(self.page, self.case_id)
+                "view_func": lambda: SecuritiesEditView(self.page, self.case_id),
+            },
+            "asset_reg": {
+                "icon": Icons.HOME_WORK_OUTLINED,
+                "label": "不動産登録",
+                "route_suffix": "asset/register",
+                "view_func": lambda: RealEstateEditView(self.page, self.case_id),
             },
             "freeze_proc": {
                 "icon": Icons.LOCK_OUTLINED,
                 "label": "凍結手続き",
                 "route_suffix": "proc/freeze",
-                "view_func": lambda: FreezeProcView(self.page, self.case_id)
+                "view_func": lambda: FreezeProcView(self.page, self.case_id),
             },
             "balance_cert_doc": {
                 "icon": Icons.DESCRIPTION_OUTLINED,
                 "label": "残証申請書類",
                 "route_suffix": "doc/balance_cert",
-                # デフォルトは銀行選択一覧
-                "view_func": lambda: BalanceCertDocView(self.page, self.case_id)
+                "view_func": lambda: BalanceCertDocView(self.page, self.case_id),
             },
             "visit_reserve": {
                 "icon": Icons.CALENDAR_MONTH_OUTLINED,
                 "label": "来店予約",
                 "route_suffix": "reserve/visit",
-                "view_func": lambda: VisitReserveSelectBankView(self.page, self.case_id)
+                "view_func": lambda: VisitReserveSelectBankView(self.page, self.case_id),
             },
-            "asset_reg": {
-                "icon": Icons.HOME_WORK_OUTLINED,
-                "label": "財産登録",
-                "route_suffix": "asset/register",
-                "view_func": lambda: PlaceholderView(self.page, "財産登録", "不動産などの登録画面")
+            "division_agreement": {
+                "icon": Icons.HANDSHAKE,
+                "label": "遺産分割協議書",
+                "route_suffix": "inheritance/division",
+                "view_func": lambda: InheritanceDivisionView(self.page, self.case_id),
             },
             "inheritance_doc": {
                 "icon": Icons.GAVEL_OUTLINED,
-                "label": "遺産分割協議書",
+                "label": "相続届作成",
                 "route_suffix": "inheritance/doc",
-                "view_func": lambda: PlaceholderView(self.page, "遺産分割協議書", "ドキュメント作成画面")
+                "view_func": lambda: InheritanceDocView(self.page, self.case_id),
+            },
+            "debug_pdf": {
+                "icon": Icons.BUG_REPORT,
+                "label": "PDF作成テスト",
+                "route_suffix": "debug/pdf",
+                "view_func": lambda: AnyView(self.page, self.case_id),
             },
         }
 
         # 初期表示の決定
         current_route = page.route
         initial_key = "overview"
-        
+
         # URLから初期キーを判定
         for key, dest in self.destinations.items():
             if f"/case/{case_id}/{dest['route_suffix']}" in current_route:
                 initial_key = key
                 break
-        
+
         self.selected_key = initial_key
         self.destination_keys = list(self.destinations.keys())
         self.selected_index = self.destination_keys.index(initial_key)
 
         # --- コンテンツエリアの初期化 ---
         self.main_content_container = Container(
-            content=Text("Loading...", color="onSurface"), 
+            content=Text("Loading...", color="onSurface"),
             padding=padding.all(20),
             expand=True,
             alignment=alignment.top_left,
@@ -7215,7 +8062,7 @@ class CaseHubView(Row):
             destinations=[
                 NavigationRailDestination(
                     icon=dest["icon"],
-                    label=dest["label"], 
+                    label=dest["label"],
                 )
                 for dest in self.destinations.values()
             ],
@@ -7240,56 +8087,83 @@ class CaseHubView(Row):
 
         selected_index = e.control.selected_index
         self.selected_index = selected_index
-        
+
         key = self.destination_keys[selected_index]
         self.selected_key = key
 
         # メニュークリック時はサブルートなしでベース画面を表示
         self._update_main_content(key)
-        
+
         self.page.update()
 
     def _update_main_content(self, key: str, specific_route: str = None):
         """
         指定されたキーに対応するコンテンツを表示する。
-        specific_routeがある場合は、銀行固有の画面などを生成する。
         """
         content_control = None
-        
+
         # 1. 書類作成画面かつ、特定の銀行ルートが指定されている場合
         if key == "balance_cert_doc" and specific_route:
             smbc_route_suffix = "/smbc"
             mizuho_route_suffix = "/mizuho"
-            
+
             if specific_route.endswith(smbc_route_suffix):
                 content_control = SmbcBalanceDocView(self.page, self.case_id, "0009")
             elif specific_route.endswith(mizuho_route_suffix):
                 content_control = MizuhoBalanceDocView(self.page, self.case_id, "0001")
-            
+
             if content_control is not None:
                 self._replace_main_content(content_control)
                 return
 
         # 2. コンテンツの生成またはキャッシュからの取得
-        # 💡 修正: "overview" (案件概要) はデータ更新頻度が高いためキャッシュを使わない
         if key != "overview" and key in self.views_cache:
             content_control = self.views_cache[key]
         else:
-            view_func = self.destinations[key]["view_func"]
-            raw_content = view_func()
-            
-            # Columnなどにラップしてキャッシュ
-            if isinstance(raw_content, View):
-                content_control = Column(controls=raw_content.controls, expand=True, scroll="auto")
-            elif isinstance(raw_content, list):
-                content_control = Column(controls=raw_content.controls, expand=True, scroll="auto")
-            else:
-                # UserControl/Controlを継承している場合
-                content_control = raw_content
-            
-            # キャッシュに保存 (overview以外)
-            if key != "overview":
-                self.views_cache[key] = content_control
+            try:
+                # 💡 エラーハンドリング追加: 画面生成時のエラーをキャッチする
+                view_func = self.destinations[key]["view_func"]
+                raw_content = view_func()
+
+                if isinstance(raw_content, View):
+                    content_control = Column(
+                        controls=raw_content.controls, expand=True, scroll="auto"
+                    )
+                elif isinstance(raw_content, list):
+                    content_control = Column(
+                        controls=raw_content.controls, expand=True, scroll="auto"
+                    )
+                else:
+                    content_control = raw_content
+
+                if key != "overview":
+                    self.views_cache[key] = content_control
+
+            except Exception as e:
+                # エラー内容をコンソールとUIに出力
+                print(f"❌ Error loading view '{key}': {e}")
+                traceback.print_exc()
+
+                content_control = Container(
+                    content=Column(
+                        [
+                            Icon(Icons.ERROR_OUTLINE, size=40, color=Colors.RED),
+                            Text(
+                                f"画面の読み込み中にエラーが発生しました。\n{str(e)}",
+                                color=Colors.RED,
+                                size=16,
+                            ),
+                            Text("コンソールのログを確認してください。", color=Colors.GREY),
+                        ],
+                        horizontal_alignment="center",
+                        alignment="center",
+                    ),
+                    padding=20,
+                    alignment=alignment.center,
+                )
+                self.page.open(
+                    SnackBar(Text(f"エラー: {e}", color=Colors.WHITE), bgcolor=Colors.RED)
+                )
 
         # コンテンツの差し替え
         self._replace_main_content(content_control)
@@ -7300,12 +8174,11 @@ class CaseHubView(Row):
             controls=[
                 self._create_common_header(),
                 Divider(height=10, color=Colors.TRANSPARENT),
-                content_control 
+                content_control,
             ],
             expand=True,
         )
         self.page.update()
-
 
     def _create_common_header(self):
         """共通ヘッダー"""
@@ -7316,10 +8189,7 @@ class CaseHubView(Row):
                     on_click=lambda e: open_case_folder(
                         self.page, self.case_id, get_case_folder_path
                     ),
-                    style=ButtonStyle(
-                        bgcolor="tertiaryContainer", 
-                        color="onTertiaryContainer"
-                    ),
+                    style=ButtonStyle(bgcolor="tertiaryContainer", color="onTertiaryContainer"),
                 )
             ]
         )
@@ -7329,26 +8199,23 @@ class CaseHubView(Row):
         外部からのルート変更指示を受け取り、適切なタブとコンテンツを表示する
         """
         target_key = "overview"
-        
-        # 1. ルートから対象のメニューキーを探す
+
         for key, dest in self.destinations.items():
-            # URLがメニューのプレフィックスで始まるかを確認
             route_prefix = f"/case/{self.case_id}/{dest['route_suffix']}"
             if route.startswith(route_prefix):
                 target_key = key
                 break
-        
-        # 2. ナビゲーションレールの選択状態を更新
+
         self.selected_key = target_key
         if target_key in self.destination_keys:
             self.selected_index = self.destination_keys.index(target_key)
             self.nav_rail.selected_index = self.selected_index
-        
-        # 3. コンテンツの更新
+
         self._update_main_content(target_key, specific_route=route)
 
         if update_ui:
             self.page.update()
+
 
 ==================================================
 FILE_PATH: ./src/views/mizuho_balance_doc_view.py
@@ -9453,6 +10320,117 @@ def _button_style(color: str):
     )
 
 ==================================================
+FILE_PATH: ./src/views/any_view.py
+==================================================
+
+# src/views/any_view.py
+from flet import (
+    Colors,
+    Column,
+    Container,
+    ControlEvent,
+    ElevatedButton,
+    FontWeight,
+    Page,
+    SnackBar,
+    Text,
+    padding,
+)
+
+from src.services.pdf.pdf_factory import generate_pdf_for_bank
+from src.utils.file_system import open_path
+
+
+class AnyView(Column):
+    """
+    任意の銀行の書類作成機能を確認するための汎用ビュー（デバッグ・テスト用）。
+    実際の資産登録状況に関わらず、ボタンを表示してPDF生成をテストできます。
+    """
+
+    def __init__(self, page: Page, case_id: int):
+        super().__init__(expand=True, scroll="auto", spacing=20)
+        self.page = page
+        self.case_id = case_id
+
+        # ボタンのリストを作成
+        buttons_column = Column(controls=self.create_bank_buttons(), spacing=10)
+
+        self.controls = [
+            Container(
+                content=Text("銀行書類作成テスト (AnyView)", size=24, weight=FontWeight.BOLD),
+                padding=padding.all(10),
+            ),
+            Container(
+                content=Text(
+                    "※ ここでは案件の資産登録状況に関わらず、強制的にボタンを表示します。",
+                    size=14,
+                    color=Colors.GREY,
+                ),
+                padding=padding.only(left=10, bottom=10),
+            ),
+            # ボタンリストを配置
+            Container(content=buttons_column, padding=padding.all(10)),
+        ]
+
+    def _on_click_create_pdf(self, e: ControlEvent):
+        """
+        PDF作成ボタンが押されたときの汎用処理
+        ボタンの data 属性にセットされた銀行コードを使用する
+        """
+        # ボタンの data 属性から銀行情報を取得
+        bank_info = e.control.data  # 例: {"code": "0039", "name": "auじぶん銀行"}
+
+        if not bank_info:
+            return
+
+        try:
+            self.page.open(
+                SnackBar(Text(f"{bank_info['name']} の書類を作成中..."), bgcolor=Colors.BLUE)
+            )
+            self.page.update()
+
+            # ファクトリーを呼び出し（銀行コードや名称を動的に渡す）
+            output_path = generate_pdf_for_bank(
+                self.case_id, bank_code=bank_info.get("code"), bank_name=bank_info.get("name")
+            )
+
+            self.page.open(SnackBar(Text(f"作成完了: {output_path}"), bgcolor=Colors.GREEN))
+            open_path(self.page, output_path)
+
+        except ValueError as ve:
+            # 対応していない銀行の場合など
+            self.page.open(SnackBar(Text(f"未対応の銀行です: {ve}"), bgcolor=Colors.ORANGE))
+        except Exception as ex:
+            import traceback
+
+            traceback.print_exc()
+            self.page.open(SnackBar(Text(f"エラーが発生しました: {ex}"), bgcolor=Colors.RED))
+
+        self.page.update()
+
+    def create_bank_buttons(self):
+        """銀行ごとのボタンを生成する"""
+        # テストしたい銀行をここに定義します
+        assets = [
+            {"code": "0039", "name": "auじぶん銀行"},
+            {"code": "0001", "name": "みずほ銀行"},
+            {"code": "0009", "name": "三井住友銀行"},
+        ]
+
+        button_controls = []
+        for asset in assets:
+            btn = ElevatedButton(
+                text=f"{asset['name']} 書類作成",
+                # data属性に銀行情報を埋め込む
+                data=asset,
+                on_click=self._on_click_create_pdf,
+            )
+            button_controls.append(btn)
+
+        return button_controls
+
+
+==================================================
 FILE_PATH: ./src/views/mizuho_visit_reserve_process.py
 ==================================================
 
@@ -9684,215 +10662,129 @@ pdf_service = PDFService()
 
 
 ==================================================
-FILE_PATH: ./src/services/automation_service.py
+FILE_PATH: ./src/services/real_estate_service.py
 ==================================================
 
-# src/services/automation_service.py
-import time
-from typing import Optional
+# src/services/real_estate_service.py
+import shutil
+import uuid
+from pathlib import Path
+from typing import List, Optional
 
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service as ChromeService
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
-
-from src.config import settings
-
-
-class AutomationService:
-    """
-    Seleniumを使用したWebオートメーションの基盤クラス
-    """
-
-    def __init__(self, headless: bool = False):
-        self.driver: Optional[webdriver.Chrome] = None
-        self.headless = headless
-
-    def start_driver(self):
-        """Chromeドライバーを起動する"""
-        if self.driver is not None:
-            return
-
-        chrome_options = Options()
-        if self.headless:
-            chrome_options.add_argument("--headless")
-
-        # 一般的な安定化オプション
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--window-size=1920,1080")
-
-        # ユーザーエージェントの設定（必要に応じて）
-        chrome_options.add_argument(
-            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-
-        try:
-            service = ChromeService(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            print("Chrome Driver started successfully.")
-        except Exception as e:
-            print(f"Failed to start Chrome Driver: {e}")
-            raise e
-
-    def stop_driver(self):
-        """ドライバーを終了する"""
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
-            print("Chrome Driver stopped.")
-
-    def navigate_to(self, url: str):
-        """指定したURLに遷移する"""
-        if not self.driver:
-            self.start_driver()
-        self.driver.get(url)
-        time.sleep(1)  # 簡易的なウェイト
-
-    def find_element(self, by: By, value: str, timeout: int = 10):
-        """要素を検索する（待機機能付き）"""
-        if not self.driver:
-            raise RuntimeError("Driver is not started.")
-
-        try:
-            element = WebDriverWait(self.driver, timeout).until(
-                EC.presence_of_element_located((by, value))
-            )
-            return element
-        except Exception as e:
-            print(f"Element not found: {value} - {e}")
-            return None
-
-    def capture_screenshot(self, filepath: str):
-        """スクリーンショットを保存する"""
-        if self.driver:
-            self.driver.save_screenshot(filepath)
-
-    # --- 業務固有の自動化メソッド例 ---
-
-    def auto_login_bank(self, bank_code: str, account_id: str, password: str) -> bool:
-        """
-        銀行サイトへの自動ログイン（サンプル実装）
-        :param bank_code: 銀行コード（例: 0001）
-        :return: 成功可否
-        """
-        # 実装例: みずほ銀行の場合
-        if bank_code == "0001":
-            target_url = (
-                "https://www.mizuhobank.co.jp/retail/products/direct/index.html"  # ※ダミーURL
-            )
-            try:
-                self.navigate_to(target_url)
-                # ここに実際のログインロジックを記述
-                # user_input = self.find_element(By.ID, "txbCustNo")
-                # pass_input = self.find_element(By.ID, "txbPassword")
-                # ...
-                print(f"Login logic for bank {bank_code} executed.")
-                return True
-            except Exception as e:
-                print(f"Bank login failed: {e}")
-                return False
-
-        print(f"Automation for bank code {bank_code} is not implemented.")
-        return False
-
-
-# シングルトンとして利用する場合
-automation_service = AutomationService(headless=settings.SELENIUM_HEADLESS)
-
-
-==================================================
-FILE_PATH: ./src/services/user_management_service.py
-==================================================
-
-# src/services/user_management_service.py
-from typing import Dict, List, Optional
+# pdf2imageライブラリを使用 (要: pip install pdf2image)
+from pdf2image import convert_from_path
 
 from src.models.database import SessionLocal
-from src.models.tables import User
+from src.models.tables import Case, RealEstateAsset
 
 
-class UserManagementService:
+def get_real_estates_by_case(case_id: int) -> List[RealEstateAsset]:
+    """案件に紐づく不動産リストを取得"""
+    db = SessionLocal()
+    try:
+        return db.query(RealEstateAsset).filter(RealEstateAsset.case_id == case_id).all()
+    finally:
+        db.close()
+
+
+def add_real_estate(
+    case_id: int, property_type: str, location: str, ownership_share: str = None
+) -> Optional[RealEstateAsset]:
+    """不動産情報の新規追加"""
+    db = SessionLocal()
+    try:
+        asset = RealEstateAsset(
+            case_id=case_id,
+            property_type=property_type,
+            location=location,
+            ownership_share=ownership_share,  # 💡 追加
+        )
+        db.add(asset)
+        db.commit()
+        db.refresh(asset)
+        return asset
+    except Exception as e:
+        db.rollback()
+        print(f"Add RealEstate Error: {e}")
+        return None
+    finally:
+        db.close()
+
+
+def save_registry_document(case_id: int, real_estate_id: int, src_pdf_path: str) -> bool:
     """
-    ユーザー認証・管理に関するサービスロジック
+    1. PDFを案件フォルダにコピー
+    2. 先頭ページを画像変換して保存
+    3. DBにパスを記録
     """
+    db = SessionLocal()
+    try:
+        case = db.query(Case).get(case_id)
+        asset = db.query(RealEstateAsset).get(real_estate_id)
 
-    def authenticate(self, windows_id: str) -> Optional[User]:
-        """
-        簡易認証: Windows IDに基づいてユーザーを取得する
-        実際にはActive Directory連携やパスワード照合を行う
-        """
-        db = SessionLocal()
+        if not case or not asset:
+            raise ValueError("データが見つかりません")
+
+        # 案件フォルダパス (なければ output/ を代用)
+        base_folder = case.folder_path if case.folder_path else "output"
+
+        # 保存先: {CaseFolder}/properties/{asset_id}/
+        save_dir = Path(base_folder) / "properties" / str(real_estate_id)
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. PDFコピー
+        file_name = f"registry_{uuid.uuid4().hex[:8]}.pdf"
+        dest_pdf_path = save_dir / file_name
+        shutil.copy2(src_pdf_path, dest_pdf_path)
+
+        # 2. 画像変換 (同期処理)
+        # Popplerのパス設定が必要な場合はここで指定 (ここではシステムPATH利用を想定)
+        img_name = dest_pdf_path.stem + ".jpg"
+        dest_img_path = save_dir / img_name
+
         try:
-            user = db.query(User).filter(User.windows_id == windows_id).first()
-            if user:
-                print(f"User authenticated: {user.name} ({user.role})")
-                return user
+            # dpi=200で変換
+            images = convert_from_path(str(dest_pdf_path), dpi=200, first_page=1, last_page=1)
+            if images:
+                images[0].save(str(dest_img_path), "JPEG")
             else:
-                print(f"Authentication failed for: {windows_id}")
-                return None
-        finally:
-            db.close()
+                print("Warning: PDF conversion returned no images.")
+        except Exception as e:
+            print(f"PDF Conversion Error: {e}")
+            # 画像変換失敗してもPDF保存は成功しているので続行
 
-    def get_all_managers(self) -> List[Dict[str, str]]:
-        """Managerロールを持つユーザーのリストを取得"""
-        db = SessionLocal()
-        try:
-            managers = db.query(User).filter(User.role == "Manager").all()
-            return [{"id": u.id, "name": u.name} for u in managers]
-        finally:
-            db.close()
+        # 3. DB更新
+        asset.registry_pdf_path = str(dest_pdf_path)
+        if dest_img_path.exists():
+            asset.registry_image_path = str(dest_img_path)
 
-    def get_all_operators(self) -> List[Dict[str, str]]:
-        """Operatorロールを持つユーザーのリストを取得"""
-        db = SessionLocal()
-        try:
-            operators = db.query(User).filter(User.role == "Operator").all()
-            return [{"id": u.id, "name": u.name} for u in operators]
-        finally:
-            db.close()
+        db.commit()
+        return True
 
-    def create_user(self, windows_id: str, name: str, role: str = "Operator") -> bool:
-        """新規ユーザーを作成する"""
-        db = SessionLocal()
-        try:
-            if db.query(User).filter(User.windows_id == windows_id).first():
-                print("User already exists.")
-                return False
+    except Exception as e:
+        db.rollback()
+        print(f"Error saving registry doc: {e}")
+        return False
+    finally:
+        db.close()
 
-            new_user = User(windows_id=windows_id, name=name, role=role)
-            db.add(new_user)
+
+def delete_real_estate(asset_id: int) -> bool:
+    """不動産情報の削除"""
+    db = SessionLocal()
+    try:
+        asset = db.query(RealEstateAsset).get(asset_id)
+        if asset:
+            db.delete(asset)
             db.commit()
             return True
-        except Exception as e:
-            db.rollback()
-            print(f"Failed to create user: {e}")
-            return False
-        finally:
-            db.close()
-
-    def get_user_by_id(self, user_id: int) -> Optional[User]:
-        """IDからユーザー情報を取得（セッションはデタッチされるため注意）"""
-        db = SessionLocal()
-        try:
-            user = db.query(User).filter(User.id == user_id).first()
-            if user:
-                # 必要な属性をアクセスしてロードしておくか、辞書で返すのが安全
-                return user
-            return None
-        finally:
-            db.close()
-
-
-# シングルトンインスタンス
-user_service = UserManagementService()
+        return False
+    finally:
+        db.close()
 
 
 ==================================================
-FILE_PATH: ./src/services/json_backup_service.py
+FILE_PATH: ./src/services/json_backup_service copy.py
 ==================================================
 
 # src/services/json_backup_service.py
@@ -10426,6 +11318,1313 @@ def import_database_from_json(file_path: str) -> Tuple[bool, str]:
         session.close()
 
 ==================================================
+FILE_PATH: ./src/services/automation_service.py
+==================================================
+
+# src/services/automation_service.py
+import time
+from typing import Optional
+
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
+
+from src.config import settings
+
+
+class AutomationService:
+    """
+    Seleniumを使用したWebオートメーションの基盤クラス
+    """
+
+    def __init__(self, headless: bool = False):
+        self.driver: Optional[webdriver.Chrome] = None
+        self.headless = headless
+
+    def start_driver(self):
+        """Chromeドライバーを起動する"""
+        if self.driver is not None:
+            return
+
+        chrome_options = Options()
+        if self.headless:
+            chrome_options.add_argument("--headless")
+
+        # 一般的な安定化オプション
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--window-size=1920,1080")
+
+        # ユーザーエージェントの設定（必要に応じて）
+        chrome_options.add_argument(
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+
+        try:
+            service = ChromeService(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            print("Chrome Driver started successfully.")
+        except Exception as e:
+            print(f"Failed to start Chrome Driver: {e}")
+            raise e
+
+    def stop_driver(self):
+        """ドライバーを終了する"""
+        if self.driver:
+            self.driver.quit()
+            self.driver = None
+            print("Chrome Driver stopped.")
+
+    def navigate_to(self, url: str):
+        """指定したURLに遷移する"""
+        if not self.driver:
+            self.start_driver()
+        self.driver.get(url)
+        time.sleep(1)  # 簡易的なウェイト
+
+    def find_element(self, by: By, value: str, timeout: int = 10):
+        """要素を検索する（待機機能付き）"""
+        if not self.driver:
+            raise RuntimeError("Driver is not started.")
+
+        try:
+            element = WebDriverWait(self.driver, timeout).until(
+                EC.presence_of_element_located((by, value))
+            )
+            return element
+        except Exception as e:
+            print(f"Element not found: {value} - {e}")
+            return None
+
+    def capture_screenshot(self, filepath: str):
+        """スクリーンショットを保存する"""
+        if self.driver:
+            self.driver.save_screenshot(filepath)
+
+    # --- 業務固有の自動化メソッド例 ---
+
+    def auto_login_bank(self, bank_code: str, account_id: str, password: str) -> bool:
+        """
+        銀行サイトへの自動ログイン（サンプル実装）
+        :param bank_code: 銀行コード（例: 0001）
+        :return: 成功可否
+        """
+        # 実装例: みずほ銀行の場合
+        if bank_code == "0001":
+            target_url = (
+                "https://www.mizuhobank.co.jp/retail/products/direct/index.html"  # ※ダミーURL
+            )
+            try:
+                self.navigate_to(target_url)
+                # ここに実際のログインロジックを記述
+                # user_input = self.find_element(By.ID, "txbCustNo")
+                # pass_input = self.find_element(By.ID, "txbPassword")
+                # ...
+                print(f"Login logic for bank {bank_code} executed.")
+                return True
+            except Exception as e:
+                print(f"Bank login failed: {e}")
+                return False
+
+        print(f"Automation for bank code {bank_code} is not implemented.")
+        return False
+
+
+# シングルトンとして利用する場合
+automation_service = AutomationService(headless=settings.SELENIUM_HEADLESS)
+
+
+==================================================
+FILE_PATH: ./src/services/user_management_service.py
+==================================================
+
+# src/services/user_management_service.py
+from typing import Dict, List, Optional
+
+from src.models.database import SessionLocal
+from src.models.tables import User
+
+
+class UserManagementService:
+    """
+    ユーザー認証・管理に関するサービスロジック
+    """
+
+    def authenticate(self, windows_id: str) -> Optional[User]:
+        """
+        簡易認証: Windows IDに基づいてユーザーを取得する
+        実際にはActive Directory連携やパスワード照合を行う
+        """
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.windows_id == windows_id).first()
+            if user:
+                print(f"User authenticated: {user.name} ({user.role})")
+                return user
+            else:
+                print(f"Authentication failed for: {windows_id}")
+                return None
+        finally:
+            db.close()
+
+    def get_all_managers(self) -> List[Dict[str, str]]:
+        """Managerロールを持つユーザーのリストを取得"""
+        db = SessionLocal()
+        try:
+            managers = db.query(User).filter(User.role == "Manager").all()
+            return [{"id": u.id, "name": u.name} for u in managers]
+        finally:
+            db.close()
+
+    def get_all_operators(self) -> List[Dict[str, str]]:
+        """Operatorロールを持つユーザーのリストを取得"""
+        db = SessionLocal()
+        try:
+            operators = db.query(User).filter(User.role == "Operator").all()
+            return [{"id": u.id, "name": u.name} for u in operators]
+        finally:
+            db.close()
+
+    def create_user(self, windows_id: str, name: str, role: str = "Operator") -> bool:
+        """新規ユーザーを作成する"""
+        db = SessionLocal()
+        try:
+            if db.query(User).filter(User.windows_id == windows_id).first():
+                print("User already exists.")
+                return False
+
+            new_user = User(windows_id=windows_id, name=name, role=role)
+            db.add(new_user)
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            print(f"Failed to create user: {e}")
+            return False
+        finally:
+            db.close()
+
+    def get_user_by_id(self, user_id: int) -> Optional[User]:
+        """IDからユーザー情報を取得（セッションはデタッチされるため注意）"""
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user:
+                # 必要な属性をアクセスしてロードしておくか、辞書で返すのが安全
+                return user
+            return None
+        finally:
+            db.close()
+
+
+# シングルトンインスタンス
+user_service = UserManagementService()
+
+
+==================================================
+FILE_PATH: ./src/services/doc_generator.py
+==================================================
+
+# src/services/doc_generator.py
+from typing import Dict, List
+
+from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Cm, Pt
+
+from src.services.deceased_service import get_address_info, get_case_by_id, get_deceased_by_case_id
+from src.utils.date_utils import convert_seireki_to_wareki
+
+
+# --- OXML ヘルパー: セルに特定の枠線を設定 ---
+def set_cell_border(cell, **kwargs):
+    """
+    セルの枠線を設定する (タイトル枠用)
+    """
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+
+    tcBorders = tcPr.first_child_found_in("w:tcBorders")
+    if tcBorders is None:
+        tcBorders = OxmlElement("w:tcBorders")
+        tcPr.append(tcBorders)
+
+    for edge in ("left", "top", "right", "bottom", "insideH", "insideV"):
+        edge_data = kwargs.get(edge)
+        if edge_data:
+            tag = "w:{}".format(edge)
+            element = tcBorders.find(qn(tag))
+            if element is None:
+                element = OxmlElement(tag)
+                tcBorders.append(element)
+
+            for key in ["val", "sz", "space", "color"]:
+                if key in edge_data:
+                    element.set(qn("w:{}".format(key)), str(edge_data[key]))
+
+
+# --- ヘルパー: 数値を漢数字に変換 ---
+def to_kanji_num(val) -> str:
+    if val is None:
+        return ""
+    s = str(val)
+    table = str.maketrans(
+        {
+            "0": "〇",
+            "1": "一",
+            "2": "二",
+            "3": "三",
+            "4": "四",
+            "5": "五",
+            "6": "六",
+            "7": "七",
+            "8": "八",
+            "9": "九",
+            ".": "・",
+        }
+    )
+    return s.translate(table)
+
+
+# --- フォント設定 ---
+def set_font_style(run, font_name="MS Mincho", size=10.5, bold=False):
+    run.font.name = font_name
+    run.font.size = Pt(size)
+    run.font.bold = bold
+    rPr = run._element.get_or_add_rPr()
+    rFonts = rPr.get_or_add_rFonts()
+    rFonts.set(qn("w:eastAsia"), font_name)
+
+
+def generate_division_agreement_doc(
+    case_id: int, allocations: Dict[str, int], output_path: str
+) -> str:
+    """
+    遺産分割協議書 (20250413版 完全再現)
+    """
+    # 1. データ取得
+    case = get_case_by_id(case_id)
+    deceased = get_deceased_by_case_id(case_id)
+    if not case or not deceased:
+        raise ValueError("データ不足")
+
+    heirs_map = {h.id: h for h in deceased.heirs}
+
+    # 2. ドキュメント設定
+    doc = Document()
+    style = doc.styles["Normal"]
+    style.font.name = "MS Mincho"
+    style.font.size = Pt(10.5)
+    style.element.rPr.rFonts.set(qn("w:eastAsia"), "MS Mincho")
+    style.paragraph_format.line_spacing = 1.15
+
+    # ==========================================
+    # 1. タイトル (枠囲み)
+    # ==========================================
+    title_table = doc.add_table(rows=1, cols=1)
+    title_table.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_cell = title_table.cell(0, 0)
+
+    p = title_cell.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run("遺産分割協議書")
+    set_font_style(run, size=18, bold=True)
+
+    border_style = {"val": "double", "sz": "4", "space": "0", "color": "000000"}
+    set_cell_border(
+        title_cell, top=border_style, bottom=border_style, left=border_style, right=border_style
+    )
+
+    title_table.autofit = False
+    title_table.columns[0].width = Cm(12)
+
+    doc.add_paragraph("")
+
+    # ==========================================
+    # 2. 被相続人情報
+    # ==========================================
+    d_addr = get_address_info("deceased", deceased.id)
+    last_address = f"{d_addr.get('prefecture', '')}{d_addr.get('city_ward_town', '')}{d_addr.get('street_address', '')}"
+    if d_addr.get("building_name"):
+        last_address += f" {d_addr.get('building_name')}"
+    last_hometown = deceased.hometown if deceased.hometown else "（未登録）"
+
+    d_name = f"{deceased.name_last} {deceased.name_first}"
+    death_date_str = (
+        convert_seireki_to_wareki(deceased.date_of_death)
+        if deceased.date_of_death
+        else "平成/令和xx年xx月xx日"
+    )
+
+    def add_header_line(label, value):
+        p = doc.add_paragraph()
+        p.paragraph_format.left_indent = Cm(1)
+        p.add_run(f"{label}　　").bold = False
+        p.add_run(value)
+
+    add_header_line("最後の住所　　", last_address)
+    add_header_line("最後の本籍　　", last_hometown)
+    add_header_line("登記簿上の住所", last_address)
+
+    doc.add_paragraph("")
+
+    # ==========================================
+    # 3. 前文
+    # ==========================================
+    preamble = (
+        f"被相続人　{d_name}　（{death_date_str}死亡）の遺産については、"
+        "同人の相続人全員において分割協議を行った結果、各相続人がそれぞれ次の通り遺産を分割し、"
+        "債務・葬式費用を負担することに決定した。"
+    )
+    p = doc.add_paragraph(preamble)
+    p.paragraph_format.first_line_indent = Cm(0.5)
+
+    note = (
+        "なお、下記の不動産は住民票上の住所と不動産登記簿上の住所が一致していないが、"
+        "全て被相続人の所有に係る不動産に間違いない。"
+    )
+    p = doc.add_paragraph(note)
+    p.paragraph_format.first_line_indent = Cm(0.5)
+
+    doc.add_paragraph("")
+    p = doc.add_paragraph("記")
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph("")
+
+    # ==========================================
+    # 4. 財産目録
+    # ==========================================
+    assets_by_heir: Dict[int, Dict[str, List]] = {}
+
+    for asset in case.real_estates:
+        key = f"RE_{asset.id}"
+        heir_id = allocations.get(key)
+        if heir_id:
+            if heir_id not in assets_by_heir:
+                assets_by_heir[heir_id] = {"real_estates": [], "banks": [], "securities": []}
+            assets_by_heir[heir_id]["real_estates"].append(asset)
+
+    for asset in case.financial_assets:
+        key = f"BANK_{asset.id}"
+        heir_id = allocations.get(key)
+        if heir_id:
+            if heir_id not in assets_by_heir:
+                assets_by_heir[heir_id] = {"real_estates": [], "banks": [], "securities": []}
+
+            if asset.asset_type == "SECURITIES" or (
+                asset.bank_ref and "証券" in asset.bank_ref.bank_name
+            ):
+                assets_by_heir[heir_id]["securities"].append(asset)
+            else:
+                assets_by_heir[heir_id]["banks"].append(asset)
+
+    section_num = 1
+
+    for heir_id, assets in assets_by_heir.items():
+        heir = heirs_map.get(heir_id)
+        if not heir:
+            continue
+        heir_name = f"{heir.name_last} {heir.name_first}"
+
+        doc.add_paragraph(f"{section_num}．以下の財産は相続人　{heir_name}　が取得する。")
+
+        sub_num = 1
+
+        # --- (1) 不動産 ---
+        if assets["real_estates"]:
+            lands = [x for x in assets["real_estates"] if x.property_type == "Land"]
+            buildings = [
+                x for x in assets["real_estates"] if x.property_type in ["Building", "Condo"]
+            ]
+
+            if lands:
+                doc.add_paragraph(f"（{sub_num}）土地")
+                for re in lands:
+                    _create_property_table(doc, re, "Land")
+                    doc.add_paragraph(f"　被相続人の持分　　{re.ownership_share or '1/1'}")
+                    doc.add_paragraph(
+                        f"　相続人 {heir_name}が取得する持分　　被相続人所有のうち　1/1"
+                    )
+                    doc.add_paragraph("")
+                sub_num += 1
+
+            if buildings:
+                doc.add_paragraph(f"（{sub_num}）建物")
+                for re in buildings:
+                    _create_property_table(doc, re, "Building")
+                    doc.add_paragraph(f"　被相続人の持分　　{re.ownership_share or '1/1'}")
+                    doc.add_paragraph(
+                        f"　相続人 {heir_name}が取得する持分　　被相続人所有のうち　1/1"
+                    )
+                    doc.add_paragraph("")
+                sub_num += 1
+
+        # --- (2) 有価証券 ---
+        if assets["securities"]:
+            doc.add_paragraph(f"（{sub_num}）有価証券（未収配当金、未収分配金等の法定果実を含む）")
+
+            headers = ["No", "種類", "銘柄", "所在場所等", "数量"]
+            rows_data = []
+            for idx, sec in enumerate(assets["securities"], 1):
+                rows_data.append(
+                    [
+                        str(idx),
+                        sec.account_type_ref.type_name if sec.account_type_ref else "",
+                        "（銘柄不明）",
+                        f"{sec.bank_ref.bank_name} {sec.branch_ref.branch_name if sec.branch_ref else ''}",
+                        str(sec.balance),
+                    ]
+                )
+            _create_list_table(doc, headers, rows_data)
+            doc.add_paragraph("")
+            sub_num += 1
+
+        # --- (3) 現預金 ---
+        if assets["banks"]:
+            doc.add_paragraph(f"（{sub_num}）現預金")
+
+            headers = ["No", "所在場所等", "支店", "種類", "口座番号"]
+            col_widths = [Cm(1.0), Cm(6.0), Cm(4.0), Cm(2.5), Cm(4.0)]
+            rows_data = []
+            for idx, bank in enumerate(assets["banks"], 1):
+                branch_str = bank.branch_ref.branch_name if bank.branch_ref else "－"
+                if "ゆうちょ" in (bank.bank_ref.bank_name or ""):
+                    branch_str = "－"
+
+                rows_data.append(
+                    [
+                        str(idx),
+                        bank.bank_ref.bank_name if bank.bank_ref else "",
+                        branch_str,
+                        bank.account_type_ref.type_name if bank.account_type_ref else "",
+                        bank.account_number,
+                    ]
+                )
+            _create_list_table(doc, headers, rows_data, widths=col_widths)
+            doc.add_paragraph("")
+            sub_num += 1
+
+        section_num += 1
+
+    # ==========================================
+    # 5. 債務・葬式費用
+    # ==========================================
+    if case.liabilities:
+        debts = [l for l in case.liabilities if l.is_debt and not l.is_funeral_cost]
+        if debts:
+            doc.add_paragraph(f"{section_num}．以下の債務は相続人　（代表者）　が負担する。")
+            doc.add_paragraph("単位：円")
+            headers = ["No", "種類", "細目", "債権者", "金額"]
+            rows = []
+            for idx, d in enumerate(debts, 1):
+                rows.append([str(idx), "債務", d.description, "", f"{d.amount:,.0f}"])
+            _create_list_table(doc, headers, rows)
+            doc.add_paragraph("")
+            section_num += 1
+
+    doc.add_paragraph(f"{section_num}．葬式費用については相続人　（喪主）　が全額負担する。")
+    doc.add_paragraph("")
+
+    # ==========================================
+    # 6. 後文・日付・署名
+    # ==========================================
+    doc.add_paragraph("")
+    post_text = (
+        "前記の通り相続人全員による遺産分割の協議が成立したので、これを証するため本書を作成し、"
+        "以下に各自署名捺印する。なお、本協議書に記載なき遺産・債務並びに後日判明した遺産・債務は、"
+        "相続人全員で別途協議して決めるものとする。"
+    )
+    doc.add_paragraph(post_text)
+    doc.add_paragraph("")
+
+    p = doc.add_paragraph("　　　　　年　　 月　　 日")
+    doc.add_paragraph("")
+
+    for heir in deceased.heirs:
+        h_addr = get_address_info("heir", heir.id)
+        address_str = f"{h_addr.get('prefecture', '')}{h_addr.get('city_ward_town', '')}{h_addr.get('street_address', '')}"
+        if h_addr.get("building_name"):
+            address_str += f" {h_addr.get('building_name')}"
+
+        p = doc.add_paragraph()
+        p.paragraph_format.left_indent = Cm(8)
+        p.add_run(f"住所　　　{address_str}\n")
+        p.add_run(f"相続人　　{heir.name_last} {heir.name_first}")
+
+        doc.add_paragraph("")
+        p = doc.add_paragraph("署名")
+        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        doc.add_paragraph("")
+        p = doc.add_paragraph("実印")
+        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        p.paragraph_format.right_indent = Cm(4)
+        doc.add_paragraph("")
+        doc.add_paragraph("")
+
+    p = doc.add_paragraph("捨印")
+    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p.paragraph_format.right_indent = Cm(2)
+
+    try:
+        doc.save(output_path)
+    except Exception as e:
+        if "Permission denied" in str(e):
+            raise PermissionError("ファイルが開かれています。閉じてから再度実行してください。")
+        raise e
+
+    return output_path
+
+
+def _create_property_table(doc, asset, p_type):
+    """不動産の詳細を表示する表を作成 (枠線なし、項目名揃え)"""
+    table = doc.add_table(rows=0, cols=2)
+    table.autofit = False
+    table.columns[0].width = Cm(3.0)
+    table.columns[1].width = Cm(11.0)
+
+    def add_row(label, val):
+        row = table.add_row()
+        row.cells[0].text = label
+        # 💡 修正点: Noneの場合は空文字に変換してエラーを防ぐ
+        safe_val = str(val) if val is not None else ""
+        row.cells[1].text = safe_val
+        set_font_style(row.cells[0].paragraphs[0].runs[0])
+        if row.cells[1].paragraphs[0].runs:
+            set_font_style(row.cells[1].paragraphs[0].runs[0])
+
+    if p_type == "Land":
+        add_row("　　　　所在", asset.location)
+        add_row("　　　地番", asset.lot_number)
+        add_row("　　　　地目", asset.land_category or "宅地")
+        area = to_kanji_num(asset.land_area)
+        add_row("　　　　地積", f"{area} ㎡")
+    else:
+        add_row("　　　　所在", asset.location)
+        add_row("　　　　家屋番号", asset.house_number)
+        add_row("　　　　種類", asset.land_category or "居宅")
+        add_row("　　　　構造", asset.structure)
+        area = to_kanji_num(asset.floor_area)
+        add_row("　　　　床面積", f"{area} ㎡")
+
+
+def _create_list_table(doc, headers, data, widths=None):
+    """一覧表を作成 (格子状の枠線あり)"""
+    table = doc.add_table(rows=1, cols=len(headers))
+    table.style = "Table Grid"
+    table.autofit = False
+
+    if not widths:
+        if len(headers) == 5:
+            widths = [Cm(1.0), Cm(6.0), Cm(4.0), Cm(3.0), Cm(4.0)]
+        else:
+            widths = [Cm(18 / len(headers))] * len(headers)
+
+    hdr_cells = table.rows[0].cells
+    for i, h in enumerate(headers):
+        hdr_cells[i].text = h
+        hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if i < len(widths):
+            hdr_cells[i].width = widths[i]
+        set_font_style(hdr_cells[i].paragraphs[0].runs[0], bold=True)
+
+    for row_data in data:
+        row = table.add_row()
+        for i, cell_val in enumerate(row_data):
+            # 💡 ここでも念のため str変換とNone対策
+            safe_text = str(cell_val) if cell_val is not None else ""
+            cell = row.cells[i]
+            cell.text = safe_text
+
+            if i < len(widths):
+                cell.width = widths[i]
+
+            p = cell.paragraphs[0]
+            if i == 0:
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            else:
+                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+            if p.runs:
+                set_font_style(p.runs[0], size=10.5)
+
+
+==================================================
+FILE_PATH: ./src/services/json_backup_service.py
+==================================================
+
+# src/services/json_backup_service.py
+
+import datetime
+import json
+import os
+import platform
+import re
+import traceback
+from typing import Tuple
+
+from sqlalchemy.orm import joinedload
+
+from src.models.database import SessionLocal
+from src.models.tables import (
+    AccountTypeMaster,
+    Address,
+    BankMaster,
+    BranchMaster,
+    Case,
+    CaseStatus,
+    Contact,
+    Coordinate,
+    Deceased,
+    Expense,
+    FinancialAsset,
+    H_AddressHistory,
+    H_ContactLink,
+    Heir,
+    InsuranceAsset,
+    Liability,
+    OtherAsset,
+    RealEstateAsset,
+    Task,
+    User,
+)
+
+
+# --- デバッグ用ロガー ---
+def log_error_to_desktop(message: str):
+    """エラーをデスクトップのログファイルに書き出す（macOS/Windows対応）"""
+    try:
+        desktop = os.path.expanduser("~/Desktop")
+        log_path = os.path.join(desktop, "backup_error_log.txt")
+        with open(log_path, "a", encoding="utf-8") as f:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"[{timestamp}] {message}\n")
+    except Exception:
+        pass  # ログ書き込み自体のエラーは無視
+
+
+# --- 日付型などをJSONシリアライズ可能にするヘルパー ---
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (datetime.date, datetime.datetime)):
+            return obj.isoformat()
+        return super().default(obj)
+
+
+# 柔軟な日付解析関数
+def _parse_flexible_date(date_str: str | None) -> datetime.date | None:
+    if not date_str:
+        return None
+    if "T" in date_str:
+        try:
+            return datetime.datetime.fromisoformat(date_str).date()
+        except ValueError:
+            pass
+    try:
+        return datetime.date.fromisoformat(date_str)
+    except ValueError:
+        pass
+    try:
+        return datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        pass
+    try:
+        return datetime.datetime.strptime(date_str, "%Y/%m/%d").date()
+    except ValueError:
+        return None
+
+
+def _parse_flexible_datetime(date_str: str | None) -> datetime.datetime | None:
+    if not date_str:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(date_str)
+    except ValueError:
+        d = _parse_flexible_date(date_str)
+        if d:
+            return datetime.datetime(d.year, d.month, d.day)
+        return None
+
+
+def _get_address_dict(session, address_id):
+    if not address_id:
+        return None
+    addr = session.query(Address).get(address_id)
+    if not addr:
+        return None
+    return {
+        "zip_code": addr.zip_code,
+        "prefecture": addr.prefecture,
+        "city_ward_town": addr.city_ward_town,
+        "street_address": addr.street_address,
+        "building_name": addr.building_name,
+    }
+
+
+def _create_address_record(session, addr_data):
+    if not addr_data:
+        return None
+    new_addr = Address(
+        zip_code=addr_data.get("zip_code"),
+        prefecture=addr_data.get("prefecture"),
+        city_ward_town=addr_data.get("city_ward_town"),
+        street_address=addr_data.get("street_address"),
+        building_name=addr_data.get("building_name"),
+    )
+    session.add(new_addr)
+    session.flush()
+    return new_addr.id
+
+
+# ==========================================
+# エクスポート (出力)
+# ==========================================
+def export_database_to_json(file_path: str) -> bool:
+    session = SessionLocal()
+    try:
+        # ディレクトリの存在確認と作成
+        directory = os.path.dirname(file_path)
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
+
+        # --- 1. マスタデータの取得 ---
+        masters = {
+            "users": [],
+            "case_statuses": [],
+            "account_types": [],
+            "banks": [],
+            "branches": [],
+            "coordinates": [],
+        }
+
+        for u in session.query(User).all():
+            masters["users"].append(
+                {"id": u.id, "windows_id": u.windows_id, "name": u.name, "role": u.role}
+            )
+        for s in session.query(CaseStatus).all():
+            masters["case_statuses"].append({"id": s.id, "name": s.name, "order_num": s.order_num})
+        for a in session.query(AccountTypeMaster).all():
+            masters["account_types"].append({"id": a.id, "type_name": a.type_name})
+        for b in session.query(BankMaster).all():
+            masters["banks"].append(
+                {"id": b.id, "bank_name": b.bank_name, "bank_code": b.bank_code}
+            )
+        for br in session.query(BranchMaster).all():
+            masters["branches"].append(
+                {
+                    "id": br.id,
+                    "bank_id": br.bank_id,
+                    "branch_name": br.branch_name,
+                    "branch_code": br.branch_code,
+                }
+            )
+        for co in session.query(Coordinate).all():
+            masters["coordinates"].append(
+                {
+                    "id": co.id,
+                    "label": co.label,
+                    "x_point": co.x_point,
+                    "y_point": co.y_point,
+                    "value": co.value,
+                    "description": co.description,
+                }
+            )
+
+        # --- 2. 案件データの取得 ---
+        cases = (
+            session.query(Case)
+            .options(
+                joinedload(Case.deceased_ref).joinedload(Deceased.heirs),
+                joinedload(Case.financial_assets),
+                joinedload(Case.tasks),
+                joinedload(Case.real_estates),
+                joinedload(Case.liabilities),
+                joinedload(Case.insurance_assets),
+                joinedload(Case.other_assets),
+                joinedload(Case.expenses),
+            )
+            .all()
+        )
+
+        cases_list = []
+
+        for case in cases:
+            case_dict = {
+                "case_id": case.case_id,
+                "case_number": case.case_number,
+                "client_name": case.client_name,
+                "client_name_kana": case.client_name_kana,
+                "contract_date": case.contract_date,
+                "status_id": case.current_status_id,
+                "manager_id": case.manager_id,
+                "operator_id": case.operator_id,
+                "folder_path": case.folder_path,
+                "tax_deadline": case.tax_deadline,
+                "fee_contract_amount": case.fee_contract_amount,
+                "deposit_required_amount": case.deposit_required_amount,
+                "deposit_paid_amount": case.deposit_paid_amount,
+                "is_paid_in_full": case.is_paid_in_full,
+                "deceased": None,
+                "heirs": [],
+                "financial_assets": [],
+                "tasks": [],
+                "real_estates": [],
+                "liabilities": [],
+                "insurance_assets": [],
+                "other_assets": [],
+                "expenses": [],
+            }
+
+            d = case.deceased_ref
+            if d:
+                d_dict = {
+                    "name_last": d.name_last,
+                    "name_first": d.name_first,
+                    "name_last_kana": d.name_last_kana,
+                    "name_first_kana": d.name_first_kana,
+                    "date_of_birth": d.date_of_birth,
+                    "date_of_death": d.date_of_death,
+                    "hometown": d.hometown,
+                    "last_address": _get_address_dict(session, d.last_address_id),
+                }
+                case_dict["deceased"] = d_dict
+
+                for h in d.heirs:
+                    h_dict = {
+                        "name_last": h.name_last,
+                        "name_first": h.name_first,
+                        "name_last_kana": h.name_last_kana,
+                        "name_first_kana": h.name_first_kana,
+                        "relationship_type": h.relationship_type,
+                        "date_of_birth": h.date_of_birth,
+                        "hometown": h.hometown,
+                        "is_contracting_party": h.is_contracting_party,
+                        "current_address": None,
+                        "contacts": [],
+                    }
+
+                    h_addr_link = (
+                        session.query(H_AddressHistory)
+                        .filter(
+                            H_AddressHistory.heir_id == h.id,
+                            H_AddressHistory.is_current_address == True,
+                        )
+                        .first()
+                    )
+                    if h_addr_link:
+                        h_dict["current_address"] = _get_address_dict(
+                            session, h_addr_link.address_id
+                        )
+
+                    links = session.query(H_ContactLink).filter(H_ContactLink.heir_id == h.id).all()
+                    for link in links:
+                        contact = session.query(Contact).get(link.contact_id)
+                        if contact:
+                            h_dict["contacts"].append(
+                                {
+                                    "type": contact.type,
+                                    "value": contact.value,
+                                    "sub_type": contact.sub_type,
+                                }
+                            )
+
+                    case_dict["heirs"].append(h_dict)
+
+            for asset in case.financial_assets:
+                case_dict["financial_assets"].append(
+                    {
+                        "asset_type": asset.asset_type,
+                        "bank_id": asset.bank_id,
+                        "branch_id": asset.branch_id,
+                        "account_type_id": asset.account_type_id,
+                        "account_number": asset.account_number,
+                        "balance": asset.balance,
+                        "status": asset.status,
+                    }
+                )
+
+            for t in case.tasks:
+                case_dict["tasks"].append(
+                    {
+                        "template_id": t.template_id,
+                        "description": t.description,
+                        "assigned_user_id": t.assigned_user_id,
+                        "due_date": t.due_date,
+                        "is_completed": t.is_completed,
+                        "last_updated_at": t.last_updated_at,
+                    }
+                )
+
+            for re_data in case.real_estates:
+                case_dict["real_estates"].append({"municipality_name": re_data.municipality_name})
+
+            for lb in case.liabilities:
+                case_dict["liabilities"].append(
+                    {
+                        "is_debt": lb.is_debt,
+                        "description": lb.description,
+                        "amount": lb.amount,
+                        "is_funeral_cost": lb.is_funeral_cost,
+                    }
+                )
+
+            for ins in case.insurance_assets:
+                case_dict["insurance_assets"].append(
+                    {
+                        "insurance_company": ins.insurance_company,
+                        "policy_number": ins.policy_number,
+                        "estimated_value": ins.estimated_value,
+                    }
+                )
+
+            for other in case.other_assets:
+                case_dict["other_assets"].append(
+                    {"description": other.description, "estimated_value": other.estimated_value}
+                )
+
+            for exp in case.expenses:
+                case_dict["expenses"].append(
+                    {
+                        "description": exp.description,
+                        "amount": exp.amount,
+                        "expense_date": exp.expense_date,
+                    }
+                )
+
+            cases_list.append(case_dict)
+
+        final_data = {
+            "version": "2.1",
+            "exported_at": datetime.datetime.now(),
+            "masters": masters,
+            "cases": cases_list,
+        }
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(final_data, f, cls=DateTimeEncoder, ensure_ascii=False, indent=2)
+
+        print(f"✅ Export successful: {file_path}")
+        return True
+
+    except Exception as e:
+        error_msg = f"Export Error: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        log_error_to_desktop(error_msg)  # デスクトップにログを出力
+        return False
+    finally:
+        session.close()
+
+
+# ==========================================
+# インポート (取込・復元)
+# ==========================================
+def import_database_from_json(file_path: str) -> Tuple[bool, str]:
+    session = SessionLocal()
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            file_content = f.read()
+
+        # 【修正】macOSではWindows特有のバックスラッシュ置換を行わない
+        if platform.system() == "Windows":
+            file_content = re.sub(r'(?<!\\)\\(?![u"\\/bfnrt])', r"\\\\", file_content)
+
+        try:
+            raw_data = json.loads(file_content)
+        except json.JSONDecodeError:
+            # パースエラー時のフォールバック
+            file_content = file_content.replace("\\", "\\\\")
+            raw_data = json.loads(file_content)
+
+        if isinstance(raw_data, list):
+            cases_data = raw_data
+            masters_data = {}
+        else:
+            cases_data = raw_data.get("cases", [])
+            masters_data = raw_data.get("masters", {})
+
+        # --- 1. マスタデータの復元 ---
+        if "users" in masters_data:
+            for u in masters_data["users"]:
+                existing = session.query(User).get(u["id"])
+                if existing:
+                    existing.windows_id = u["windows_id"]
+                    existing.name = u["name"]
+                    existing.role = u["role"]
+                else:
+                    session.add(
+                        User(id=u["id"], windows_id=u["windows_id"], name=u["name"], role=u["role"])
+                    )
+            session.flush()
+
+        if "case_statuses" in masters_data:
+            for s in masters_data["case_statuses"]:
+                existing = session.query(CaseStatus).get(s["id"])
+                if existing:
+                    existing.name = s["name"]
+                    existing.order_num = s["order_num"]
+                else:
+                    session.add(CaseStatus(id=s["id"], name=s["name"], order_num=s["order_num"]))
+            session.flush()
+
+        if "account_types" in masters_data:
+            for a in masters_data["account_types"]:
+                existing = session.query(AccountTypeMaster).get(a["id"])
+                if existing:
+                    existing.type_name = a["type_name"]
+                else:
+                    session.add(AccountTypeMaster(id=a["id"], type_name=a["type_name"]))
+            session.flush()
+
+        if "banks" in masters_data:
+            for b in masters_data["banks"]:
+                existing = session.query(BankMaster).get(b["id"])
+                if existing:
+                    existing.bank_name = b["bank_name"]
+                    existing.bank_code = b["bank_code"]
+                else:
+                    session.add(
+                        BankMaster(id=b["id"], bank_name=b["bank_name"], bank_code=b["bank_code"])
+                    )
+            session.flush()
+
+        if "branches" in masters_data:
+            for br in masters_data["branches"]:
+                existing = session.query(BranchMaster).get(br["id"])
+                if existing:
+                    existing.bank_id = br["bank_id"]
+                    existing.branch_name = br["branch_name"]
+                    existing.branch_code = br["branch_code"]
+                else:
+                    session.add(
+                        BranchMaster(
+                            id=br["id"],
+                            bank_id=br["bank_id"],
+                            branch_name=br["branch_name"],
+                            branch_code=br["branch_code"],
+                        )
+                    )
+            session.flush()
+
+        if "coordinates" in masters_data:
+            for co in masters_data["coordinates"]:
+                existing = session.query(Coordinate).get(co["id"])
+                if existing:
+                    existing.label = co["label"]
+                    existing.x_point = co["x_point"]
+                    existing.y_point = co["y_point"]
+                    existing.value = co.get("value")
+                    existing.description = co.get("description")
+                else:
+                    session.add(
+                        Coordinate(
+                            id=co["id"],
+                            label=co["label"],
+                            x_point=co["x_point"],
+                            y_point=co["y_point"],
+                            value=co.get("value"),
+                            description=co.get("description"),
+                        )
+                    )
+            session.flush()
+
+        # --- 2. 案件データの復元 ---
+        count_created = 0
+        count_updated = 0
+
+        for case_data in cases_data:
+            case_num = case_data.get("case_number")
+            if not case_num:
+                continue
+
+            existing_case = session.query(Case).filter(Case.case_number == case_num).first()
+
+            if existing_case:
+                session.delete(existing_case)
+                session.flush()
+                count_updated += 1
+            else:
+                count_created += 1
+
+            contract_d = _parse_flexible_date(case_data.get("contract_date"))
+            tax_d_str = case_data.get("tax_deadline")
+            tax_d = _parse_flexible_datetime(tax_d_str)
+
+            # フォルダパスの補正
+            raw_folder_path = case_data.get("folder_path")
+            fixed_folder_path = None
+
+            if raw_folder_path:
+                # macOS対応: バックスラッシュをスラッシュに置換
+                fixed_folder_path = raw_folder_path.replace("\\", "/")
+
+            new_case = Case(
+                case_id=case_data.get("case_id"),
+                case_number=case_num,
+                client_name=case_data.get("client_name"),
+                client_name_kana=case_data.get("client_name_kana"),
+                contract_date=contract_d,
+                tax_deadline=tax_d,
+                current_status_id=case_data.get("status_id"),
+                manager_id=case_data.get("manager_id"),
+                operator_id=case_data.get("operator_id"),
+                folder_path=fixed_folder_path,
+                fee_contract_amount=case_data.get("fee_contract_amount"),
+                deposit_required_amount=case_data.get("deposit_required_amount"),
+                deposit_paid_amount=case_data.get("deposit_paid_amount"),
+                is_paid_in_full=case_data.get("is_paid_in_full"),
+            )
+            session.add(new_case)
+            session.flush()
+
+            # 被相続人
+            d_data = case_data.get("deceased")
+            if d_data:
+                new_deceased = Deceased(
+                    case_id=new_case.case_id,
+                    name_last=d_data.get("name_last"),
+                    name_first=d_data.get("name_first"),
+                    name_last_kana=d_data.get("name_last_kana"),
+                    name_first_kana=d_data.get("name_first_kana"),
+                    hometown=d_data.get("hometown"),
+                    date_of_birth=_parse_flexible_date(d_data.get("date_of_birth")),
+                    date_of_death=_parse_flexible_date(d_data.get("date_of_death")),
+                )
+                addr_id = _create_address_record(session, d_data.get("last_address"))
+                if addr_id:
+                    new_deceased.last_address_id = addr_id
+
+                session.add(new_deceased)
+                session.flush()
+
+                # 相続人
+                heirs_list = case_data.get("heirs", [])
+                for h_data in heirs_list:
+                    new_heir = Heir(
+                        deceased_id=new_deceased.id,
+                        name_last=h_data.get("name_last"),
+                        name_first=h_data.get("name_first"),
+                        name_last_kana=h_data.get("name_last_kana"),
+                        name_first_kana=h_data.get("name_first_kana"),
+                        relationship_type=h_data.get("relationship_type"),
+                        hometown=h_data.get("hometown"),
+                        is_contracting_party=h_data.get("is_contracting_party"),
+                        date_of_birth=_parse_flexible_date(h_data.get("date_of_birth")),
+                    )
+                    session.add(new_heir)
+                    session.flush()
+
+                    h_addr_id = _create_address_record(session, h_data.get("current_address"))
+                    if h_addr_id:
+                        session.add(
+                            H_AddressHistory(
+                                heir_id=new_heir.id, address_id=h_addr_id, is_current_address=True
+                            )
+                        )
+
+                    for c_data in h_data.get("contacts", []):
+                        new_contact = Contact(
+                            type=c_data.get("type"),
+                            value=c_data.get("value"),
+                            sub_type=c_data.get("sub_type"),
+                        )
+                        session.add(new_contact)
+                        session.flush()
+                        session.add(H_ContactLink(heir_id=new_heir.id, contact_id=new_contact.id))
+
+            # 金融資産
+            for a_data in case_data.get("financial_assets", []):
+                new_asset = FinancialAsset(
+                    case_id=new_case.case_id,
+                    asset_type=a_data.get("asset_type", "BANK"),
+                    bank_id=a_data.get("bank_id"),
+                    branch_id=a_data.get("branch_id"),
+                    account_type_id=a_data.get("account_type_id"),
+                    account_number=a_data.get("account_number"),
+                    balance=a_data.get("balance"),
+                    status=a_data.get("status"),
+                )
+                session.add(new_asset)
+
+            # タスク
+            for t_data in case_data.get("tasks", []):
+                new_task = Task(
+                    case_id=new_case.case_id,
+                    template_id=t_data.get("template_id"),
+                    description=t_data.get("description"),
+                    assigned_user_id=t_data.get("assigned_user_id"),
+                    due_date=_parse_flexible_datetime(t_data.get("due_date")),
+                    is_completed=t_data.get("is_completed"),
+                    last_updated_at=_parse_flexible_datetime(t_data.get("last_updated_at")),
+                )
+                session.add(new_task)
+
+            # その他資産・負債
+            for re_data in case_data.get("real_estates", []):
+                session.add(
+                    RealEstateAsset(
+                        case_id=new_case.case_id, municipality_name=re_data.get("municipality_name")
+                    )
+                )
+
+            for lb in case_data.get("liabilities", []):
+                session.add(
+                    Liability(
+                        case_id=new_case.case_id,
+                        is_debt=lb.get("is_debt"),
+                        description=lb.get("description"),
+                        amount=lb.get("amount"),
+                        is_funeral_cost=lb.get("is_funeral_cost"),
+                    )
+                )
+
+            for ins in case_data.get("insurance_assets", []):
+                session.add(
+                    InsuranceAsset(
+                        case_id=new_case.case_id,
+                        insurance_company=ins.get("insurance_company"),
+                        policy_number=ins.get("policy_number"),
+                        estimated_value=ins.get("estimated_value"),
+                    )
+                )
+
+            for other in case_data.get("other_assets", []):
+                session.add(
+                    OtherAsset(
+                        case_id=new_case.case_id,
+                        description=other.get("description"),
+                        estimated_value=other.get("estimated_value"),
+                    )
+                )
+
+            for exp in case_data.get("expenses", []):
+                session.add(
+                    Expense(
+                        case_id=new_case.case_id,
+                        description=exp.get("description"),
+                        amount=exp.get("amount"),
+                        expense_date=_parse_flexible_date(exp.get("expense_date")),
+                    )
+                )
+
+        session.commit()
+        return True, f"JSON取込完了: 新規{count_created}件 / 上書き{count_updated}件"
+
+    except Exception as e:
+        session.rollback()
+        error_msg = f"Import Error: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        log_error_to_desktop(error_msg)
+        return False, f"エラーが発生しました: {str(e)}"
+    finally:
+        session.close()
+
+
+==================================================
 FILE_PATH: ./src/services/securities_data.py
 ==================================================
 
@@ -10555,7 +12754,21 @@ def get_all_case_statuses():
 def get_case_by_id(case_id: int) -> Optional[Case]:
     db = SessionLocal()
     try:
-        return db.query(Case).filter(Case.case_id == case_id).first()
+        return (
+            db.query(Case)
+            .options(
+                # 金融資産関連
+                joinedload(Case.financial_assets).joinedload(FinancialAsset.bank_ref),
+                joinedload(Case.financial_assets).joinedload(FinancialAsset.branch_ref),
+                joinedload(Case.financial_assets).joinedload(FinancialAsset.account_type_ref),
+                # 不動産
+                joinedload(Case.real_estates),
+                # 💡 追加: 負債情報 (今回のエラー対策)
+                joinedload(Case.liabilities),
+            )
+            .filter(Case.case_id == case_id)
+            .first()
+        )
     finally:
         db.close()
 
@@ -10722,7 +12935,7 @@ def get_deceased_by_case_id(case_id: int) -> Optional[Deceased]:
     try:
         return (
             db.query(Deceased)
-            .options(joinedload(Deceased.case))
+            .options(joinedload(Deceased.case), joinedload(Deceased.heirs))
             .filter(Deceased.case_id == case_id)
             .first()
         )
@@ -11957,6 +14170,131 @@ def get_user_capacity_data():
 
 
 ==================================================
+FILE_PATH: ./src/services/pdf/base_pdf_service.py
+==================================================
+
+# src/services/pdf/base_pdf_service.py
+import os
+from abc import ABC, abstractmethod
+from datetime import datetime
+
+from src.config import settings
+from src.services.deceased_service import (
+    get_case_by_id,
+    get_case_folder_path,
+    get_deceased_by_case_id,
+)
+from src.utils.pdf_writer import PdfFormWriter
+
+
+class BaseBankPdfService(ABC):
+    """銀行書類作成の基底クラス"""
+
+    def __init__(self, case_id: int):
+        self.case_id = case_id
+        self.case = get_case_by_id(case_id)
+        self.deceased = get_deceased_by_case_id(case_id)
+
+        if not self.case or not self.deceased:
+            raise ValueError("案件情報または被相続人情報が見つかりません")
+
+    @property
+    @abstractmethod
+    def template_filename(self) -> str:
+        """テンプレートPDFファイル名（サブクラスで定義）"""
+        pass
+
+    @property
+    @abstractmethod
+    def output_filename_prefix(self) -> str:
+        """出力ファイル名の接頭辞（例: 'auじぶん銀行_相続届'）"""
+        pass
+
+    @property
+    @abstractmethod
+    def ref_width(self) -> int:
+        """座標取得時の基準幅 (ツールで取得したpx値)"""
+        pass
+
+    @abstractmethod
+    def draw_content(self, writer: PdfFormWriter):
+        """
+        具体的な書き込みロジック（サブクラスで実装）
+        writer.draw_text(...) をここに記述する
+        """
+        pass
+
+    def execute(self) -> str:
+        """
+        実行メイン処理: パス解決 -> 書き込み -> 保存
+        戻り値: 保存されたファイルのパス
+        """
+        # 1. パス解決
+        input_pdf_path = settings.ASSETS_DIR / "pdf" / self.template_filename
+        if not input_pdf_path.exists():
+            raise FileNotFoundError(f"テンプレートが見つかりません: {input_pdf_path}")
+
+        case_folder = get_case_folder_path(self.case_id)
+        if case_folder and os.path.exists(case_folder):
+            output_dir = case_folder
+        else:
+            output_dir = settings.BASE_DIR / "output"
+            os.makedirs(output_dir, exist_ok=True)
+
+        today_str = datetime.now().strftime("%Y%m%d")
+
+        file_name = f"{self.case.case_number}{self.deceased.name_last}様_{self.output_filename_prefix}_{today_str}.pdf"
+        output_pdf_path = os.path.join(output_dir, file_name)
+
+        # 2. PDF生成
+        try:
+            with PdfFormWriter(str(input_pdf_path), output_pdf_path) as writer:
+                self.draw_content(writer)
+                writer.save()
+
+            return output_pdf_path
+        except Exception as e:
+            raise RuntimeError(
+                f"PDF作成中にエラーが発生しました ({self.output_filename_prefix}): {e}"
+            )
+
+
+==================================================
+FILE_PATH: ./src/services/pdf/pdf_factory.py
+==================================================
+
+# src/services/pdf/pdf_factory.py
+from typing import Optional
+
+from src.services.pdf.banks.au_jibun import AuJibunBankService
+from src.services.pdf.base_pdf_service import BaseBankPdfService
+
+# from src.services.pdf.banks.mizuho import MizuhoBankService  # 作成したら追加
+
+
+def generate_pdf_for_bank(case_id: int, bank_code: str = None, bank_name: str = "") -> str:
+    """
+    銀行情報に基づいて適切なServiceを選択し、PDFを生成する
+    """
+    service: Optional[BaseBankPdfService] = None
+
+    # 銀行コードまたは名称でクラスを振り分け
+    if bank_code == "0039" or "au" in bank_name or "じぶん" in bank_name:
+        service = AuJibunBankService(case_id)
+
+    # elif bank_code == "0001":
+    #     service = MizuhoBankService(case_id)
+
+    else:
+        raise ValueError(f"対応していない銀行です: {bank_name} (Code: {bank_code})")
+
+    if service:
+        return service.execute()
+
+    raise RuntimeError("Service initialization failed")
+
+
+==================================================
 FILE_PATH: ./src/services/pdf/smbc_pdf_service.py
 ==================================================
 
@@ -12173,6 +14511,87 @@ def _create_mailing_pdf(data: Dict[str, Any], bank_code: str, case_id: int) -> s
     )
     
     return output_path
+
+==================================================
+FILE_PATH: ./src/services/pdf/banks/au_jibun.py
+==================================================
+
+# src/services/pdf/banks/au_jibun.py
+from src.services.pdf.base_pdf_service import BaseBankPdfService
+from src.utils.pdf_writer import PdfFormWriter
+
+
+class AuJibunBankService(BaseBankPdfService):
+    """auじぶん銀行 相続届 作成サービス"""
+
+    @property
+    def template_filename(self) -> str:
+        # assets/pdf/auじぶん銀行_相続届.pdf が存在することを前提
+        return "auじぶん銀行_相続届.pdf"
+
+    @property
+    def output_filename_prefix(self) -> str:
+        return "auじぶん銀行_相続届"
+
+    @property
+    def ref_width(self) -> int:
+        # ツールで取得した画像の横幅 (FletのImageサイズではなく、PDF変換時のpx幅)
+        # 200dpiなら通常 1654 px 程度です
+        return 1654
+
+    def draw_content(self, writer: PdfFormWriter):
+        """
+        ここに generate_pdf_test.py で確認した draw_text コードを移植します。
+        'value_0' などの仮の値を、self.deceased や self.case の実データに置き換えます。
+        """
+
+        # 1. 被相続人氏名 (value_0 に相当)
+        full_name = f"{self.deceased.name_last} {self.deceased.name_first}"
+        writer.draw_text(
+            page=1, x=733, y=412, text=full_name, font_size=11, ref_width=self.ref_width
+        )
+
+        # 2. 死亡日 (value_1, value_2 に相当)
+        if self.deceased.date_of_death:
+            # 年
+            writer.draw_text(
+                page=1,
+                x=846,
+                y=407,
+                text=str(self.deceased.date_of_death.year),
+                font_size=11,
+                ref_width=self.ref_width,
+            )
+            # 月
+            writer.draw_text(
+                page=1,
+                x=971,
+                y=407,
+                text=str(self.deceased.date_of_death.month),
+                font_size=11,
+                ref_width=self.ref_width,
+            )
+            # 日 (もしあれば)
+            writer.draw_text(
+                page=1,
+                x=1050,  # 仮の座標
+                y=407,
+                text=str(self.deceased.date_of_death.day),
+                font_size=11,
+                ref_width=self.ref_width,
+            )
+
+        # 3. 依頼者（契約者）名
+        # 必要であれば追加
+        writer.draw_text(
+            page=1,
+            x=500,  # 仮
+            y=600,  # 仮
+            text=self.case.client_name,
+            font_size=11,
+            ref_width=self.ref_width,
+        )
+
 
 ==================================================
 FILE_PATH: ./src/services/automation/web_automation_service.py

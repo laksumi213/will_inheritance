@@ -84,7 +84,21 @@ def get_all_case_statuses():
 def get_case_by_id(case_id: int) -> Optional[Case]:
     db = SessionLocal()
     try:
-        return db.query(Case).filter(Case.case_id == case_id).first()
+        return (
+            db.query(Case)
+            .options(
+                # 金融資産関連
+                joinedload(Case.financial_assets).joinedload(FinancialAsset.bank_ref),
+                joinedload(Case.financial_assets).joinedload(FinancialAsset.branch_ref),
+                joinedload(Case.financial_assets).joinedload(FinancialAsset.account_type_ref),
+                # 不動産
+                joinedload(Case.real_estates),
+                # 💡 追加: 負債情報 (今回のエラー対策)
+                joinedload(Case.liabilities),
+            )
+            .filter(Case.case_id == case_id)
+            .first()
+        )
     finally:
         db.close()
 
@@ -251,7 +265,7 @@ def get_deceased_by_case_id(case_id: int) -> Optional[Deceased]:
     try:
         return (
             db.query(Deceased)
-            .options(joinedload(Deceased.case))
+            .options(joinedload(Deceased.case), joinedload(Deceased.heirs))
             .filter(Deceased.case_id == case_id)
             .first()
         )

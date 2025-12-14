@@ -1,6 +1,7 @@
 # src/views/home.py
 import datetime
 import threading
+import traceback
 from typing import Any, Dict, List, Optional
 
 from flet import (
@@ -47,11 +48,9 @@ from src.services.json_backup_service import export_database_to_json, import_dat
 from src.utils.file_system import open_case_folder
 from src.views.client_register import reset_all_global_fields
 
-# 💡 重要: DB自動修復のためのinit_dbをインポート
 try:
     from src.utils.database import init_db
 except ImportError:
-    # 既存環境への配慮: ファイルがない場合はダミー関数にする
     print("Warning: src.utils.database not found. Auto-migration disabled.")
 
     def init_db():
@@ -60,7 +59,7 @@ except ImportError:
 
 class CaseDashboardView(Column):
     """
-    メインダッシュボード画面 (Todoリスト、コントロール、案件一覧を統合)
+    メインダッシュボード画面
     """
 
     search_timer: Optional[threading.Timer] = None
@@ -76,7 +75,6 @@ class CaseDashboardView(Column):
         self.current_user_id: int = 1
         self.is_manager: bool = True
 
-        # 💡 初期化時にDBスキーマチェックを実行
         try:
             init_db()
         except Exception as e:
@@ -87,13 +85,10 @@ class CaseDashboardView(Column):
         self.USER_MAP: Dict[int, str] = get_all_users()
         self.STATUS_LIST = get_all_case_statuses()
 
+        # --- FilePicker の初期化 ---
         self.export_file_picker = FilePicker(on_result=self._on_export_result)
         self.import_file_picker = FilePicker(on_result=self._on_import_result)
 
-        if self.export_file_picker not in self.page.overlay:
-            self.page.overlay.extend([self.export_file_picker, self.import_file_picker])
-
-        # 💡 ラベルを修正: 電話番号を追加
         self.search_field = TextField(
             label="案件No/依頼者/被相続人/相続人/電話番号で検索",
             on_change=self._debounce_search,
@@ -128,6 +123,7 @@ class CaseDashboardView(Column):
             self.capacity_view_container = self._create_manager_capacity_view()
 
         self.todo_list_container = self._create_todo_list_view()
+        # ここでエラーになっていました。メソッドを追加したので解消します。
         self.my_case_list_container = self._create_my_case_list_view()
         self.main_list_view_column = self._create_main_list_view_column()
 
@@ -162,7 +158,19 @@ class CaseDashboardView(Column):
         ]
 
     def did_mount(self):
+        """画面が表示されたタイミングで実行される"""
+        print("✅ CaseDashboardView mounted")
+        self._ensure_file_pickers()
         self._update_all_views()
+
+    def _ensure_file_pickers(self):
+        """FilePickerがoverlayに存在することを確認・追加する"""
+        if self.page:
+            if self.export_file_picker not in self.page.overlay:
+                self.page.overlay.append(self.export_file_picker)
+            if self.import_file_picker not in self.page.overlay:
+                self.page.overlay.append(self.import_file_picker)
+            self.page.update()
 
     def _show_snack(self, msg: str, color: str):
         self.page.open(
@@ -180,11 +188,7 @@ class CaseDashboardView(Column):
                     icon=Icons.SAVE,
                     bgcolor=Colors.INDIGO_600,
                     color=Colors.WHITE,
-                    on_click=lambda _: self.export_file_picker.save_file(
-                        allowed_extensions=["json"],
-                        file_name=f"backup_{datetime.date.today()}.json",
-                        dialog_title="バックアップファイルの保存先を選択",
-                    ),
+                    on_click=self._open_export_dialog,
                 ),
                 Container(width=10),
                 ElevatedButton(
@@ -192,16 +196,46 @@ class CaseDashboardView(Column):
                     icon=Icons.RESTORE,
                     bgcolor=Colors.TEAL_700,
                     color=Colors.WHITE,
-                    on_click=lambda _: self.import_file_picker.pick_files(
-                        allow_multiple=False,
-                        allowed_extensions=["json"],
-                        dialog_title="復元するJSONファイルを選択",
-                    ),
+                    on_click=self._open_import_dialog,
                 ),
             ],
         )
 
+    def _open_export_dialog(self, e):
+        """保存ダイアログを開く"""
+        print("🔘 Export button clicked")
+        self._ensure_file_pickers()
+
+        try:
+            self.export_file_picker.save_file(
+                allowed_extensions=["json"],
+                file_name=f"backup_{datetime.date.today()}.json",
+                dialog_title="バックアップファイルの保存先を選択",
+            )
+            print("🚀 FilePicker.save_file called")
+        except Exception as ex:
+            print(f"❌ Failed to open export dialog: {ex}")
+            traceback.print_exc()
+
+    def _open_import_dialog(self, e):
+        """読込ダイアログを開く"""
+        print("🔘 Import button clicked")
+        self._ensure_file_pickers()
+
+        try:
+            self.import_file_picker.pick_files(
+                allow_multiple=False,
+                allowed_extensions=["json"],
+                dialog_title="復元するJSONファイルを選択",
+            )
+            print("🚀 FilePicker.pick_files called")
+        except Exception as ex:
+            print(f"❌ Failed to open import dialog: {ex}")
+            traceback.print_exc()
+
     def _on_export_result(self, e: FilePickerResultEvent):
+        """保存先が選択された後の処理"""
+        print(f"📂 Export Result: {e.path}")
         if e.path:
             try:
                 success = export_database_to_json(e.path)
@@ -209,9 +243,17 @@ class CaseDashboardView(Column):
                 color = Colors.GREEN if success else Colors.ERROR
                 self._show_snack(msg, color)
             except Exception as ex:
+                print("--------------------------------------------------")
+                print("❌ JSON Export Error Detail:")
+                traceback.print_exc()
+                print("--------------------------------------------------")
                 self._show_snack(f"保存エラー: {str(ex)}", Colors.ERROR)
+        else:
+            print("⚠️ Export cancelled")
 
     def _on_import_result(self, e: FilePickerResultEvent):
+        """ファイルが選択された後の処理"""
+        print(f"📂 Import Result: {e.files}")
         if e.files:
             try:
                 success, msg = import_database_from_json(e.files[0].path)
@@ -219,7 +261,13 @@ class CaseDashboardView(Column):
                 if success:
                     self._update_all_views()
             except Exception as ex:
+                print("--------------------------------------------------")
+                print("❌ JSON Import Error Detail:")
+                traceback.print_exc()
+                print("--------------------------------------------------")
                 self._show_snack(f"復元エラー: {str(ex)}", Colors.ERROR)
+        else:
+            print("⚠️ Import cancelled")
 
     def _get_left_sidebar_controls(self) -> List[Any]:
         base_controls = []
@@ -325,7 +373,6 @@ class CaseDashboardView(Column):
                 ),
             )
 
-            # SOL番号を取得して表示
             sol_number = case.get("sol_case_number", "---")
 
             items.append(
@@ -514,5 +561,9 @@ def HomeView(page: Page) -> View:
     )
 
     dashboard = CaseDashboardView(page)
+
+    # View作成時にもFilePickerを登録しておく（念のため）
+    page.overlay.append(dashboard.export_file_picker)
+    page.overlay.append(dashboard.import_file_picker)
 
     return View(route="/", controls=[dashboard], appbar=app_bar, padding=0, spacing=0)
