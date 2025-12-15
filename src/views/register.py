@@ -50,12 +50,6 @@ from src.services.deceased_service import (
     is_case_number_duplicate,
 )
 
-# AIサービス (Google Cloud無効化のため削除)
-# try:
-#     from services.ai_service import ai_service
-# except ImportError:
-#     from src.services.ai_service import ai_service
-
 # 日付ユーティリティ
 from src.utils.date_utils import on_date_blur_handler
 
@@ -206,7 +200,20 @@ class ClientRegisterView(View):
             value=get_next_case_number_service(),
             read_only=False,
         )
-        self.manager_field = Dropdown(label="担当者1", width=200, options=self.user_options)
+
+        # 担当者1の初期値設定 ("管理者 太郎" を検索)
+        default_manager_id = ""
+        for uid, name in self.user_map.items():
+            if "管理者 太郎" in name:
+                default_manager_id = str(uid)
+                break
+
+        self.manager_field = Dropdown(
+            label="担当者1", 
+            width=200, 
+            options=self.user_options,
+            value=default_manager_id  # 初期値を設定
+        )
         self.operator_field = Dropdown(label="担当者2", width=200, options=self.user_options)
 
         # 契約者情報
@@ -234,7 +241,6 @@ class ClientRegisterView(View):
         self._add_initial_contacts(self.email_inputs_column, is_email=True)
 
         # SOL連携等
-        # 💡 on_blur ハンドラを追加
         self.sol_case_number = TextField(label="SOL案件No", hint_text="例: S12345", width=200)
         self.introduction_date = TextField(
             label="紹介日", 

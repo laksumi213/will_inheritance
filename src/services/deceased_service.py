@@ -84,7 +84,21 @@ def get_all_case_statuses():
 def get_case_by_id(case_id: int) -> Optional[Case]:
     db = SessionLocal()
     try:
-        return db.query(Case).filter(Case.case_id == case_id).first()
+        return (
+            db.query(Case)
+            .options(
+                # 金融資産関連
+                joinedload(Case.financial_assets).joinedload(FinancialAsset.bank_ref),
+                joinedload(Case.financial_assets).joinedload(FinancialAsset.branch_ref),
+                joinedload(Case.financial_assets).joinedload(FinancialAsset.account_type_ref),
+                # 不動産
+                joinedload(Case.real_estates),
+                # 💡 追加: 負債情報 (今回のエラー対策)
+                joinedload(Case.liabilities),
+            )
+            .filter(Case.case_id == case_id)
+            .first()
+        )
     finally:
         db.close()
 
@@ -206,9 +220,43 @@ def update_case_number(case_id: int, new_number: str) -> bool:
 
 
 def get_next_case_number_service() -> str:
+    """
+    次の案件番号を自動生成する。
+    既存の案件番号の中から「4桁の数字」のみを対象とし、その最大値+1を返す。
+    該当する番号がない場合は '0001' を返す。
+    """
     db = SessionLocal()
     try:
-        return f"G{datetime.datetime.now().strftime('%y%m%d%H%M')}"
+        # 全ての案件番号を取得
+        cases = db.query(Case.case_number).all()
+        
+        max_num = 0
+        found_numeric = False
+
+        for c in cases:
+            num_str = c.case_number
+            # Noneチェック、数字のみチェック、4桁チェック
+            if num_str and num_str.isdigit() and len(num_str) == 4:
+                try:
+                    val = int(num_str)
+                    if val > max_num:
+                        max_num = val
+                        found_numeric = True
+                except ValueError:
+                    continue
+        
+        # 既存データがない、または4桁数字の案件がない場合は 0001
+        if max_num == 0 and not found_numeric:
+            return "0001"
+
+        # 次の番号 (4桁ゼロ埋め)
+        next_val = max_num + 1
+        return f"{next_val:04d}"
+
+    except Exception as e:
+        print(f"Error generating case number: {e}")
+        # エラー時は安全策としてランダムな一時番号等を返すが、ここでは基本形を返す
+        return "0001"
     finally:
         db.close()
 
@@ -251,7 +299,7 @@ def get_deceased_by_case_id(case_id: int) -> Optional[Deceased]:
     try:
         return (
             db.query(Deceased)
-            .options(joinedload(Deceased.case))
+            .options(joinedload(Deceased.case), joinedload(Deceased.heirs))
             .filter(Deceased.case_id == case_id)
             .first()
         )
