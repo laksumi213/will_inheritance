@@ -29,7 +29,7 @@ class PDFService:
     Popplerのパス解決と画像変換を担当します。
     """
 
-    def _get_poppler_path(self) -> Optional[str]:
+    def get_poppler_path(self) -> Optional[str]:
         """
         Popplerのbinディレクトリパスを解決して返します。
         
@@ -45,7 +45,6 @@ class PDFService:
         # 1. libs/poppler/bin を直接チェック
         direct_path = libs_dir / "poppler" / "bin"
         if direct_path.exists() and (direct_path / "pdfinfo.exe").exists():
-            print(f"DEBUG: Poppler found at {direct_path}")
             return str(direct_path)
 
         # 2. libs/poppler 配下を探索 (Library/bin などのパターン対応)
@@ -53,12 +52,10 @@ class PDFService:
         if poppler_root.exists():
             for path in poppler_root.rglob("bin"):
                 if (path / "pdfinfo.exe").exists():
-                    print(f"DEBUG: Poppler found at {path}")
                     return str(path)
 
         # 3. システムPATHのチェック
         if shutil.which("pdfinfo"):
-            print("DEBUG: Poppler found in system PATH")
             return None  # pdf2imageはNoneを渡すとPATHを使用します
 
         # 見つからない場合
@@ -67,14 +64,14 @@ class PDFService:
     async def convert_pdf_to_images(self, pdf_path: str) -> List[PageImage]:
         """
         PDFを画像のリストに変換する (非同期ラッパー)
-        
-        Args:
-            pdf_path (str): PDFファイルの絶対パス
-
-        Returns:
-            List[PageImage]: ページごとの画像データリスト
         """
         return await asyncio.to_thread(self._convert_sync, pdf_path)
+
+    def convert_pdf_to_images_sync(self, pdf_path: str) -> List[PageImage]:
+        """
+        PDFを画像のリストに変換する (同期版 - run_thread用)
+        """
+        return self._convert_sync(pdf_path)
 
     def _convert_sync(self, pdf_path: str) -> List[PageImage]:
         """
@@ -83,9 +80,9 @@ class PDFService:
         page_images_list: List[PageImage] = []
         
         # パスの解決
-        poppler_path = self._get_poppler_path()
+        poppler_path = self.get_poppler_path()
         
-        # 解決できなかった場合に例外を投げる準備（詳細なメッセージ付き）
+        # 解決できなかった場合に例外を投げる準備
         if poppler_path is None and not shutil.which("pdfinfo"):
              raise RuntimeError(
                 "システムに 'Poppler' が見つかりません。\n"
@@ -97,7 +94,6 @@ class PDFService:
 
         try:
             # dpi=200 に固定して、座標計算の基準を安定させる
-            # poppler_path を明示的に渡すことでWindowsのPATH設定不要にする
             pil_images = convert_from_path(
                 pdf_path,
                 dpi=200,
@@ -122,7 +118,6 @@ class PDFService:
             return page_images_list
 
         except PDFInfoNotInstalledError:
-            # pdf2imageが投げる特定エラーのキャッチ
             raise RuntimeError(
                 "Popplerの実行ファイルが見つかりません。\n"
                 f"検索パス: {poppler_path if poppler_path else 'System PATH'}\n"
@@ -134,7 +129,6 @@ class PDFService:
                 "ファイルが破損しているか、パスが間違っている可能性があります。"
             )
         except Exception as e:
-            # その他の予期せぬエラー
             raise RuntimeError(f"PDF変換中にエラーが発生しました: {str(e)}")
 
 

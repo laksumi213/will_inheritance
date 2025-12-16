@@ -6,7 +6,8 @@ from sqlalchemy.orm import sessionmaker, scoped_session, declarative_base, Sessi
 
 # ログ設定
 logging.basicConfig()
-logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
+# 💡 修正: INFO -> WARNING に変更してSQLログを抑制
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
 # DB接続設定 (SQLite)
 # マルチスレッド(Flet)でのアクセスを許可するために check_same_thread=False を設定
@@ -45,7 +46,7 @@ def init_db() -> None:
                 
         # 今後不足しそうな 'introduction_date' なども念のためチェック
         if "introduction_date" not in existing_columns:
-             with engine.connect() as conn:
+            with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE cases ADD COLUMN introduction_date DATE"))
                 conn.commit()
 

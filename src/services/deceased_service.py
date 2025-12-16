@@ -381,7 +381,7 @@ def update_deceased(
                     zip_code=last_zip_code,
                     prefecture=last_pref,
                     city_ward_town=last_city,
-                    street_address=last_street,
+                    street_address=last_street, # 💡 修正: street -> last_street
                     building_name=last_building,
                 )
                 db.add(new_addr)
@@ -822,6 +822,38 @@ def search_address_by_zip_api(zip_code: str) -> Optional[dict]:
         return None
 
 
+def search_zip_by_address_api(address: str) -> Optional[str]:
+    """
+    住所から郵便番号を検索する（HeartRails Geo APIを使用）
+    :param address: 住所文字列（例: 東京都千代田区千代田1-1）
+    :return: 郵便番号文字列 (例: "100-0001") または None
+    """
+    if not address:
+        return None
+    try:
+        # HeartRails Geo API Suggest API
+        # keywordに住所の一部を渡すと、候補を返してくれる
+        url = "http://geoapi.heartrails.com/api/json"
+        params = {
+            "method": "suggest",
+            "matching": "like",
+            "keyword": address
+        }
+        res = requests.get(url, params=params)
+        data = res.json()
+        
+        if data and data.get("response") and data["response"].get("location"):
+            # 最初の候補の郵便番号を返す
+            postal = data["response"]["location"][0].get("postal")
+            if postal:
+                # 3桁-4桁の形式に整形
+                return f"{postal[:3]}-{postal[3:]}"
+        return None
+    except Exception as e:
+        print(f"Zip search error: {e}")
+        return None
+
+
 def get_kintone_integration_data(case_id: int) -> dict:
     case = get_case_by_id(case_id)
     if not case:
@@ -852,6 +884,9 @@ def get_financial_asset_by_case(case_id: int):
         return [
             {
                 "id": a.id,
+                "bank_id": a.bank_id, # 💡 追加
+                "branch_id": a.branch_id, # 💡 追加
+                "account_type_id": a.account_type_id, # 💡 追加
                 "bank_code": a.bank_ref.bank_code if a.bank_ref else "",
                 "bank_name": a.bank_ref.bank_name if a.bank_ref else "",
                 "branch_name": a.branch_ref.branch_name if a.branch_ref else "",
@@ -1094,6 +1129,39 @@ def add_branch_master(bank_id: int, name: str, code: str) -> Optional[BranchMast
     finally:
         db.close()
 
+# 💡 追加: 支店コード更新関数
+def update_branch_code(branch_id: int, new_code: str) -> bool:
+    db = SessionLocal()
+    try:
+        branch = db.query(BranchMaster).get(branch_id)
+        if branch:
+            branch.branch_code = new_code
+            db.commit()
+            return True
+        return False
+    except Exception as e:
+        db.rollback()
+        print(f"Update Branch Code Error: {e}")
+        return False
+    finally:
+        db.close()
+
+# 💡 追加: 支店名更新関数
+def update_branch_name(branch_id: int, new_name: str) -> bool:
+    db = SessionLocal()
+    try:
+        branch = db.query(BranchMaster).get(branch_id)
+        if branch:
+            branch.branch_name = new_name
+            db.commit()
+            return True
+        return False
+    except Exception as e:
+        db.rollback()
+        print(f"Update Branch Name Error: {e}")
+        return False
+    finally:
+        db.close()
 
 def add_account_type_master(db=None, type_name: str = "") -> Optional[AccountTypeMaster]:
     local_session = False

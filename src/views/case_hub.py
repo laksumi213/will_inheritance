@@ -13,7 +13,7 @@ from flet import (
     Divider,
     ElevatedButton,
     FontWeight,
-    Icon,  # 💡 ここに追加しました
+    Icon,
     Icons,
     NavigationRail,
     NavigationRailDestination,
@@ -48,18 +48,8 @@ from src.views.smbc_balance_doc_view import SmbcBalanceDocView
 from src.views.task_management_view import TaskManagementView
 from src.views.visit_reserve_select_bank_view import VisitReserveSelectBankView
 
-
-# 未実装機能用のプレースホルダー
-def PlaceholderView(page: Page, title: str, content: str) -> Control:
-    return Column(
-        controls=[
-            Text(title, size=24, weight=FontWeight.BOLD, color="onSurface"),
-            Divider(),
-            Text(content, size=16, color="onSurface"),
-        ],
-        spacing=20,
-        expand=True,
-    )
+# 💡 新規追加: 登記情報取得画面
+from src.views.touki_acquisition_view import ToukiAcquisitionView
 
 
 class CaseHubView(Row):
@@ -115,6 +105,13 @@ class CaseHubView(Row):
                 "label": "不動産登録",
                 "route_suffix": "asset/register",
                 "view_func": lambda: RealEstateEditView(self.page, self.case_id),
+            },
+            # 💡 新規追加: 登記情報取得
+            "touki_acq": {
+                "icon": Icons.DOMAIN_VERIFICATION,
+                "label": "登記情報取得",
+                "route_suffix": "touki/acquire",
+                "view_func": lambda: ToukiAcquisitionView(self.page, self.case_id),
             },
             "freeze_proc": {
                 "icon": Icons.LOCK_OUTLINED,
@@ -241,11 +238,13 @@ class CaseHubView(Row):
                 return
 
         # 2. コンテンツの生成またはキャッシュからの取得
+        # 💡 キャッシュロジック: 一度生成した画面は保持するが、
+        #    ToukiAcquisitionViewなどはデータ更新の可能性があるためキャッシュしない方が良い場合もある
+        #    ここでは標準的な挙動としてキャッシュを利用する
         if key != "overview" and key in self.views_cache:
             content_control = self.views_cache[key]
         else:
             try:
-                # 💡 エラーハンドリング追加: 画面生成時のエラーをキャッチする
                 view_func = self.destinations[key]["view_func"]
                 raw_content = view_func()
 

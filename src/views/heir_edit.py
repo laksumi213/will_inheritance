@@ -1,4 +1,5 @@
 # src/views/heir_edit.py
+import re
 from flet import (
     AppBar,
     Colors,
@@ -57,7 +58,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
         address_info = get_address_info("heir", heir_id)
         contacts = deceased_service.get_contact_info("heir", heir_id)
 
-    # 💡 戻り先ルートの確定 (case_id を使用して確実に詳細画面へ戻る)
+    # 戻り先ルートの確定
     back_route = f"/detail/{case_id}" if case_id else "/"
 
     title_suffix = f" (被相続人ID: {deceased_id})" if deceased_id else ""
@@ -146,7 +147,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
             city_field.value = ""
             street_field.value = ""
         elif address_info == {}:
-            pref_field.value = "住所が見つかりません"
+            pref_field.value = "住所が見つかりませんでした"
             city_field.value = ""
             street_field.value = ""
         else:
@@ -158,6 +159,63 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
         street_field.focus()
 
     zip_field.on_blur = search_address_by_zip
+
+    # 💡 住所貼り付けロジック
+    def parse_and_fill_address(e):
+        full_address = e.control.value
+        if not full_address: return
+        
+        full_address = full_address.replace("　", " ").strip()
+        
+        match_pref = re.match(r'(.*?([都道府県]))(.+)', full_address)
+        if match_pref:
+            pref = match_pref.group(1)
+            rest = match_pref.group(3).strip()
+            
+            pref_field.value = pref
+            
+            match_city = re.match(r'^(.+?[郡市区町村])(.+)', rest)
+            if match_city:
+                city = match_city.group(1)
+                rest_street = match_city.group(2).strip()
+                city_field.value = city
+                
+                parts = rest_street.split(" ", 1)
+                street_field.value = parts[0]
+                building_field.value = parts[1] if len(parts) > 1 else ""
+            else:
+                city_field.value = ""
+                street_field.value = rest
+                building_field.value = ""
+        
+        # 郵便番号検索
+        full_addr_for_zip = f"{pref_field.value}{city_field.value}{street_field.value}"
+        if full_addr_for_zip:
+             try:
+                # 簡易逆引き
+                from src.services.deceased_service import search_zip_by_address_api
+                zip_code = search_zip_by_address_api(full_addr_for_zip)
+                # フォールバック
+                if not zip_code:
+                     zip_code = search_zip_by_address_api(f"{pref_field.value}{city_field.value}")
+
+                if zip_code:
+                    zip_field.value = zip_code
+             except Exception as ex:
+                print(f"Auto zip search failed: {ex}")
+
+        page.update()
+
+    paste_address_field = TextField(
+        label="📍 住所貼り付け (ここに入力すると自動分割されます)",
+        width=600,
+        on_change=parse_and_fill_address,
+        text_size=13,
+        color="onSecondaryContainer",
+        bgcolor="secondaryContainer",
+        border_color=Colors.TRANSPARENT
+    )
+
 
     def save_and_go_back(e):
         collected_data = {
@@ -211,14 +269,14 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
                     email_contacts=collected_data["email_contacts"],
                 )
 
-            page.open(SnackBar(Text("保存しました"), bgcolor="primary"))
+            page.open(SnackBar(Text("保存しました"), bgcolor=Colors.PRIMARY))
             
             # 💡 修正: back_route を使用して遷移
             page.go(back_route)
 
         except Exception as ex:
             print(f"保存エラー: {ex}")
-            page.open(SnackBar(Text(f"保存エラー: {ex}"), bgcolor="error"))
+            page.open(SnackBar(Text(f"保存エラー: {ex}"), bgcolor=Colors.ERROR))
             page.update()
 
     # --- UI レイアウト ---
@@ -228,6 +286,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
             AppBar(
                 title=Text(title_text),
                 bgcolor="surfaceVariant",
+                color="onSurfaceVariant",
                 # 💡 AppBarの戻るボタンにも back_route を適用
                 leading=IconButton(Icons.ARROW_BACK, on_click=lambda e: page.go(back_route)),
             ),
@@ -276,6 +335,8 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
                         Divider(),
                         
                         Text("🏠 住所", weight=FontWeight.BOLD, size=16, color="onSurface"),
+                        # 💡 貼り付けフィールド追加
+                        paste_address_field,
                         Row([zip_field, pref_field, city_field, street_field, building_field]),
                         Divider(),
                         Text("🏠 本籍地", weight=FontWeight.BOLD, size=16, color="onSurface"),

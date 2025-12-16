@@ -9,6 +9,7 @@ def normalize_text(text: str) -> str:
     """全角英数字を半角に変換し、前後の空白を除去する"""
     if not text:
         return ""
+    # 全角英数・記号を半角に、カタカナは全角に(NFKC)
     return unicodedata.normalize("NFKC", text).strip()
 
 def parse_all_flexible_date(date_str: str) -> datetime.date:
@@ -16,23 +17,74 @@ def parse_all_flexible_date(date_str: str) -> datetime.date:
     多様な日付フォーマットを解析して date オブジェクトを返す
     
     対応フォーマット:
-    - YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
-    - YYYY年MM月DD日
-    - YYYYMMDD
-    - MM/DD, MM-DD (現在の年を補完)
-    - MM月DD日 (現在の年を補完)
+    - 和暦略称: S50.1.1, H10-5-5, R3/10/10 (M, T, S, H, R 対応)
+    - 漢字和暦: 昭和50年1月1日, 令和元年5月1日
+    - 西暦: YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
+    - 日本語: YYYY年MM月DD日
+    - 8桁数値: YYYYMMDD
+    - 年省略: MM/DD, MM-DD (現在の年を補完)
+    - 年省略日本語: MM月DD日 (現在の年を補完)
     """
     if not date_str:
         raise ValueError("Empty string")
     
     text = normalize_text(date_str)
     
+    # 0. 和暦略称 (S50.1.1, H10-10-10, R5/5/5 など)
+    # アルファベット + 数字 + 区切り + 数字 + 区切り + 数字
+    match_era = re.match(r'^([MTSHRmtshr])(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})$', text)
+    if match_era:
+        era_char = match_era.group(1).upper()
+        era_year = int(match_era.group(2))
+        month = int(match_era.group(3))
+        day = int(match_era.group(4))
+
+        # 元号の開始年
+        base_year = 1900
+        if era_char == 'M':   # 明治 (1868-1912)
+            base_year = 1868
+        elif era_char == 'T': # 大正 (1912-1926)
+            base_year = 1912
+        elif era_char == 'S': # 昭和 (1926-1989)
+            base_year = 1926
+        elif era_char == 'H': # 平成 (1989-2019)
+            base_year = 1989
+        elif era_char == 'R': # 令和 (2019-)
+            base_year = 2019
+        
+        # 西暦変換: 元号開始年 + 年数 - 1
+        year = base_year + era_year - 1
+        return datetime.date(year, month, day)
+
+    # 💡 追加: 漢字和暦 (昭和50年1月1日, 令和元年5月1日)
+    match_kanji_era = re.match(r'^(明治|大正|昭和|平成|令和)(\d{1,2}|元)年(\d{1,2})月(\d{1,2})日$', text)
+    if match_kanji_era:
+        era_name = match_kanji_era.group(1)
+        era_year_str = match_kanji_era.group(2)
+        month = int(match_kanji_era.group(3))
+        day = int(match_kanji_era.group(4))
+
+        if era_year_str == "元":
+            era_year = 1
+        else:
+            era_year = int(era_year_str)
+
+        base_year = 1900
+        if era_name == '明治': base_year = 1868
+        elif era_name == '大正': base_year = 1912
+        elif era_name == '昭和': base_year = 1926
+        elif era_name == '平成': base_year = 1989
+        elif era_name == '令和': base_year = 2019
+        
+        year = base_year + era_year - 1
+        return datetime.date(year, month, day)
+
     # 1. YYYY年MM月DD日
     match = re.match(r'(\d{4})年(\d{1,2})月(\d{1,2})日', text)
     if match:
         return datetime.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
-    # 2. YYYY/MM/DD, YYYY-MM-DD, YYYY.MM.DD
+    # 2. YYYY/MM/DD, YYYY-MM-DD, YYYY.MM.DD (区切り文字混在対応)
     match = re.match(r'(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})', text)
     if match:
         return datetime.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
@@ -104,17 +156,21 @@ def on_date_blur_handler(e, wareki_text_control: Optional[Text] = None) -> None:
         return
 
     try:
+        # 解析実行
         d = parse_all_flexible_date(val)
-        control.value = d.isoformat() # YYYY-MM-DD に変換
+        
+        # 成功したらYYYY-MM-DD形式で上書き
+        control.value = d.isoformat()
         control.error_text = None
         
+        # 和暦表示の更新
         if wareki_text_control:
             wareki_text_control.value = convert_seireki_to_wareki(d)
             wareki_text_control.update()
             
     except ValueError:
-        # 解析不能な場合はエラーメッセージなどは出さず、入力値をそのままにするか
-        # 必要に応じて error_text をセットする。今回はUXを考慮しエラー表示せずそのまま。
+        # 解析不能な場合はエラーメッセージなどは出さず、入力値をそのままにする
+        # または、必要に応じてユーザーに通知する形でも良い
         pass
     
     control.update()

@@ -1,4 +1,5 @@
 # src/views/deceased_edit.py
+import re 
 from flet import (
     AppBar,
     Colors,
@@ -35,6 +36,7 @@ from src.services.deceased_service import (
     get_address_by_id,
     get_case_id_by_deceased_id,
     search_address_by_zip_api,
+    search_zip_by_address_api,
     get_deceased_by_id,
 )
 
@@ -54,9 +56,8 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
     # 保存時に使用するID
     current_deceased_id = deceased.id if deceased else None
 
-    # 💡 戻り先ルートの確定 (渡された case_id を使用して確実に詳細画面へ戻る)
+    # 戻り先ルートの確定
     back_route = f"/detail/{case_id}" if case_id else "/"
-    print('back_route:', back_route)
 
     # ----------------------------------------------------
     # UI コンポーネント定義
@@ -91,7 +92,7 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
     last_street_field = TextField(label="番地 (丁目/番/号)", width=250)
     last_building_field = TextField(label="建物名・部屋番号", width=400)
 
-    # 住所自動入力ハンドラ
+    # 住所自動入力ハンドラ (Zip -> Address)
     def address_zip_handler(e, pref_f, city_f, street_f):
         zip_code = e.control.value.strip()
         if len(zip_code.replace("-", "")) < 7:
@@ -107,7 +108,90 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
             e.control.error_text = "住所が見つかりません"
         page.update()
 
+    # 郵便番号自動入力ハンドラ (Address -> Zip)
+    def auto_fill_zip_handler(e, zip_f, pref_f, city_f, street_f):
+        # 既に郵便番号が入っている場合はスキップ
+        if zip_f.value:
+            return
+        
+        pref = pref_f.value or ""
+        city = city_f.value or ""
+        street = street_f.value or ""
+        
+        if not pref or not city:
+            return
+
+        full_address = f"{pref}{city}{street}"
+        zip_code = search_zip_by_address_api(full_address)
+        
+        # フォールバック: 番地なしで再検索
+        if not zip_code:
+            zip_code = search_zip_by_address_api(f"{pref}{city}")
+
+        if zip_code:
+            zip_f.value = zip_code
+            page.update()
+
+    # 💡 住所貼り付けハンドラ
+    def parse_and_fill_address(e):
+        full_address = e.control.value
+        if not full_address: return
+        
+        full_address = full_address.replace("　", " ").strip()
+        
+        match_pref = re.match(r'(.*?([都道府県]))(.+)', full_address)
+        if match_pref:
+            pref = match_pref.group(1)
+            rest = match_pref.group(3).strip()
+            
+            last_pref_field.value = pref
+            
+            match_city = re.match(r'^(.+?[郡市区町村])(.+)', rest)
+            if match_city:
+                city = match_city.group(1)
+                rest_street = match_city.group(2).strip()
+                last_city_field.value = city
+                
+                parts = rest_street.split(" ", 1)
+                last_street_field.value = parts[0]
+                last_building_field.value = parts[1] if len(parts) > 1 else ""
+            else:
+                last_city_field.value = ""
+                last_street_field.value = rest
+                last_building_field.value = ""
+        
+        # 郵便番号検索
+        full_addr_for_zip = f"{last_pref_field.value}{last_city_field.value}{last_street_field.value}"
+        if full_addr_for_zip:
+             try:
+                zip_code = search_zip_by_address_api(full_addr_for_zip)
+                # フォールバック
+                if not zip_code:
+                     zip_code = search_zip_by_address_api(f"{last_pref_field.value}{last_city_field.value}")
+                
+                if zip_code:
+                    last_zip_field.value = zip_code
+             except Exception as ex:
+                print(f"Auto zip search failed: {ex}")
+
+        page.update()
+
+    last_paste_address_field = TextField(
+        label="📍 住所貼り付け (ここに入力すると自動分割されます)",
+        width=600,
+        on_change=parse_and_fill_address,
+        text_size=13,
+        color="onSecondaryContainer",
+        bgcolor="secondaryContainer",
+        border_color=Colors.TRANSPARENT
+    )
+
     last_zip_field.on_blur = lambda e: address_zip_handler(e, last_pref_field, last_city_field, last_street_field)
+    
+    # 各住所フィールドのon_blurにZip検索ハンドラを紐付け
+    last_pref_field.on_blur = lambda e: auto_fill_zip_handler(e, last_zip_field, last_pref_field, last_city_field, last_street_field)
+    last_city_field.on_blur = lambda e: auto_fill_zip_handler(e, last_zip_field, last_pref_field, last_city_field, last_street_field)
+    last_street_field.on_blur = lambda e: auto_fill_zip_handler(e, last_zip_field, last_pref_field, last_city_field, last_street_field)
 
     # 4. 履歴・連絡先コンテナ
     past_addresses_column = Column(controls=[], spacing=10)
@@ -137,8 +221,13 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
         bldg_f = TextField(label="建物名", width=200, value=data.get("building_name", ""))
         
         zip_f.on_blur = lambda e: address_zip_handler(e, pref_f, city_f, street_f)
+        
+        # 過去の住所欄にも逆引きを適用
+        pref_f.on_blur = lambda e: auto_fill_zip_handler(e, zip_f, pref_f, city_f, street_f)
+        city_f.on_blur = lambda e: auto_fill_zip_handler(e, zip_f, pref_f, city_f, street_f)
+        street_f.on_blur = lambda e: auto_fill_zip_handler(e, zip_f, pref_f, city_f, street_f)
 
-        delete_btn = IconButton(Icons.DELETE_OUTLINE, icon_color="error", tooltip="削除")
+        delete_btn = IconButton(Icons.DELETE_OUTLINE, icon_color=Colors.ERROR, tooltip="削除")
         
         row_control = Row([zip_f, pref_f, city_f, street_f, bldg_f, delete_btn], spacing=10)
         
@@ -236,7 +325,7 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
     # ----------------------------------------------------
     def save_data(e):
         if not name_last_field.value or not name_first_field.value:
-            page.open(SnackBar(Text("氏名は必須です"), bgcolor="error"))
+            page.open(SnackBar(Text("氏名は必須です"), bgcolor=Colors.ERROR))
             page.update()
             return
 
@@ -283,15 +372,15 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
             )
 
             if success:
-                page.open(SnackBar(Text("保存しました"), bgcolor="primary"))
+                page.open(SnackBar(Text("保存しました"), bgcolor=Colors.PRIMARY))
                 # 💡 修正: back_route を使用して遷移
                 page.go(back_route)
             else:
-                page.open(SnackBar(Text("保存に失敗しました"), bgcolor="error"))
+                page.open(SnackBar(Text("保存に失敗しました"), bgcolor=Colors.ERROR))
 
         except Exception as ex:
             print(f"Save Error: {ex}")
-            page.open(SnackBar(Text(f"エラー: {ex}"), bgcolor="error"))
+            page.open(SnackBar(Text(f"エラー: {ex}"), bgcolor=Colors.ERROR))
         page.update()
 
 
@@ -307,6 +396,7 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
         AppBar(
             title=Text(f"👤 被相続人情報 {'新規登録' if is_new_mode else '編集'}"),
             bgcolor="surfaceVariant",
+            color="onSurfaceVariant",
             # 💡 AppBarの戻るボタンにも back_route を適用
             leading=IconButton(Icons.ARROW_BACK, on_click=lambda e: page.go(back_route)),
         ),
@@ -316,29 +406,35 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
                     Text("1. 基本情報", size=18, weight=FontWeight.BOLD, color="onSurface"),
                     Row([name_last_field, name_first_field]),
                     Row([kana_last_field, kana_first_field]),
+                    # Row([rel_field], visible=True),
                     Divider(),
                     
                     Text("2. 生年月日・死亡日", size=18, weight=FontWeight.BOLD, color="onSurface"),
-                    Row([dob_field, wareki_dob_text]),
+                    Row(
+                        [dob_field, wareki_dob_text],
+                        vertical_alignment=CrossAxisAlignment.END,
+                    ),
                     Row([dod_field, wareki_dod_text]),
                     Divider(),
                     
                     Text("3. 連絡先情報", size=18, weight=FontWeight.BOLD, color="onSurface"),
                     Row([
                         Text("電話番号", size=14, weight=FontWeight.W_500),
-                        IconButton(Icons.ADD, icon_color="primary", on_click=lambda e: add_new_contact_row(e, phone_inputs_column, False))
+                        IconButton(Icons.ADD, icon_color=Colors.PRIMARY, on_click=lambda e: add_new_contact_row(e, phone_inputs_column, False))
                     ], width=600, alignment=MainAxisAlignment.SPACE_BETWEEN),
                     phone_inputs_column,
                     
                     Row([
                         Text("メールアドレス", size=14, weight=FontWeight.W_500),
-                        IconButton(Icons.ADD, icon_color="primary", on_click=lambda e: add_new_contact_row(e, email_inputs_column, True))
+                        IconButton(Icons.ADD, icon_color=Colors.PRIMARY, on_click=lambda e: add_new_contact_row(e, email_inputs_column, True))
                     ], width=600, alignment=MainAxisAlignment.SPACE_BETWEEN),
                     email_inputs_column,
                     Divider(),
 
                     Text("4. 住所履歴 (最後の住所)", size=18, weight=FontWeight.BOLD, color="onSurface"),
                     Text("※ 死亡時の住民票上の住所を入力してください", size=12, color="onSurfaceVariant"),
+                    # 💡 住所貼り付けフィールド
+                    last_paste_address_field,
                     Row([last_zip_field, last_pref_field, last_city_field, last_street_field, last_building_field], wrap=True),
                     Divider(),
 
@@ -354,7 +450,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
                     Divider(),
 
                     Row([
-                        # ElevatedButton("キャンセル", on_click=lambda e: page.go(back_route), bgcolor="surfaceVariant", color="onSurfaceVariant"),
                         ElevatedButton("キャンセル", on_click=on_cancel_click, bgcolor="surfaceVariant", color="onSurfaceVariant"),
                         ElevatedButton("保存", on_click=save_data, bgcolor="primary", color="onPrimary"),
                     ], alignment=MainAxisAlignment.END, spacing=20),

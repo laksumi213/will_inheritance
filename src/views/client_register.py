@@ -1,4 +1,7 @@
 # src/views/client_register.py
+import re
+from typing import Dict, List, Optional, Any
+
 from flet import (
     AppBar,
     Colors,
@@ -10,26 +13,31 @@ from flet import (
     FilePicker,
     FilePickerResultEvent,
     FontWeight,
+    Icon,
     Icons,
-    MainAxisAlignment,
     Page,
+    ProgressRing,
     Row,
     ScrollMode,
     SnackBar,
     Text,
     TextField,
     View,
+    border,
+    padding,
+    ButtonStyle,
+    alignment,
     dropdown,
+    MainAxisAlignment,
+    Control,
 )
 
-# 💡 修正: インポートパスを新しいディレクトリ構成 (src.components.business) に変更
-from src.components.business.contact_controls import (
-    add_new_contact_row,
-    collect_contacts,
-    create_contact_input_row,
-)
+# 共通設定とモデル
+from src.config import settings
+from src.models.database import SessionLocal
+from src.models.tables import Case
 
-# サービス層のインポート
+# サービス層
 from src.services.deceased_service import (
     add_new_case_for_client_registration,
     get_all_users,
@@ -37,356 +45,556 @@ from src.services.deceased_service import (
     get_next_case_number_service,
     update_case_folder_path,
     search_address_by_zip_api,
+    search_zip_by_address_api,
     is_case_number_duplicate,
 )
 
-# --- グローバルな UI 定義 ---
+# 日付ユーティリティ
+from src.utils.date_utils import on_date_blur_handler
 
-try:
-    USER_MAP = get_all_users()
-except Exception:
-    USER_MAP = {}
-
-USER_OPTIONS = [dropdown.Option(str(id), name) for id, name in USER_MAP.items()]
-USER_OPTIONS.insert(0, dropdown.Option("", "未割当"))
-
-# --- フォームコントロールの定義 ---
-
-# 案件情報
-case_number_field = TextField(
-    label="案件番号 *",
-    width=200,
-    read_only=False,
-)
-manager_field = Dropdown(label="担当者1", width=200, options=USER_OPTIONS)
-operator_field = Dropdown(label="担当者2", width=200, options=USER_OPTIONS)
-
-# 契約者情報 (Heirとして登録)
-name_last_field = TextField(label="契約者氏名 (姓) *", width=150, autofocus=True)
-name_first_field = TextField(label="契約者氏名 (名)", width=150)
-kana_last_field = TextField(label="ふりがな (姓)", width=150)
-kana_first_field = TextField(label="ふりがな (名)", width=150)
-rel_field = TextField(label="被相続人との続柄", width=200)
-hometown_field = TextField(label="本籍地 (契約者)")
-
-# 住所情報
-zip_field = TextField(label="郵便番号", width=150)
-pref_field = TextField(label="都道府県", width=150)
-city_field = TextField(label="市区町村", width=200)
-street_field = TextField(label="番地", width=150)
-building_field = TextField(label="建物名・部屋番号")
-
-# フォルダパス入力フィールド
-path_field = TextField(
-    label="フォルダ保存パス",
-    width=500,
-    value="",
+from src.components.business.contact_controls import (
+    add_new_contact_row,
+    collect_contacts,
+    create_contact_input_row,
 )
 
 
-# 連絡先入力の初期化ヘルパー
-def initialize_contact_column(is_email: bool) -> Column:
-    column = Column(controls=[], spacing=5)
-    # デフォルトで空の入力行を1つ追加
-    new_row, _ = create_contact_input_row(column, initial_value="", is_email=is_email)
-    column.controls.append(new_row)
-    return column
+class ClientRegisterView(View):
+    """新規案件（顧客）登録画面 View"""
 
-
-# グローバルスコープで Column を初期化
-phone_inputs_column = initialize_contact_column(is_email=False)
-email_inputs_column = initialize_contact_column(is_email=True)
-
-
-# --- メインの View 関数 ---
-
-def ClientRegisterView(page: Page):
-    # FilePicker の定義とオーバーレイへの追加
-    file_picker = FilePicker(on_result=lambda e: page.update())
-    if file_picker not in page.overlay:
-        page.overlay.append(file_picker)
-    page.update()
-
-    # ----------------------------------------------------
-    # FilePicker 結果ハンドラ
-    # ----------------------------------------------------
-    def get_directory_result(e: FilePickerResultEvent):
-        path_field.value = e.path if e.path else "パス設定をキャンセルしました"
-        page.update()
-
-    # フォルダ選択ダイアログを開く
-    def open_folder_dialog(e):
-        file_picker.on_result = get_directory_result
-        file_picker.get_directory_path(dialog_title="案件フォルダの保存先を選択")
-
-    # 担当者IDの取得ヘルパー
-    def _get_id_from_dropdown(value):
-        if value is None or value in ("", "None", "未割当"):
-            return None
+    def __init__(self, page: Page) -> None:
+        super().__init__(route="/client_register", scroll=ScrollMode.AUTO)
+        self.page: Page = page
+        
+        # --- 初期データのロード ---
         try:
-            return int(value)
-        except ValueError:
-            return None
+            self.user_map: Dict[int, str] = get_all_users()
+        except Exception:
+            self.user_map = {}
 
-    # 住所自動入力ロジック
-    def search_address_by_zip(e):
-        zip_code = zip_field.value
-        address_info = search_address_by_zip_api(zip_code)
+        # Dropdown用オプション生成
+        self.user_options: List[dropdown.Option] = [
+            dropdown.Option(str(uid), name) for uid, name in self.user_map.items()
+        ]
+        self.user_options.insert(0, dropdown.Option("", "未割当"))
 
-        if address_info is None:
-            pref_field.value = "通信エラー"
-            city_field.value = ""
-            street_field.value = ""
-        elif address_info == {}:
-            pref_field.value = "住所が見つかりません"
-            city_field.value = ""
-            street_field.value = ""
-        else:
-            pref_field.value = address_info.get("prefecture", "")
-            city_field.value = address_info.get("city_ward_town", "")
-            street_field.value = address_info.get("street_address", "")
+        # --- UIコンポーネントの初期化 ---
+        self._init_components()
+        
+        # --- レイアウト構築 ---
+        self.appbar = AppBar(
+            title=Text("✨ 新規案件登録"),
+            bgcolor="surfaceVariant", # テーマ追従
+            color="onSurfaceVariant",
+        )
 
-        page.update()
-        street_field.focus()
-
-    zip_field.on_blur = search_address_by_zip
-
-    # --- 保存処理 ---
-    def save_and_go_to_detail(e):
-        case_num_input = case_number_field.value.strip()
-        name_last_input = name_last_field.value.strip()
-        new_path = path_field.value.strip()
-
-        # 1. 必須項目チェック
-        if not case_num_input or not name_last_input:
-            page.open(
-                SnackBar(
-                    content=Text(
-                        "必須項目（案件番号、契約者氏名(姓)）を入力してください。",
-                        color=Colors.WHITE,
-                    ),
-                    bgcolor=Colors.RED_700,
-                    duration=3000,
-                )
-            )
-            page.update()
-            return
-
-        # 2. 案件番号の重複チェック
-        if is_case_number_duplicate(case_num_input):
-            page.open(
-                SnackBar(
-                    content=Text(
-                        f"案件番号 '{case_num_input}' は既に存在しますので、次の番号を自動で入力しました。",
-                        color=Colors.WHITE,
-                    ),
-                    bgcolor=Colors.RED_700,
-                    duration=3000,
-                )
-            )
-            case_number_field.value = get_next_case_number_service()
-            case_number_field.focus()
-            page.update()
-            return
-
-        # 3. 連絡先情報の収集
-        collected_data = {
-            "phone_contacts": collect_contacts(phone_inputs_column),
-            "email_contacts": collect_contacts(email_inputs_column),
-        }
-
-        # 4. サービス層呼び出しとデータベース登録
-        try:
-            new_deceased_id = add_new_case_for_client_registration(
-                case_number=case_num_input,
-                name=f"{name_last_input} {name_first_field.value.strip()}",
-                kana_last=kana_last_field.value.strip(),
-                kana_first=kana_first_field.value.strip(),
-                rel=rel_field.value.strip(),
-                hometown=hometown_field.value.strip(),
-                zip_code=zip_field.value.strip(),
-                pref=pref_field.value.strip(),
-                city=city_field.value.strip(),
-                street=street_field.value.strip(),
-                building=building_field.value.strip(),
-                dob=None,
-                dod=None,
-                manager_id=_get_id_from_dropdown(manager_field.value),
-                operator_id=_get_id_from_dropdown(operator_field.value),
-                phone_contacts=collected_data["phone_contacts"],
-                email_contacts=collected_data["email_contacts"],
-            )
-
-            if new_deceased_id > 0:
-                # Case ID を取得して遷移する
-                case_id_for_path = get_case_id_by_deceased_id(new_deceased_id)
-
-                # 4-1. フォルダパスの更新
-                if (
-                    case_id_for_path
-                    and new_path
-                    and new_path != "パス設定をキャンセルしました"
-                ):
-                    update_case_folder_path(
-                        case_id=case_id_for_path,
-                        folder_path=new_path,
-                    )
-
-                # 5. 成功通知と画面遷移
-                page.open(
-                    SnackBar(
-                        content=Text("新規案件を登録しました。", color=Colors.WHITE),
-                        bgcolor=Colors.GREEN_700,
-                        duration=1500,
-                    )
-                )
-                page.go(f"/detail/{case_id_for_path}")
-            else:
-                raise Exception(
-                    "データベース登録に失敗しました。（サービス関数が負のIDを返しました）"
-                )
-
-        except Exception as ex:
-            print(f"保存エラー: {ex}")
-            page.open(
-                SnackBar(
-                    content=Text(
-                        f"保存中にエラーが発生しました: {ex}", color=Colors.WHITE
-                    ),
-                    bgcolor=Colors.RED_700,
-                    duration=3000,
-                )
-            )
-            page.update()
-
-    # --- UI レイアウト構築 ---
-    return View(
-        "/client_register",
-        [
-            AppBar(
-                title=Text("✨ 新規案件登録 (契約者情報のみ)"),
-                bgcolor=Colors.BLUE_GREY_700,
-            ),
+        self.controls = [
             Container(
-                padding=30,
+                padding=padding.all(30),
+                expand=True,
                 content=Column(
-                    [
-                        Text("案件情報", weight=FontWeight.BOLD, size=18),
-                        Row([case_number_field, manager_field, operator_field]),
+                    controls=[
+                        Text("新しい相続案件を登録します。", size=16, weight=FontWeight.BOLD),
+                        
+                        # 1. AI自動入力セクション
+                        self._create_ai_section(),
+                        Divider(height=20, color=Colors.TRANSPARENT),
+
+                        # 2. 案件情報
+                        Text("案件情報", weight=FontWeight.BOLD, size=18, color="primary"),
+                        Row([self.case_number_field, self.manager_field, self.operator_field]),
                         Divider(),
-                        Text(
-                            "👤 契約者（依頼者）情報 *", weight=FontWeight.BOLD, size=18
-                        ),
-                        Row([name_last_field, name_first_field]),
-                        Row([kana_last_field, kana_first_field]),
-                        Row([rel_field]),
-                        Row([hometown_field]),
+
+                        # 3. 契約者情報
+                        Text("👤 契約者（依頼者）情報 *", weight=FontWeight.BOLD, size=18, color="primary"),
+                        Row([self.name_last_field, self.name_first_field]),
+                        Row([self.kana_last_field, self.kana_first_field]),
+                        Row([self.rel_field]),
+                        Row([self.hometown_field]),
                         Divider(),
-                        Text("📞 連絡先情報", weight=FontWeight.BOLD, size=18),
-                        # 電話番号
-                        Row(
-                            [
-                                Text("電話番号", size=14, weight=FontWeight.W_500),
-                                ElevatedButton(
-                                    "追加",
-                                    icon=Icons.ADD,
-                                    on_click=lambda e: add_new_contact_row(
-                                        e, phone_inputs_column, is_email=False
-                                    ),
-                                ),
-                            ],
-                            alignment=MainAxisAlignment.SPACE_BETWEEN,
-                        ),
-                        phone_inputs_column,
-                        # メールアドレス
-                        Row(
-                            [
-                                Text(
-                                    "メールアドレス", size=14, weight=FontWeight.W_500
-                                ),
-                                ElevatedButton(
-                                    "追加",
-                                    icon=Icons.ADD,
-                                    on_click=lambda e: add_new_contact_row(
-                                        e, email_inputs_column, is_email=True
-                                    ),
-                                ),
-                            ],
-                            alignment=MainAxisAlignment.SPACE_BETWEEN,
-                        ),
-                        email_inputs_column,
+
+                        # 4. 連絡先情報
+                        Text("📞 連絡先情報", weight=FontWeight.BOLD, size=18, color="primary"),
+                        self._create_phone_section(),
+                        self.phone_inputs_column,
+                        self._create_email_section(),
+                        self.email_inputs_column,
                         Divider(),
-                        Text("🏠 現住所", weight=FontWeight.BOLD, size=18),
-                        Row([zip_field, pref_field, city_field]),
-                        Row([street_field, building_field]),
+
+                        # 5. 現住所
+                        Text("🏠 現住所", weight=FontWeight.BOLD, size=18, color="primary"),
+                        # 💡 住所貼り付けフィールド
+                        self.paste_address_field,
+                        Row([self.zip_field, self.pref_field, self.city_field]),
+                        Row([self.street_field, self.building_field]),
                         Divider(height=30),
-                        # フォルダパス設定
-                        Text("📁 案件フォルダ設定", weight=FontWeight.BOLD, size=18),
-                        Row(
-                            [
-                                path_field,
-                                ElevatedButton(
-                                    "フォルダ選択",
-                                    icon=Icons.FOLDER_OPEN,
-                                    on_click=open_folder_dialog,
-                                ),
-                            ]
+
+                        # 6. フォルダパス
+                        Text("📁 案件フォルダ設定", weight=FontWeight.BOLD, size=18, color="primary"),
+                        Row([
+                            self.path_field,
+                            ElevatedButton(
+                                "フォルダ選択",
+                                icon=Icons.FOLDER_OPEN,
+                                on_click=self.open_folder_dialog,
+                                bgcolor="secondaryContainer",
+                                color="onSecondaryContainer",
+                            ),
+                        ]),
+                        
+                        Divider(height=30, thickness=2),
+
+                        # 7. 紹介・SOL連携情報
+                        Container(
+                            content=Column([
+                                Row([
+                                    Icon(Icons.NEW_RELEASES, color="tertiary"), 
+                                    Text("紹介・SOL連携情報", weight=FontWeight.BOLD, size=18, color="onTertiaryContainer")
+                                ]),
+                                Row([self.sol_case_number, self.introduction_date, self.consent_date], wrap=True),
+                                Row([self.sec_branch_name, self.sec_rep_name], wrap=True),
+                            ], spacing=15),
+                            padding=15,
+                            bgcolor="tertiaryContainer",
+                            border_radius=8,
+                            border=border.all(1, "tertiary")
                         ),
+
                         Divider(height=30),
+
+                        # 8. アクションボタン
                         Row(
-                            [
+                            controls=[
                                 ElevatedButton(
-                                    "キャンセル", on_click=lambda e: page.go("/")
+                                    "キャンセル", 
+                                    on_click=lambda e: self.page.go("/"),
+                                    bgcolor="surfaceVariant",
+                                    color="onSurfaceVariant",
                                 ),
                                 ElevatedButton(
                                     "保存して詳細へ進む",
-                                    on_click=save_and_go_to_detail,
+                                    on_click=self.save_and_go_to_detail,
                                     icon=Icons.SAVE,
-                                    bgcolor=Colors.BLUE_600,
+                                    style=ButtonStyle(
+                                        bgcolor={"": "primary"},
+                                        color={"": "onPrimary"},
+                                        padding=20
+                                    ),
                                 ),
                             ],
                             alignment=MainAxisAlignment.END,
                             spacing=15,
                         ),
-                    ]
+                    ],
+                    scroll=ScrollMode.AUTO,
+                    spacing=15,
                 ),
+            )
+        ]
+
+    def _init_components(self) -> None:
+        """UIコンポーネントの定義"""
+        self.file_picker = FilePicker(on_result=self.on_file_picked)
+        self.folder_picker = FilePicker(on_result=self.get_directory_result)
+        self.page.overlay.extend([self.file_picker, self.folder_picker])
+
+        # 案件情報
+        self.case_number_field = TextField(
+            label="案件番号 *",
+            width=200,
+            value=get_next_case_number_service(),
+            read_only=False,
+        )
+
+        # 担当者1の初期値設定 ("管理者 太郎" を検索)
+        default_manager_id = ""
+        for uid, name in self.user_map.items():
+            if "管理者 太郎" in name:
+                default_manager_id = str(uid)
+                break
+
+        self.manager_field = Dropdown(
+            label="担当者1", 
+            width=200, 
+            options=self.user_options,
+            value=default_manager_id  # 初期値を設定
+        )
+        self.operator_field = Dropdown(label="担当者2", width=200, options=self.user_options)
+
+        # 契約者情報
+        self.name_last_field = TextField(label="契約者氏名 (姓) *", width=150)
+        self.name_first_field = TextField(label="契約者氏名 (名)", width=150)
+        self.kana_last_field = TextField(label="ふりがな (姓)", width=150)
+        self.kana_first_field = TextField(label="ふりがな (名)", width=150)
+        self.rel_field = TextField(label="被相続人との続柄", width=200)
+        self.hometown_field = TextField(label="本籍地 (契約者)")
+
+        # 住所情報
+        self.paste_address_field = TextField(
+            label="📍 住所貼り付け (ここに入力すると自動分割されます)",
+            width=600,
+            on_change=self.parse_and_fill_address,
+            text_size=13,
+            color="onSecondaryContainer",
+            bgcolor="secondaryContainer",
+            border_color=Colors.TRANSPARENT
+        )
+        self.zip_field = TextField(label="郵便番号", width=150, on_blur=self.search_address_by_zip)
+        self.pref_field = TextField(label="都道府県", width=150, on_blur=self.search_zip_by_address)
+        self.city_field = TextField(label="市区町村", width=200, on_blur=self.search_zip_by_address)
+        self.street_field = TextField(label="番地", width=150, on_blur=self.search_zip_by_address)
+        self.building_field = TextField(label="建物名・部屋番号")
+
+        # フォルダパス
+        self.path_field = TextField(label="フォルダ保存パス", width=500, value="")
+
+        # 連絡先
+        self.phone_inputs_column = Column(controls=[], spacing=5)
+        self.email_inputs_column = Column(controls=[], spacing=5)
+        self._add_initial_contacts(self.phone_inputs_column, is_email=False)
+        self._add_initial_contacts(self.email_inputs_column, is_email=True)
+
+        # SOL連携等
+        self.sol_case_number = TextField(label="SOL案件No", hint_text="例: S12345", width=200)
+        self.introduction_date = TextField(
+            label="紹介日", 
+            hint_text="YYYY-MM-DD", 
+            width=200,
+            on_blur=on_date_blur_handler
+        )
+        self.sec_branch_name = TextField(label="証券会社支店名", hint_text="例: 東京支店", width=250)
+        self.sec_rep_name = TextField(label="証券会社担当者名", hint_text="例: 山田 太郎", width=250)
+        self.consent_date = TextField(
+            label="同意書日付", 
+            hint_text="YYYY-MM-DD", 
+            width=200,
+            on_blur=on_date_blur_handler
+        )
+
+        # AIステータス用
+        self.upload_indicator = ProgressRing(visible=False, width=20, height=20, color="secondary")
+        self.upload_status_text = Text("", size=14, color="secondary")
+
+    def _create_ai_section(self) -> Container:
+        """AI自動入力エリアの作成"""
+        return Container(
+            content=Column(
+                [
+                    Row([
+                        Icon(Icons.AUTO_AWESOME, color="outline"),
+                        Text("AI自動入力 (無効)", size=16, weight=FontWeight.BOLD, color="outline"),
+                    ]),
+                    Text("現在、AI機能は利用できません。", size=14, color="outline"),
+                    Row([
+                        ElevatedButton(
+                            "PDFファイルを選択",
+                            icon=Icons.UPLOAD_FILE,
+                            on_click=lambda _: self.page.open(SnackBar(Text("AI機能は現在無効化されています。"), bgcolor=Colors.GREY)),
+                            style=ButtonStyle(
+                                bgcolor="surfaceVariant",
+                                color="onSurfaceVariant",
+                            ),
+                            disabled=True # 無効化
+                        ),
+                        self.upload_indicator,
+                        self.upload_status_text,
+                    ], vertical_alignment="center", spacing=10),
+                ],
+                spacing=5,
             ),
-        ],
-        scroll=ScrollMode.AUTO,
-    )
+            padding=15,
+            border=border.all(1, "outlineVariant"),
+            border_radius=8,
+            bgcolor="surfaceVariant",
+        )
 
+    def _create_phone_section(self) -> Row:
+        return Row(
+            [
+                Text("電話番号", size=14, weight=FontWeight.W_500),
+                ElevatedButton(
+                    "追加",
+                    icon=Icons.ADD,
+                    on_click=lambda e: add_new_contact_row(e, self.phone_inputs_column, is_email=False),
+                    bgcolor="secondaryContainer",
+                    color="onSecondaryContainer",
+                ),
+            ],
+            alignment=MainAxisAlignment.SPACE_BETWEEN,
+        )
 
+    def _create_email_section(self) -> Row:
+        return Row(
+            [
+                Text("メールアドレス", size=14, weight=FontWeight.W_500),
+                ElevatedButton(
+                    "追加",
+                    icon=Icons.ADD,
+                    on_click=lambda e: add_new_contact_row(e, self.email_inputs_column, is_email=True),
+                    bgcolor="secondaryContainer",
+                    color="onSecondaryContainer",
+                ),
+            ],
+            alignment=MainAxisAlignment.SPACE_BETWEEN,
+        )
+
+    def _add_initial_contacts(self, column: Column, is_email: bool) -> None:
+        new_row, _ = create_contact_input_row(column, initial_value="", is_email=is_email)
+        column.controls.append(new_row)
+
+    # --- 住所自動分割ロジック ---
+    def parse_and_fill_address(self, e):
+        """住所貼り付けフィールドの変更時に自動分割してセットする"""
+        full_address = self.paste_address_field.value
+        if not full_address:
+            return
+        
+        # 全角スペースを半角に
+        full_address = full_address.replace("　", " ").strip()
+
+        # 1. 都道府県の抽出
+        # 2〜3文字の都道府県名 + (都|道|府|県)
+        match_pref = re.match(r'(.*?([都道府県]))(.+)', full_address)
+        if match_pref:
+            pref = match_pref.group(1)
+            rest = match_pref.group(3).strip()
+            
+            self.pref_field.value = pref
+            
+            # 2. 市区町村の抽出
+            # 郡、市、区、町、村 で終わる最短の文字列
+            match_city = re.match(r'^(.+?[郡市区町村])(.+)', rest)
+            if match_city:
+                city = match_city.group(1)
+                rest_street = match_city.group(2).strip()
+                
+                self.city_field.value = city
+                
+                # 3. 番地と建物の分離
+                # 空白がある場合、そこで分割
+                parts = rest_street.split(" ", 1)
+                street = parts[0]
+                building = parts[1] if len(parts) > 1 else ""
+                
+                self.street_field.value = street
+                self.building_field.value = building
+            else:
+                # 市区町村が特定できない場合、残りを市区町村に入れるか番地に入れるか
+                # ここでは残りを番地に入れる
+                self.city_field.value = ""
+                self.street_field.value = rest
+                self.building_field.value = ""
+        
+        # 4. 郵便番号の自動検索
+        # 💡 修正: 分割結果から「都+市+町+番地」を再構築してAPIへ
+        # 番地を含めるとAPIが厳密すぎてヒットしない場合があるため、まずはフルでトライし、ダメなら「都+市」でトライするロジックが理想的だが、
+        # ここではまずフルで試す
+        full_addr_for_zip = f"{self.pref_field.value}{self.city_field.value}{self.street_field.value}"
+        if full_addr_for_zip:
+             try:
+                zip_code = search_zip_by_address_api(full_addr_for_zip)
+                
+                # 失敗した場合、番地なしでトライするフォールバック
+                if not zip_code:
+                    fallback_addr = f"{self.pref_field.value}{self.city_field.value}"
+                    zip_code = search_zip_by_address_api(fallback_addr)
+                
+                if zip_code:
+                    self.zip_field.value = zip_code
+             except Exception as ex:
+                print(f"Auto zip search failed: {ex}")
+
+        self.page.update()
+
+    # --- 住所自動入力ロジック ---
+    def search_address_by_zip(self, e) -> None:
+        zip_code = self.zip_field.value
+        if not zip_code:
+            return
+            
+        try:
+            address_info = search_address_by_zip_api(zip_code)
+            
+            if address_info is None:
+                self.pref_field.value = "通信エラー"
+            elif address_info == {}:
+                self.page.open(SnackBar(Text("住所が見つかりませんでした"), bgcolor=Colors.RED))
+            else:
+                self.pref_field.value = address_info.get("prefecture", "")
+                self.city_field.value = address_info.get("city_ward_town", "")
+                self.street_field.value = address_info.get("street_address", "")
+                self.street_field.focus()
+
+        except Exception as ex:
+             self.page.open(SnackBar(Text(f"住所検索エラー: {ex}"), bgcolor=Colors.RED))
+        
+        self.page.update()
+
+    def search_zip_by_address(self, e) -> None:
+        """住所入力から郵便番号を検索"""
+        pref = self.pref_field.value or ""
+        city = self.city_field.value or ""
+        street = self.street_field.value or ""
+        
+        if not pref or not city:
+            return
+
+        if self.zip_field.value:
+            return
+
+        full_address = f"{pref}{city}{street}"
+        try:
+            zip_code = search_zip_by_address_api(full_address)
+            # フォールバック
+            if not zip_code:
+                zip_code = search_zip_by_address_api(f"{pref}{city}")
+            
+            if zip_code:
+                self.zip_field.value = zip_code
+                self.page.update()
+        except Exception as ex:
+            print(f"Zip search error: {ex}")
+
+    # --- フォルダ選択ロジック ---
+    def get_directory_result(self, e: FilePickerResultEvent) -> None:
+        self.path_field.value = e.path if e.path else ""
+        self.page.update()
+
+    def open_folder_dialog(self, e) -> None:
+        self.folder_picker.get_directory_path(dialog_title="案件フォルダの保存先を選択")
+
+    # --- AI処理ロジック (無効化) ---
+    async def on_file_picked(self, e: FilePickerResultEvent) -> None:
+        """AI機能は無効化されています"""
+        self.page.open(SnackBar(Text("AI機能は現在利用できません。"), bgcolor=Colors.GREY))
+        return
+
+    async def _process_pdf_with_ai(self, file_path: str) -> None:
+        """AI処理 (ダミー)"""
+        pass
+
+    def _parse_ai_response(self, text_response: str) -> Dict[str, Any]:
+        return {}
+
+    def _fill_form_with_data(self, data: Dict[str, Any]) -> None:
+        pass
+
+    def _reset_upload_ui(self) -> None:
+        pass
+
+    # --- 保存処理 ---
+    def save_and_go_to_detail(self, e) -> None:
+        case_num_input = self.case_number_field.value.strip()
+        name_last_input = self.name_last_field.value.strip()
+        new_path = self.path_field.value.strip()
+
+        # 1. 必須項目チェック
+        if not case_num_input or not name_last_input:
+            self.page.open(SnackBar(Text("必須項目（案件番号、契約者氏名(姓)）を入力してください。"), bgcolor=Colors.RED))
+            self.page.update()
+            return
+
+        # 2. 案件番号の重複チェック
+        try:
+            if is_case_number_duplicate(case_num_input):
+                self.page.open(SnackBar(Text(f"案件番号 '{case_num_input}' は既に存在します。"), bgcolor=Colors.RED))
+                self.page.update()
+                return
+        except Exception as ex:
+             self.page.open(SnackBar(Text(f"DBエラー: {ex}"), bgcolor=Colors.RED))
+             self.page.update()
+             return
+
+        # 3. 連絡先情報の収集
+        collected_data = {
+            "phone_contacts": collect_contacts(self.phone_inputs_column),
+            "email_contacts": collect_contacts(self.email_inputs_column),
+        }
+
+        # 担当者ID取得ヘルパー
+        def _get_id(val: Optional[str]) -> Optional[int]:
+            if val and val not in ["", "未割当"]:
+                return int(val)
+            return None
+
+        # 4. データベース登録
+        try:
+            new_deceased_id = add_new_case_for_client_registration(
+                case_number=case_num_input,
+                name=f"{name_last_input} {self.name_first_field.value.strip()}",
+                kana_last=self.kana_last_field.value.strip(),
+                kana_first=self.kana_first_field.value.strip(),
+                rel=self.rel_field.value.strip(),
+                hometown=self.hometown_field.value.strip(),
+                zip_code=self.zip_field.value.strip(),
+                pref=self.pref_field.value.strip(),
+                city=self.city_field.value.strip(),
+                street=self.street_field.value.strip(),
+                building=self.building_field.value.strip(),
+                dob=None,
+                dod=None,
+                manager_id=_get_id(self.manager_field.value),
+                operator_id=_get_id(self.operator_field.value),
+                phone_contacts=collected_data["phone_contacts"],
+                email_contacts=collected_data["email_contacts"],
+            )
+
+            if new_deceased_id > 0:
+                case_id = get_case_id_by_deceased_id(new_deceased_id)
+
+                if case_id and new_path:
+                    update_case_folder_path(case_id=case_id, folder_path=new_path)
+
+                self._update_case_additional_info(case_id)
+
+                self.page.open(SnackBar(Text("新規案件を登録しました。"), bgcolor=Colors.GREEN))
+                self.page.go(f"/detail/{case_id}")
+            else:
+                raise Exception("データベース登録処理でIDが返されませんでした。")
+
+        except Exception as ex:
+            print(f"保存エラー: {ex}")
+            self.page.open(SnackBar(Text(f"保存エラー: {str(ex)}"), bgcolor=Colors.RED))
+            self.page.update()
+
+    def _update_case_additional_info(self, case_id: int) -> None:
+        if not case_id: return
+
+        db = SessionLocal()
+        try:
+            case = db.query(Case).get(case_id)
+            if case:
+                case.sol_case_number = self.sol_case_number.value
+                case.referral_sec_branch_name = self.sec_branch_name.value
+                case.referral_sec_rep_name = self.sec_rep_name.value
+                
+                def parse_date(d_str: str) -> Optional[datetime.date]:
+                    if not d_str: return None
+                    try:
+                        return datetime.strptime(d_str, "%Y-%m-%d").date()
+                    except ValueError:
+                        try:
+                            # 万が一手入力で不正な形式が残っていた場合のフェイルセーフ
+                            from src.utils.date_utils import parse_all_flexible_date
+                            return parse_all_flexible_date(d_str)
+                        except:
+                            return None
+
+                case.introduction_date = parse_date(self.introduction_date.value)
+                case.consent_date = parse_date(self.consent_date.value)
+                
+                db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"Additional Info Update Error: {e}")
+        finally:
+            db.close()
+
+# --- 互換性のためのダミー関数 ---
 def reset_all_global_fields():
-    """ホーム画面からの遷移時に、全てのグローバルな入力フィールドとリストをクリアする"""
-    
-    # 案件情報フィールドのリセット
-    case_number_field.value = get_next_case_number_service()
-    manager_field.value = ""
-    operator_field.value = ""
-    
-    # 契約者情報フィールドのリセット
-    name_last_field.value = ""
-    name_first_field.value = ""
-    kana_last_field.value = ""
-    kana_first_field.value = ""
-    rel_field.value = ""
-    hometown_field.value = ""
-    
-    # 住所情報フィールドのリセット
-    zip_field.value = ""
-    pref_field.value = ""
-    city_field.value = ""
-    street_field.value = ""
-    building_field.value = ""
-    
-    # フォルダパスのリセット
-    path_field.value = ""
-    
-    # 連絡先リストをクリアし、デフォルトの空の行を1つ再追加
-    phone_inputs_column.controls.clear()
-    new_row_p, _ = create_contact_input_row(phone_inputs_column, initial_value="", is_email=False)
-    phone_inputs_column.controls.append(new_row_p)
-    
-    email_inputs_column.controls.clear()
-    new_row_e, _ = create_contact_input_row(email_inputs_column, initial_value="", is_email=True)
-    email_inputs_column.controls.append(new_row_e)
+    """
+    以前の仕様との互換性を保つためのダミー関数。
+    現在はClientRegisterViewクラス内で状態が管理され、
+    画面遷移時に新しいインスタンスが生成されるため、明示的なリセットは不要です。
+    """
+    pass

@@ -34,6 +34,7 @@ from flet import (
     View,
     border,
     dropdown,
+    padding,
 )
 
 # Selenium / Automation Imports
@@ -67,8 +68,8 @@ from src.services.deceased_service import (
     update_case_folder_path,
     delete_case_and_all_related_data,
     delete_heir,
-    update_case_number,  # 案件番号更新用
-    normalize_folder_path, # パス正規化用
+    update_case_number,
+    normalize_folder_path,
 )
 
 
@@ -374,6 +375,9 @@ def DeceasedDetailView(page: Page, case_id: int) -> View:
     # 表示用文字列の生成
     if deceased and not is_new_client_case:
         full_name = f"{deceased.name_last} {deceased.name_first}"
+        # 💡 追加: 被相続人のふりがなを取得
+        full_kana = f"{deceased.name_last_kana or ''} {deceased.name_first_kana or ''}".strip()
+        
         dob_date_obj = deceased.date_of_birth
         dob_display_str = (
             f"{dob_date_obj.strftime('%Y/%m/%d')} ({convert_seireki_to_wareki(dob_date_obj)})"
@@ -386,11 +390,13 @@ def DeceasedDetailView(page: Page, case_id: int) -> View:
         )
     elif is_new_client_case or is_new_deceased or deceased is None:
         full_name = "【未登録】"
+        full_kana = ""
         dob_display_str = "N/A"
         dod_display_str = "N/A"
         # ダミーオブジェクト生成
         deceased = type("Dummy", (object,), {
-            "id": 0, "name_last": "", "name_first": "", "heirs": [], "case": None, "last_address_id": None
+            "id": 0, "name_last": "", "name_first": "", "name_last_kana": "", "name_first_kana": "",
+            "heirs": [], "case": None, "last_address_id": None
         })()
         case = None
 
@@ -590,6 +596,8 @@ def DeceasedDetailView(page: Page, case_id: int) -> View:
 
         for heir in current_deceased.heirs:
             heir_name = f"{heir.name_last} {heir.name_first}"
+            # 💡 追加: 相続人のふりがなを取得
+            heir_kana = f"{heir.name_last_kana or ''} {heir.name_first_kana or ''}".strip()
             mark = "【契約者】" if getattr(heir, "is_contracting_party", False) else ""
             
             # 連絡先・住所取得ロジック
@@ -630,18 +638,19 @@ def DeceasedDetailView(page: Page, case_id: int) -> View:
             # --- 表示用行の作成 ---
             heirs_controls.controls.append(
                 Row([
-                    # IDは削除しました
-                    
-                    # 氏名
+                    # 氏名 (フリガナ追加)
                     Container(
-                        content=Text(f"{heir_name} {mark}", width=180, weight=FontWeight.BOLD),
+                        content=Column([
+                            Text(f"{heir_name} {mark}", width=180, weight=FontWeight.BOLD),
+                            Text(heir_kana, width=180, size=11, color=Colors.ON_SURFACE_VARIANT) if heir_kana else Container()
+                        ], spacing=0),
                         on_click=lambda e, t=heir_name: copy_to_clipboard_and_notify(e, page, t),
                         tooltip="氏名をコピー"
                     ),
                     # 続柄
                     Text(heir.relationship_type or "-", width=60),
 
-                    # メールアドレス (追加)
+                    # メールアドレス
                     Container(
                         content=Text(f"📧 {email}", width=200, size=13, overflow="ellipsis"),
                         on_click=lambda e, t=email: copy_to_clipboard_and_notify(e, page, t),
@@ -655,7 +664,7 @@ def DeceasedDetailView(page: Page, case_id: int) -> View:
                         tooltip="電話番号をコピー"
                     ),
                     
-                    # 💡 郵便番号 (追加)
+                    # 郵便番号
                     Container(
                         content=Text(zip_str, width=90, size=13),
                         on_click=lambda e, t=zip_str: copy_to_clipboard_and_notify(e, page, t),
@@ -756,16 +765,41 @@ def DeceasedDetailView(page: Page, case_id: int) -> View:
                         )
                     ]),
                     Row([
-                        Container(
-                            content=Text(f"氏名: {full_name}", size=16, weight=FontWeight.BOLD), 
-                            on_click=lambda e: copy_to_clipboard_and_notify(e, page, full_name),
-                            tooltip="クリックして氏名をコピー"
-                        ),
+                        # 💡 修正: 氏名とフリガナブロック
                         Column([
-                            Text(f"生年月日: {dob_display_str}", size=12), 
-                            Text(f"死亡日: {dod_display_str}", size=12)
-                        ]),
-                    ]),
+                            Container(
+                                content=Text(full_name, size=16, weight=FontWeight.BOLD),
+                                on_click=lambda e: copy_to_clipboard_and_notify(e, page, full_name),
+                                tooltip="氏名をコピー"
+                            ),
+                            Container(
+                                content=Text(f"({full_kana})", size=12, color=Colors.ON_SURFACE_VARIANT),
+                                on_click=lambda e: copy_to_clipboard_and_notify(e, page, full_kana),
+                                tooltip="フリガナをコピー",
+                                padding=padding.only(left=2)
+                            ) if full_kana else Container()
+                        ], spacing=2),
+
+                        Container(width=30), # 氏名と日付の間隔
+
+                        # 💡 修正: 日付ブロック (横並び) (クリップボード機能追加)
+                        Row([
+                            Container(
+                                content=Text(f"生年月日: {dob_display_str}", size=12),
+                                on_click=lambda e: copy_to_clipboard_and_notify(e, page, dob_display_str),
+                                tooltip="生年月日をコピー"
+                            ),
+                            Container(width=15),
+                            Container(
+                                content=Text(f"死亡日: {dod_display_str}", size=12),
+                                on_click=lambda e: copy_to_clipboard_and_notify(e, page, dod_display_str),
+                                tooltip="死亡日をコピー"
+                            ),
+                        ])
+                    ], vertical_alignment=CrossAxisAlignment.CENTER),
+
+                    # 住所・郵便番号 (少し間を開けて配置)
+                    Container(height=10),
                     Row([
                         Container(
                             content=Text(deceased_zip_code, weight=FontWeight.BOLD, color=Colors.PRIMARY), 
