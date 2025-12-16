@@ -255,6 +255,8 @@ pycparser==2.23
     # via cffi
 pycryptodome==3.23.0
     # via pdfminer
+pycryptodomex==3.23.0
+    # via pyzipper
 pydantic==2.12.5
     # via fastapi
     # via google-cloud-aiplatform
@@ -316,6 +318,8 @@ pywin32-ctypes==0.2.3
 pyyaml==6.0.3
     # via cookiecutter
     # via uvicorn
+pyzipper==0.3.6
+    # via will-inheritance
 qrcode==7.4.2
     # via flet-cli
 repath==0.9.0
