@@ -268,75 +268,107 @@ class RealEstateEditView(Column):
     def _open_image_preview(self, first_image_path: str):
         """画像プレビューダイアログを開く"""
         if not first_image_path or not os.path.exists(first_image_path):
+            self.page.open(SnackBar(Text("画像ファイルが見つかりません"), bgcolor=Colors.RED))
             return
         
-        # ディレクトリ内の同シリーズ画像を取得する (registry_page_*.jpg)
+        # ディレクトリ内の同シリーズ画像を取得する 
         dir_path = Path(first_image_path).parent
-        # ファイル名パターン: registry_page_{num}.jpg
-        # globで取得し、ページ番号でソートする
-        files = list(dir_path.glob("registry_page_*.jpg"))
+        
+        # ファイル名パターン: registry_page_{num}.jpg (拡張子の大文字小文字対応)
+        files = []
+        patterns = ["registry_page_*.jpg", "registry_page_*.jpeg", "registry_page_*.png", 
+                    "registry_page_*.JPG", "registry_page_*.JPEG", "registry_page_*.PNG"]
+        
+        seen = set()
+        for p in patterns:
+            for f in dir_path.glob(p):
+                if str(f) not in seen:
+                    files.append(f)
+                    seen.add(str(f))
         
         if not files:
+            # パターンにマッチしない場合（1枚だけのアップロード画像など）、そのファイルのみを表示
             files = [Path(first_image_path)]
             
         # ページ番号順にソート (ファイル名末尾の数字を利用)
         def get_page_num(p: Path):
             try:
-                # "registry_page_10.jpg" -> "10"
-                return int(p.stem.split("_")[-1])
+                # "registry_page_10.jpg" -> "10" を取り出す 
+                stem = p.stem
+                num_part = stem.split("_")[-1]
+                return int(num_part)
             except ValueError:
                 return 0
         
         files.sort(key=get_page_num)
         
         self.preview_images = [str(f) for f in files]
-        self.preview_page_index = 0
+        
+        # 最初にクリックした画像がリストのどこにあるか特定し、そこから表示開始
+        try:
+            # パス文字列の正規化（Windows/Macの区切り文字差異を吸収して比較）
+            tgt = str(Path(first_image_path).resolve())
+            self.preview_page_index = 0
+            for i, p in enumerate(self.preview_images):
+                if str(Path(p).resolve()) == tgt:
+                    self.preview_page_index = i
+                    break
+        except:
+            self.preview_page_index = 0
+
         self.preview_scale = 1.0
         
-        # 初期表示更新
-        self._update_preview_content()
+        # 初期表示更新 (update_ui=False: ダイアログを開く前なのでupdate()は呼ばない)
+        self._update_preview_content(update_ui=False)
         self.preview_scale_slider.value = 1.0
         
         self.page.open(self.preview_dialog)
         self.page.update()
 
-    def _update_preview_content(self):
-        """プレビューダイアログの内容を現在の状態に合わせて更新"""
+    def _update_preview_content(self, update_ui: bool = True):
+        """
+        プレビューダイアログの内容を現在の状態に合わせて更新
+        :param update_ui: Trueの場合、コントロールの.update()を呼び出す。
+                          ダイアログを開く前はFalseにすること。
+        """
         if not self.preview_images:
             return
 
         current_src = self.preview_images[self.preview_page_index]
         total = len(self.preview_images)
         
+        # プロパティの更新
         self.preview_image_control.src = current_src
         self.preview_image_control.scale = self.preview_scale
-        
         self.preview_page_text.value = f"{self.preview_page_index + 1} / {total}"
-        
         self.preview_prev_btn.disabled = (self.preview_page_index == 0)
         self.preview_next_btn.disabled = (self.preview_page_index == total - 1)
         
-        # コントロールの更新 (ダイアログ表示中はこれで反映される)
-        self.preview_image_control.update()
-        self.preview_page_text.update()
-        self.preview_prev_btn.update()
-        self.preview_next_btn.update()
+        # コントロールがページにマウントされている場合のみupdateを呼ぶ
+        if update_ui:
+            self.preview_image_control.update()
+            self.preview_page_text.update()
+            self.preview_prev_btn.update()
+            self.preview_next_btn.update()
 
     def _prev_preview_page(self, e):
         if self.preview_page_index > 0:
             self.preview_page_index -= 1
-            self._update_preview_content()
+            self._update_preview_content(update_ui=True)
 
     def _next_preview_page(self, e):
         if self.preview_page_index < len(self.preview_images) - 1:
             self.preview_page_index += 1
-            self._update_preview_content()
+            self._update_preview_content(update_ui=True)
 
     def _on_preview_scale_change(self, e):
         """プレビュー画像のズーム変更"""
-        self.preview_scale = float(e.control.value)
-        self.preview_image_control.scale = self.preview_scale
-        self.preview_image_control.update()
+        try:
+            self.preview_scale = float(e.control.value)
+            self.preview_image_control.scale = self.preview_scale
+            self.preview_image_control.update()
+        except Exception as ex:
+            print(f"Zoom Error: {ex}")
 
     def _close_preview_dialog(self, e):
         self.page.close(self.preview_dialog)

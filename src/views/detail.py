@@ -1,5 +1,4 @@
 # src/views/detail.py
-
 import threading
 import time
 import os
@@ -633,22 +632,32 @@ def DeceasedDetailView(page: Page, case_id: int) -> View:
             # 住所
             addr_str = f"{address_info.get('prefecture', '')}{address_info.get('city_ward_town', '')}{address_info.get('street_address', '')}"
             if address_info.get("building_name"):
-                addr_str += f" ({address_info.get('building_name')})"
+                addr_str += f" ({address_info.get("building_name")})"
             
             # --- 表示用行の作成 ---
             heirs_controls.controls.append(
                 Row([
-                    # 氏名 (フリガナ追加)
-                    Container(
-                        content=Column([
-                            Text(f"{heir_name} {mark}", width=180, weight=FontWeight.BOLD),
-                            Text(heir_kana, width=180, size=11, color=Colors.ON_SURFACE_VARIANT) if heir_kana else Container()
-                        ], spacing=0),
-                        on_click=lambda e, t=heir_name: copy_to_clipboard_and_notify(e, page, t),
-                        tooltip="氏名をコピー"
-                    ),
+                    # 氏名とふりがなブロック
+                    Column([
+                        Container(
+                            content=Text(f"{heir_name} {mark}", width=180, weight=FontWeight.BOLD),
+                            on_click=lambda e, t=heir_name: copy_to_clipboard_and_notify(e, page, t),
+                            tooltip="氏名をコピー"
+                        ),
+                        Container(
+                            content=Text(heir_kana, width=180, size=11, color=Colors.ON_SURFACE_VARIANT),
+                            on_click=lambda e, t=heir_kana: copy_to_clipboard_and_notify(e, page, t),
+                            tooltip="ふりがなをコピー",
+                            padding=padding.only(left=2)
+                        ) if heir_kana else Container()
+                    ], spacing=0),
+
                     # 続柄
-                    Text(heir.relationship_type or "-", width=60),
+                    Container(
+                        content=Text(heir.relationship_type or "-", width=60),
+                        on_click=lambda e, t=heir.relationship_type: copy_to_clipboard_and_notify(e, page, t) if t else None,
+                        tooltip="続柄をコピー"
+                    ),
 
                     # メールアドレス
                     Container(
