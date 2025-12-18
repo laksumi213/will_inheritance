@@ -32,6 +32,7 @@ from src.models.tables import (
     RealEstateAsset,
     Task,
     User,
+    BankAlias,
 )
 
 
@@ -138,6 +139,7 @@ def export_database_to_json(file_path: str) -> bool:
             "case_statuses": [],
             "account_types": [],
             "banks": [],
+            "bank_aliases": [],
             "branches": [],
             "coordinates": [],
         }
@@ -154,6 +156,16 @@ def export_database_to_json(file_path: str) -> bool:
             masters["banks"].append(
                 {"id": b.id, "bank_name": b.bank_name, "bank_code": b.bank_code}
             )
+        
+        # BankAliasのエクスポート
+        try:
+            for alias in session.query(BankAlias).all():
+                masters["bank_aliases"].append(
+                    {"id": alias.id, "alias_name": alias.alias_name, "bank_id": alias.bank_id}
+                )
+        except Exception:
+            print("Warning: BankAlias table not found or empty, skipping alias export.")
+
         for br in session.query(BranchMaster).all():
             masters["branches"].append(
                 {
@@ -170,7 +182,7 @@ def export_database_to_json(file_path: str) -> bool:
                     "label": co.label,
                     "x_point": co.x_point,
                     "y_point": co.y_point,
-                    "value": co.value,
+                    "value": co.value, # value, description はカラムとして存在するか要確認(tables.pyにはあった)
                     "description": co.description,
                 }
             )
@@ -209,6 +221,7 @@ def export_database_to_json(file_path: str) -> bool:
                 "deposit_required_amount": case.deposit_required_amount,
                 "deposit_paid_amount": case.deposit_paid_amount,
                 "is_paid_in_full": case.is_paid_in_full,
+                "sol_case_number": getattr(case, "sol_case_number", None), # 安全に取得
                 "deceased": None,
                 "heirs": [],
                 "financial_assets": [],
@@ -300,8 +313,22 @@ def export_database_to_json(file_path: str) -> bool:
                     }
                 )
 
+            # 【修正箇所】 RealEstateAsset のエクスポート処理
+            # municipality_name を廃止し、locationなどの実在カラムを使用
             for re_data in case.real_estates:
-                case_dict["real_estates"].append({"municipality_name": re_data.municipality_name})
+                case_dict["real_estates"].append({
+                    "property_type": re_data.property_type,
+                    "location": re_data.location,
+                    "lot_number": re_data.lot_number,
+                    "land_category": re_data.land_category,
+                    "land_area": re_data.land_area,
+                    "house_number": re_data.house_number,
+                    "structure": re_data.structure,
+                    "floor_area": re_data.floor_area,
+                    "ownership_share": re_data.ownership_share,
+                    "registry_pdf_path": re_data.registry_pdf_path,
+                    "registry_image_path": re_data.registry_image_path
+                })
 
             for lb in case.liabilities:
                 case_dict["liabilities"].append(
@@ -339,7 +366,7 @@ def export_database_to_json(file_path: str) -> bool:
             cases_list.append(case_dict)
 
         final_data = {
-            "version": "2.1",
+            "version": "2.2",
             "exported_at": datetime.datetime.now(),
             "masters": masters,
             "cases": cases_list,
@@ -369,7 +396,7 @@ def import_database_from_json(file_path: str) -> Tuple[bool, str]:
         with open(file_path, "r", encoding="utf-8") as f:
             file_content = f.read()
 
-        # 【修正】macOSではWindows特有のバックスラッシュ置換を行わない
+        # Windows特有のバックスラッシュ置換を行わない (Windows環境でもJSONは/が安全)
         if platform.system() == "Windows":
             file_content = re.sub(r'(?<!\\)\\(?![u"\\/bfnrt])', r"\\\\", file_content)
 
@@ -431,6 +458,24 @@ def import_database_from_json(file_path: str) -> Tuple[bool, str]:
                         BankMaster(id=b["id"], bank_name=b["bank_name"], bank_code=b["bank_code"])
                     )
             session.flush()
+        
+        # BankAliasのインポート
+        if "bank_aliases" in masters_data:
+            try:
+                for ba in masters_data["bank_aliases"]:
+                    parent_bank = session.query(BankMaster).get(ba["bank_id"])
+                    if parent_bank:
+                        existing = session.query(BankAlias).get(ba["id"])
+                        if existing:
+                            existing.alias_name = ba["alias_name"]
+                            existing.bank_id = ba["bank_id"]
+                        else:
+                            session.add(
+                                BankAlias(id=ba["id"], alias_name=ba["alias_name"], bank_id=ba["bank_id"])
+                            )
+                session.flush()
+            except Exception:
+                print("Warning: Skipping BankAlias import due to error/missing table.")
 
         if "branches" in masters_data:
             for br in masters_data["branches"]:
@@ -499,7 +544,6 @@ def import_database_from_json(file_path: str) -> Tuple[bool, str]:
             fixed_folder_path = None
 
             if raw_folder_path:
-                # macOS対応: バックスラッシュをスラッシュに置換
                 fixed_folder_path = raw_folder_path.replace("\\", "/")
 
             new_case = Case(
@@ -517,6 +561,7 @@ def import_database_from_json(file_path: str) -> Tuple[bool, str]:
                 deposit_required_amount=case_data.get("deposit_required_amount"),
                 deposit_paid_amount=case_data.get("deposit_paid_amount"),
                 is_paid_in_full=case_data.get("is_paid_in_full"),
+                sol_case_number=case_data.get("sol_case_number"), # 安全にインポート
             )
             session.add(new_case)
             session.flush()
@@ -603,11 +648,29 @@ def import_database_from_json(file_path: str) -> Tuple[bool, str]:
                 )
                 session.add(new_task)
 
-            # その他資産・負債
+            # 【修正箇所】 RealEstateAsset のインポート処理
+            # location, property_type などの新しいフィールドにマッピング
             for re_data in case_data.get("real_estates", []):
+                # 古いバックアップデータ（municipality_nameがある場合）との互換性
+                loc = re_data.get("location")
+                if not loc:
+                    # 後方互換性: municipality_name があればそれを location に
+                    loc = re_data.get("municipality_name", "不明")
+
                 session.add(
                     RealEstateAsset(
-                        case_id=new_case.case_id, municipality_name=re_data.get("municipality_name")
+                        case_id=new_case.case_id,
+                        property_type=re_data.get("property_type", "Land"),
+                        location=loc,
+                        lot_number=re_data.get("lot_number"),
+                        land_category=re_data.get("land_category"),
+                        land_area=re_data.get("land_area"),
+                        house_number=re_data.get("house_number"),
+                        structure=re_data.get("structure"),
+                        floor_area=re_data.get("floor_area"),
+                        ownership_share=re_data.get("ownership_share"),
+                        registry_pdf_path=re_data.get("registry_pdf_path"),
+                        registry_image_path=re_data.get("registry_image_path")
                     )
                 )
 

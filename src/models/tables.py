@@ -57,6 +57,19 @@ class BankMaster(Base):
 
     branches = relationship("BranchMaster", back_populates="bank_ref", cascade="all, delete-orphan")
     financial_assets = relationship("FinancialAsset", back_populates="bank_ref")
+    
+    # 💡 新規追加: Aliasとのリレーション
+    aliases = relationship("BankAlias", back_populates="bank_ref", cascade="all, delete-orphan")
+
+
+# 💡 新規追加: 銀行名エイリアス（名寄せ学習用）テーブル
+class BankAlias(Base):
+    __tablename__ = "bank_aliases"
+    id = Column(Integer, primary_key=True, index=True)
+    alias_name = Column(String, unique=True, index=True, nullable=False)  # OCRで読み取った揺らぎのある名前
+    bank_id = Column(Integer, ForeignKey("bank_master.id", ondelete="CASCADE"), nullable=False)
+
+    bank_ref = relationship("BankMaster", back_populates="aliases")
 
 
 # 3. 支店マスタ
@@ -393,10 +406,10 @@ class RealEstateAsset(Base):
     structure = Column(String, comment="構造")  # 建物用
     floor_area = Column(String, comment="床面積")  # 建物用
 
-    # 💡 追加: 持分カラム
+    # 持分カラム
     ownership_share = Column(String, nullable=True, comment="被相続人の持分")
 
-    # ファイルパス管理 (新規追加)
+    # ファイルパス管理
     registry_pdf_path = Column(String, nullable=True, comment="登記情報PDFパス")
     registry_image_path = Column(String, nullable=True, comment="Word貼付用画像パス")
 

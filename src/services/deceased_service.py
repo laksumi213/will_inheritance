@@ -1,12 +1,16 @@
 # src/services/deceased_service.py
 import datetime
-from typing import Dict, List, Optional
+import os
+import shutil
+import re
+import unicodedata
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import requests
 from sqlalchemy import func, or_
 from sqlalchemy.orm import aliased, joinedload
 
-# 既存のインポート構成を維持
 from src.models.database import SessionLocal
 from src.models.tables import (
     AccountTypeMaster,
@@ -25,41 +29,133 @@ from src.models.tables import (
     Heir,
     Task,
     User,
+    InsuranceAsset,
+    OtherAsset,
+    Liability,
+    Expense,
+    CaseSubmissionDoc
 )
-from src.utils.date_utils import (
-    parse_all_flexible_date,
-)
+from src.utils.date_utils import parse_all_flexible_date
 
-# --- パス正規化ロジック (Windows形式統一版) ---
-
+# --- 1. ファイル操作・自動仕分け・ステータス更新 ---
 
 def normalize_folder_path(path_str: str) -> str:
-    """
-    フォルダパスを正規化する。
-    Windowsのエクスプローラーに合わせて区切り文字を「\」(バックスラッシュ)に統一する。
-    """
+    """フォルダパスを正規化しWindows形式に統一する"""
     if not path_str:
         return ""
-
-    # 1. 前後の空白と引用符を除去
-    # "C:\My Documents" のように引用符がついていても除去する
     cleaned = path_str.strip().strip('"').strip("'")
+    return cleaned.replace("/", "\\")
 
-    # 2. スラッシュ(/)をバックスラッシュ(\)に変換して統一
-    cleaned = cleaned.replace("/", "\\")
+def get_contractor_surname(case_id: int) -> str:
+    """案件IDから契約者（依頼者）の姓を取得する"""
+    db = SessionLocal()
+    try:
+        deceased = db.query(Deceased).filter(Deceased.case_id == case_id).first()
+        if not deceased: return "様"
+        
+        contractor = db.query(Heir).filter(
+            Heir.deceased_id == deceased.id,
+            Heir.is_contracting_party == True
+        ).first()
+        
+        if contractor: return contractor.name_last
+        
+        case = db.query(Case).get(case_id)
+        return case.client_name.split()[0] if case and case.client_name else "顧客"
+    finally:
+        db.close()
 
-    return cleaned
+def find_case_subfolder_by_keyword(case_id: int, keyword: str) -> Path:
+    """案件フォルダ内からキーワードを含むフォルダを検索し最新のものを返す。なければ作成。"""
+    db = SessionLocal()
+    case = db.query(Case).get(case_id)
+    db.close()
+
+    if not case or not case.folder_path:
+        base_dir = Path("output") / str(case_id)
+    else:
+        base_dir = Path(case.folder_path)
+
+    if not base_dir.exists():
+        base_dir.mkdir(parents=True, exist_ok=True)
+
+    matches = [d for d in base_dir.rglob(f"*{keyword}*") if d.is_dir()]
+    if not matches:
+        new_path = base_dir / keyword
+        new_path.mkdir(parents=True, exist_ok=True)
+        return new_path
+    
+    return max(matches, key=lambda d: d.stat().st_mtime)
+
+def move_and_rename_bank_pdf(case_id: int, src_path: str, bank_name: str, doc_type: str) -> Optional[str]:
+    """銀行書類PDFをリネームして案件フォルダの『残高証明書』フォルダへ移動する"""
+    db = SessionLocal()
+    try:
+        if not src_path or not os.path.exists(src_path): return None
+        
+        # 案件情報の取得（案件番号取得のため）
+        case = db.query(Case).get(case_id)
+        # 案件番号 (例: G2103) を使用。取得できない場合はIDを使用
+        case_identifier = case.case_number if case and case.case_number else str(case_id)
+
+        target_dir = find_case_subfolder_by_keyword(case_id, "残高証明書")
+        surname = get_contractor_surname(case_id)
+        date_str = datetime.datetime.now().strftime("%Y%m%d")
+        
+        # ファイル名変更: {案件番号}{契約者姓}様_{種別}_{銀行名}{年月日}.pdf
+        new_filename = f"{case_identifier}{surname}様_{doc_type}_{bank_name}{date_str}.pdf"
+        dest_path = target_dir / new_filename
+
+        # 重複回避
+        if dest_path.exists():
+            time_suffix = datetime.datetime.now().strftime("%H%M%S")
+            new_filename = f"{case_identifier}{surname}様_{doc_type}_{bank_name}{date_str}_{time_suffix}.pdf"
+            dest_path = target_dir / new_filename
+
+        shutil.copy2(src_path, dest_path)
+        return str(dest_path)
+    except Exception as e:
+        print(f"File Move Error: {e}"); return None
+    finally:
+        db.close()
+
+def update_financial_asset_status_fuzzy(case_id: int, bank_name_part: str, new_status: str = "調査完了") -> int:
+    """
+    銀行名（部分一致）で資産を検索し、ステータスを更新する。
+    戻り値: 更新件数
+    """
+    db = SessionLocal()
+    try:
+        # 正規化（全角半角、空白除去）
+        search_term = unicodedata.normalize("NFKC", bank_name_part).replace(" ", "").replace("銀行", "").strip()
+        
+        assets = db.query(FinancialAsset).filter(FinancialAsset.case_id == case_id).all()
+        count = 0
+        for asset in assets:
+            if not asset.bank_ref: continue
+            
+            db_bank_name = unicodedata.normalize("NFKC", asset.bank_ref.bank_name).replace(" ", "").replace("銀行", "")
+            
+            # 部分一致判定
+            if search_term in db_bank_name or db_bank_name in search_term:
+                asset.status = new_status
+                count += 1
+        
+        if count > 0:
+            db.commit()
+        return count
+    except Exception as e:
+        db.rollback()
+        print(f"Status Update Error: {e}")
+        return 0
+    finally:
+        db.close()
 
 
-# --- ユーティリティ ---
-
+# --- 2. 既存の全ロジック (Utilities) ---
 
 def get_db():
     return SessionLocal()
-
-
-# --- ユーザー・ステータス関連 ---
-
 
 def get_all_users() -> Dict[int, str]:
     db = SessionLocal()
@@ -69,7 +165,6 @@ def get_all_users() -> Dict[int, str]:
     finally:
         db.close()
 
-
 def get_all_case_statuses():
     db = SessionLocal()
     try:
@@ -77,9 +172,7 @@ def get_all_case_statuses():
     finally:
         db.close()
 
-
-# --- 案件 (Case) 関連 ---
-
+# --- 3. 案件 (Case) 関連 ---
 
 def get_case_by_id(case_id: int) -> Optional[Case]:
     db = SessionLocal()
@@ -87,13 +180,10 @@ def get_case_by_id(case_id: int) -> Optional[Case]:
         return (
             db.query(Case)
             .options(
-                # 金融資産関連
                 joinedload(Case.financial_assets).joinedload(FinancialAsset.bank_ref),
                 joinedload(Case.financial_assets).joinedload(FinancialAsset.branch_ref),
                 joinedload(Case.financial_assets).joinedload(FinancialAsset.account_type_ref),
-                # 不動産
                 joinedload(Case.real_estates),
-                # 💡 追加: 負債情報 (今回のエラー対策)
                 joinedload(Case.liabilities),
             )
             .filter(Case.case_id == case_id)
@@ -101,7 +191,6 @@ def get_case_by_id(case_id: int) -> Optional[Case]:
         )
     finally:
         db.close()
-
 
 def get_contracting_party_name(case_id: int) -> str:
     db = SessionLocal()
@@ -111,164 +200,82 @@ def get_contracting_party_name(case_id: int) -> str:
     finally:
         db.close()
 
-
 def get_case_folder_path(case_id: int) -> Optional[str]:
-    """
-    案件フォルダのパスを取得する。
-    取得時にパスが正規化されていない場合、自動的に正規化してDBに保存する。
-    """
     db = SessionLocal()
     try:
         case = db.query(Case).filter(Case.case_id == case_id).first()
-        if not case or not case.folder_path:
-            return None
-
-        current_path = case.folder_path
-        normalized_path = normalize_folder_path(current_path)
-
-        # 💡 自動修正保存ロジック
-        if current_path != normalized_path:
-            print(f"Auto-correcting path: {current_path} -> {normalized_path}")
-            case.folder_path = normalized_path
+        if not case or not case.folder_path: return None
+        normalized = normalize_folder_path(case.folder_path)
+        if case.folder_path != normalized:
+            case.folder_path = normalized
             db.commit()
-            return normalized_path
-
-        return current_path
-    except Exception as e:
-        db.rollback()
-        print(f"Error getting/correcting folder path: {e}")
-        return None
+        return normalized
+    except Exception:
+        db.rollback(); return None
     finally:
         db.close()
 
-
-def get_case_folder_path_service(case_id: int) -> Optional[str]:
-    return get_case_folder_path(case_id)
-
+# 互換性エイリアス
+get_case_folder_path_service = get_case_folder_path
 
 def update_case_folder_path(case_id: int, folder_path: str) -> bool:
-    """
-    案件フォルダパスを更新する。保存前に正規化を行う。
-    """
     db = SessionLocal()
     try:
-        case = db.query(Case).filter(Case.case_id == case_id).first()
+        case = db.query(Case).get(case_id)
         if case:
-            # 💡 保存時に正規化 (Noneの場合はそのまま)
-            if folder_path:
-                clean_path = normalize_folder_path(folder_path)
-            else:
-                clean_path = folder_path
-
-            case.folder_path = clean_path
-            db.commit()
-            return True
+            case.folder_path = normalize_folder_path(folder_path) if folder_path else None
+            db.commit(); return True
         return False
-    except Exception as e:
-        db.rollback()
-        print(f"Error updating folder path: {e}")
-        return False
+    except Exception:
+        db.rollback(); return False
     finally:
         db.close()
 
-
-def update_case_assignment(
-    case_id: int, manager_id: Optional[int], operator_id: Optional[int]
-) -> bool:
+def update_case_assignment(case_id: int, manager_id: Optional[int], operator_id: Optional[int]) -> bool:
     db = SessionLocal()
     try:
-        case = db.query(Case).filter(Case.case_id == case_id).first()
+        case = db.query(Case).get(case_id)
         if case:
             case.manager_id = manager_id
             case.operator_id = operator_id
-            db.commit()
-            return True
-        return False
-    except Exception:
-        db.rollback()
+            db.commit(); return True
         return False
     finally:
         db.close()
 
-
 def update_case_number(case_id: int, new_number: str) -> bool:
-    """
-    案件番号を更新する。
-    他の案件と重複する場合はFalseを返す。
-    """
     db = SessionLocal()
     try:
-        # 重複チェック (自分自身以外で同じ番号があるか)
-        existing = (
-            db.query(Case).filter(Case.case_number == new_number, Case.case_id != case_id).first()
-        )
-        if existing:
-            return False
-
+        existing = db.query(Case).filter(Case.case_number == new_number, Case.case_id != case_id).first()
+        if existing: return False
         case = db.query(Case).get(case_id)
         if case:
             case.case_number = new_number
-            db.commit()
-            return True
-        return False
-    except Exception as e:
-        db.rollback()
-        print(f"Update Case Number Error: {e}")
+            db.commit(); return True
         return False
     finally:
         db.close()
-
 
 def get_next_case_number_service() -> str:
-    """
-    次の案件番号を自動生成する。
-    既存の案件番号の中から「4桁の数字」のみを対象とし、その最大値+1を返す。
-    該当する番号がない場合は '0001' を返す。
-    """
     db = SessionLocal()
     try:
-        # 全ての案件番号を取得
         cases = db.query(Case.case_number).all()
-        
         max_num = 0
-        found_numeric = False
-
         for c in cases:
-            num_str = c.case_number
-            # Noneチェック、数字のみチェック、4桁チェック
-            if num_str and num_str.isdigit() and len(num_str) == 4:
+            if c.case_number and c.case_number.isdigit() and len(c.case_number) == 4:
                 try:
-                    val = int(num_str)
-                    if val > max_num:
-                        max_num = val
-                        found_numeric = True
-                except ValueError:
-                    continue
-        
-        # 既存データがない、または4桁数字の案件がない場合は 0001
-        if max_num == 0 and not found_numeric:
-            return "0001"
-
-        # 次の番号 (4桁ゼロ埋め)
-        next_val = max_num + 1
-        return f"{next_val:04d}"
-
-    except Exception as e:
-        print(f"Error generating case number: {e}")
-        # エラー時は安全策としてランダムな一時番号等を返すが、ここでは基本形を返す
-        return "0001"
+                    max_num = max(max_num, int(c.case_number))
+                except ValueError: continue
+        return f"{(max_num + 1):04d}"
     finally:
         db.close()
-
 
 def is_case_number_duplicate(case_number: str) -> bool:
     db = SessionLocal()
     try:
-        exists = db.query(Case).filter(Case.case_number == case_number).first()
-        return exists is not None
+        return db.query(Case).filter(Case.case_number == case_number).first() is not None
     finally:
         db.close()
-
 
 def delete_case_and_all_related_data(case_number: str) -> bool:
     db = SessionLocal()
@@ -279,130 +286,80 @@ def delete_case_and_all_related_data(case_number: str) -> bool:
             db.commit()
             return True
         return False
-    except Exception as e:
-        db.rollback()
-        print(f"Delete Error: {e}")
-        return False
+    except Exception:
+        db.rollback(); return False
     finally:
         db.close()
-
 
 def get_case_progress_summary(case_id: int) -> dict:
     return {"status": "進行中", "progress": 50}
 
-
-# --- 被相続人 (Deceased) 関連 ---
-
+# --- 4. 被相続人 (Deceased) 関連 ---
 
 def get_deceased_by_case_id(case_id: int) -> Optional[Deceased]:
     db = SessionLocal()
     try:
-        return (
-            db.query(Deceased)
-            .options(joinedload(Deceased.case), joinedload(Deceased.heirs))
-            .filter(Deceased.case_id == case_id)
-            .first()
-        )
+        return db.query(Deceased).options(joinedload(Deceased.heirs), joinedload(Deceased.case)).filter(Deceased.case_id == case_id).first()
     finally:
         db.close()
-
 
 def get_deceased_by_id(deceased_id: int) -> Optional[Deceased]:
     db = SessionLocal()
     try:
-        return (
-            db.query(Deceased)
-            .options(
-                joinedload(Deceased.heirs),
-                joinedload(Deceased.case),
-                joinedload(Deceased.last_address),
-            )
-            .filter(Deceased.id == deceased_id)
-            .first()
-        )
+        return db.query(Deceased).options(
+            joinedload(Deceased.heirs), joinedload(Deceased.case), joinedload(Deceased.last_address)
+        ).filter(Deceased.id == deceased_id).first()
     finally:
         db.close()
-
 
 def get_case_id_by_deceased_id(deceased_id: int) -> Optional[int]:
     db = SessionLocal()
     try:
-        d = db.query(Deceased).filter(Deceased.id == deceased_id).first()
+        d = db.query(Deceased).get(deceased_id)
         return d.case_id if d else None
     finally:
         db.close()
 
-
-def update_deceased(
-    deceased_id: int,
-    name_last: str,
-    name_first: str = None,
-    dob: str = None,
-    dod: str = None,
-    kana_last: str = None,
-    kana_first: str = None,
-    hometown: str = None,
-    last_zip_code: str = None,
-    last_pref: str = None,
-    last_city: str = None,
-    last_street: str = None,
-    last_building: str = None,
-    past_addresses: list = None,
-    phone_contacts: list = None,
-    email_contacts: list = None,
-) -> bool:
+def update_deceased(deceased_id: int, **kwargs) -> bool:
     db = SessionLocal()
     try:
         d = db.query(Deceased).get(deceased_id)
-        if not d:
-            return False
-
-        d.name_last = name_last
-        d.name_first = name_first
-        d.name_last_kana = kana_last
-        d.name_first_kana = kana_first
-        d.hometown = hometown
-
-        if dob:
-            d.date_of_birth = parse_all_flexible_date(dob)
-        if dod:
-            d.date_of_death = parse_all_flexible_date(dod)
-
-        if last_pref or last_street:
+        if not d: return False
+        d.name_last = kwargs.get("name_last")
+        d.name_first = kwargs.get("name_first")
+        d.name_last_kana = kwargs.get("kana_last")
+        d.name_first_kana = kwargs.get("kana_first")
+        d.hometown = kwargs.get("hometown")
+        
+        if kwargs.get("dob"): d.date_of_birth = parse_all_flexible_date(kwargs["dob"])
+        if kwargs.get("dod"): d.date_of_death = parse_all_flexible_date(kwargs["dod"])
+        
+        if kwargs.get("last_pref") or kwargs.get("last_street"):
             if d.last_address_id:
                 addr = db.query(Address).get(d.last_address_id)
-                addr.zip_code = last_zip_code
-                addr.prefecture = last_pref
-                addr.city_ward_town = last_city
-                addr.street_address = last_street
-                addr.building_name = last_building
+                addr.zip_code = kwargs.get("last_zip_code")
+                addr.prefecture = kwargs.get("last_pref")
+                addr.city_ward_town = kwargs.get("last_city")
+                addr.street_address = kwargs.get("last_street")
+                addr.building_name = kwargs.get("last_building")
             else:
                 new_addr = Address(
-                    zip_code=last_zip_code,
-                    prefecture=last_pref,
-                    city_ward_town=last_city,
-                    street_address=last_street, # 💡 修正: street -> last_street
-                    building_name=last_building,
+                    zip_code=kwargs.get("last_zip_code"), prefecture=kwargs.get("last_pref"),
+                    city_ward_town=kwargs.get("last_city"), street_address=kwargs.get("last_street"),
+                    building_name=kwargs.get("last_building")
                 )
-                db.add(new_addr)
-                db.flush()
-                d.last_address_id = new_addr.id
-
-        _update_contacts(db, "deceased", deceased_id, phone_contacts, "PHONE")
-        _update_contacts(db, "deceased", deceased_id, email_contacts, "EMAIL")
-
-        db.commit()
-        return True
+                db.add(new_addr); db.flush(); d.last_address_id = new_addr.id
+        
+        _update_contacts(db, "deceased", deceased_id, kwargs.get("phone_contacts"), "PHONE")
+        _update_contacts(db, "deceased", deceased_id, kwargs.get("email_contacts"), "EMAIL")
+        
+        db.commit(); return True
     except Exception as e:
-        db.rollback()
-        print(f"Update Deceased Error: {e}")
-        raise e
+        db.rollback(); raise e
     finally:
         db.close()
 
-
-# --- 相続人 (Heir) 関連 ---
-
+# --- 5. 相続人 (Heir) 関連 ---
 
 def get_heir_by_id(heir_id: int) -> Optional[Heir]:
     db = SessionLocal()
@@ -411,1029 +368,467 @@ def get_heir_by_id(heir_id: int) -> Optional[Heir]:
     finally:
         db.close()
 
-
-def add_heir(
-    deceased_id: int,
-    name: str,
-    rel: str,
-    kana_last: str = None,
-    kana_first: str = None,
-    dob: str = None,
-    hometown: str = None,
-    zip_code: str = None,
-    pref: str = None,
-    city: str = None,
-    street: str = None,
-    building: str = None,
-    phone_contacts: list = None,
-    email_contacts: list = None,
-) -> int:
+def add_heir(deceased_id: int, name: str, rel: str, **kwargs) -> int:
     db = SessionLocal()
     try:
         parts = name.split(" ", 1)
-        last = parts[0]
-        first = parts[1] if len(parts) > 1 else ""
-
-        dob_date = parse_all_flexible_date(dob) if dob else None
-
         new_heir = Heir(
-            deceased_id=deceased_id,
-            name_last=last,
-            name_first=first,
-            name_last_kana=kana_last,
-            name_first_kana=kana_first,
-            relationship_type=rel,
-            hometown=hometown,
-            date_of_birth=dob_date,
+            deceased_id=deceased_id, name_last=parts[0], name_first=parts[1] if len(parts) > 1 else "",
+            name_last_kana=kwargs.get("kana_last"), name_first_kana=kwargs.get("kana_first"),
+            relationship_type=rel, hometown=kwargs.get("hometown"), 
+            date_of_birth=parse_all_flexible_date(kwargs["dob"]) if kwargs.get("dob") else None
         )
-        db.add(new_heir)
-        db.flush()
-
-        if pref or street:
+        db.add(new_heir); db.flush()
+        
+        if kwargs.get("pref") or kwargs.get("street"):
             new_addr = Address(
-                zip_code=zip_code,
-                prefecture=pref,
-                city_ward_town=city,
-                street_address=street,
-                building_name=building,
+                zip_code=kwargs.get("zip_code"), prefecture=kwargs.get("pref"), 
+                city_ward_town=kwargs.get("city"), street_address=kwargs.get("street"), 
+                building_name=kwargs.get("building")
             )
-            db.add(new_addr)
-            db.flush()
-            db.add(
-                H_AddressHistory(
-                    heir_id=new_heir.id, address_id=new_addr.id, is_current_address=True
-                )
-            )
-
-        _add_contacts_to_heir(db, new_heir.id, phone_contacts, "PHONE")
-        _add_contacts_to_heir(db, new_heir.id, email_contacts, "EMAIL")
-
-        db.commit()
-        return new_heir.id
+            db.add(new_addr); db.flush()
+            db.add(H_AddressHistory(heir_id=new_heir.id, address_id=new_addr.id, is_current_address=True))
+        
+        _add_contacts_to_heir(db, new_heir.id, kwargs.get("phone_contacts"), "PHONE")
+        _add_contacts_to_heir(db, new_heir.id, kwargs.get("email_contacts"), "EMAIL")
+        
+        db.commit(); return new_heir.id
     except Exception as e:
-        db.rollback()
-        raise e
+        db.rollback(); raise e
     finally:
         db.close()
 
-
-def update_heir(
-    heir_id: int,
-    name: str,
-    rel: str,
-    kana_last: str = None,
-    kana_first: str = None,
-    zip_code: str = None,
-    pref: str = None,
-    city: str = None,
-    street: str = None,
-    building: str = None,
-    phone_contacts: list = None,
-    email_contacts: list = None,
-    dob: str = None,
-    hometown: str = None,
-) -> bool:
+def update_heir(heir_id: int, name: str, rel: str, **kwargs) -> bool:
     db = SessionLocal()
     try:
         heir = db.query(Heir).get(heir_id)
-        if not heir:
-            return False
-
+        if not heir: return False
+        
         parts = name.split(" ", 1)
         heir.name_last = parts[0]
         heir.name_first = parts[1] if len(parts) > 1 else ""
         heir.relationship_type = rel
-        heir.name_last_kana = kana_last
-        heir.name_first_kana = kana_first
-        heir.hometown = hometown
+        heir.name_last_kana = kwargs.get("kana_last")
+        heir.name_first_kana = kwargs.get("kana_first")
+        heir.hometown = kwargs.get("hometown")
+        if kwargs.get("dob"): heir.date_of_birth = parse_all_flexible_date(kwargs["dob"])
 
-        if dob:
-            heir.date_of_birth = parse_all_flexible_date(dob)
-
-        if pref or street:
-            current_link = (
-                db.query(H_AddressHistory)
-                .filter(
-                    H_AddressHistory.heir_id == heir_id, H_AddressHistory.is_current_address == True
-                )
-                .first()
-            )
-
-            if current_link:
-                addr = db.query(Address).get(current_link.address_id)
-                addr.zip_code = zip_code
-                addr.prefecture = pref
-                addr.city_ward_town = city
-                addr.street_address = street
-                addr.building_name = building
+        if kwargs.get("pref") or kwargs.get("street"):
+            curr = db.query(H_AddressHistory).filter(H_AddressHistory.heir_id==heir_id, H_AddressHistory.is_current_address==True).first()
+            if curr:
+                addr = db.query(Address).get(curr.address_id)
+                addr.zip_code = kwargs.get("zip_code")
+                addr.prefecture = kwargs.get("pref")
+                addr.city_ward_town = kwargs.get("city")
+                addr.street_address = kwargs.get("street")
+                addr.building_name = kwargs.get("building")
             else:
                 new_addr = Address(
-                    zip_code=zip_code,
-                    prefecture=pref,
-                    city_ward_town=city,
-                    street_address=street,
-                    building_name=building,
+                    zip_code=kwargs.get("zip_code"), prefecture=kwargs.get("pref"),
+                    city_ward_town=kwargs.get("city"), street_address=kwargs.get("street"),
+                    building_name=kwargs.get("building")
                 )
-                db.add(new_addr)
-                db.flush()
-                db.add(
-                    H_AddressHistory(
-                        heir_id=heir_id, address_id=new_addr.id, is_current_address=True
-                    )
-                )
-
-        _update_contacts(db, "heir", heir_id, phone_contacts, "PHONE")
-        _update_contacts(db, "heir", heir_id, email_contacts, "EMAIL")
-
-        db.commit()
-        return True
+                db.add(new_addr); db.flush()
+                db.add(H_AddressHistory(heir_id=heir_id, address_id=new_addr.id, is_current_address=True))
+        
+        _update_contacts(db, "heir", heir_id, kwargs.get("phone_contacts"), "PHONE")
+        _update_contacts(db, "heir", heir_id, kwargs.get("email_contacts"), "EMAIL")
+        
+        db.commit(); return True
     except Exception as e:
-        db.rollback()
-        raise e
+        db.rollback(); raise e
     finally:
         db.close()
-
 
 def delete_heir(heir_id: int) -> bool:
     db = SessionLocal()
     try:
         heir = db.query(Heir).get(heir_id)
         if heir:
-            db.delete(heir)
-            db.commit()
-            return True
+            db.delete(heir); db.commit(); return True
         return False
     finally:
         db.close()
 
-
-def add_new_case_for_client_registration(
-    case_number,
-    name,
-    kana_last,
-    kana_first,
-    rel,
-    hometown,
-    zip_code,
-    pref,
-    city,
-    street,
-    building,
-    dob,
-    dod,
-    manager_id,
-    operator_id,
-    phone_contacts,
-    email_contacts,
-) -> int:
+def add_new_case_for_client_registration(case_number, name, **kwargs) -> int:
     db = SessionLocal()
     try:
         new_case = Case(
-            case_number=case_number,
-            client_name=name,
-            client_name_kana=f"{kana_last} {kana_first}".strip(),
-            manager_id=manager_id,
-            operator_id=operator_id,
-            current_status_id=1,
-            contract_date=datetime.date.today(),
+            case_number=case_number, client_name=name, client_name_kana=f"{kwargs.get('kana_last')} {kwargs.get('kana_first')}".strip(),
+            manager_id=kwargs.get("manager_id"), operator_id=kwargs.get("operator_id"), current_status_id=1, contract_date=datetime.date.today()
         )
-        db.add(new_case)
-        db.flush()
-
-        new_deceased = Deceased(
-            case_id=new_case.case_id, name_last="", name_first="", relationship_type="本人"
-        )
-        if dod:
-            new_deceased.date_of_death = parse_all_flexible_date(dod)
-
-        db.add(new_deceased)
-        db.flush()
-
+        db.add(new_case); db.flush()
+        
+        deceased = Deceased(case_id=new_case.case_id, name_last="", name_first="", relationship_type="本人")
+        db.add(deceased); db.flush()
+        
         parts = name.split(" ", 1)
-        n_last = parts[0]
-        n_first = parts[1] if len(parts) > 1 else ""
-
-        new_heir = Heir(
-            deceased_id=new_deceased.id,
-            name_last=n_last,
-            name_first=n_first,
-            name_last_kana=kana_last,
-            name_first_kana=kana_first,
-            relationship_type=rel,
-            hometown=hometown,
-            is_contracting_party=True,
+        heir = Heir(
+            deceased_id=deceased.id, name_last=parts[0], name_first=parts[1] if len(parts) > 1 else "",
+            name_last_kana=kwargs.get("kana_last"), name_first_kana=kwargs.get("kana_first"),
+            relationship_type=kwargs.get("rel"), hometown=kwargs.get("hometown"), is_contracting_party=True
         )
-        db.add(new_heir)
-        db.flush()
-
-        if pref or street:
+        db.add(heir); db.flush()
+        
+        if kwargs.get("pref") or kwargs.get("street"):
             addr = Address(
-                zip_code=zip_code,
-                prefecture=pref,
-                city_ward_town=city,
-                street_address=street,
-                building_name=building,
+                zip_code=kwargs.get("zip_code"), prefecture=kwargs.get("pref"),
+                city_ward_town=kwargs.get("city"), street_address=kwargs.get("street"),
+                building_name=kwargs.get("building")
             )
-            db.add(addr)
-            db.flush()
-            db.add(
-                H_AddressHistory(heir_id=new_heir.id, address_id=addr.id, is_current_address=True)
-            )
-
-        _add_contacts_to_heir(db, new_heir.id, phone_contacts, "PHONE")
-        _add_contacts_to_heir(db, new_heir.id, email_contacts, "EMAIL")
-
-        db.commit()
-        return new_deceased.id
-
+            db.add(addr); db.flush()
+            db.add(H_AddressHistory(heir_id=heir.id, address_id=addr.id, is_current_address=True))
+        
+        _add_contacts_to_heir(db, heir.id, kwargs.get("phone_contacts"), "PHONE")
+        _add_contacts_to_heir(db, heir.id, kwargs.get("email_contacts"), "EMAIL")
+        
+        db.commit(); return deceased.id
     except Exception as e:
-        db.rollback()
-        print(f"Registration Error: {e}")
-        return -1
+        db.rollback(); print(f"Reg Error: {e}"); return -1
     finally:
         db.close()
 
-
-# --- 住所・連絡先ヘルパー ---
-
+# --- 6. 住所・連絡先ヘルパー ---
 
 def get_address_by_id(address_id: int) -> Optional[Address]:
     db = SessionLocal()
-    try:
-        return db.query(Address).get(address_id)
-    finally:
-        db.close()
-
+    try: return db.query(Address).get(address_id)
+    finally: db.close()
 
 def get_address_info(target_type: str, target_id: int) -> dict:
     db = SessionLocal()
     try:
         addr = None
         if target_type == "heir":
-            link = (
-                db.query(H_AddressHistory)
-                .filter(
-                    H_AddressHistory.heir_id == target_id,
-                    H_AddressHistory.is_current_address == True,
-                )
-                .first()
-            )
-            if link:
-                addr = db.query(Address).get(link.address_id)
+            link = db.query(H_AddressHistory).filter(H_AddressHistory.heir_id==target_id, H_AddressHistory.is_current_address==True).first()
+            if link: addr = db.query(Address).get(link.address_id)
         elif target_type == "deceased":
             d = db.query(Deceased).get(target_id)
-            if d and d.last_address_id:
-                addr = db.query(Address).get(d.last_address_id)
-
+            if d and d.last_address_id: addr = db.query(Address).get(d.last_address_id)
+        
         if addr:
-            return {
-                "zip_code": addr.zip_code,
-                "prefecture": addr.prefecture,
-                "city_ward_town": addr.city_ward_town,
-                "street_address": addr.street_address,
-                "building_name": addr.building_name,
-            }
+            return {"zip_code": addr.zip_code, "prefecture": addr.prefecture, "city_ward_town": addr.city_ward_town, "street_address": addr.street_address, "building_name": addr.building_name}
         return {}
-    finally:
-        db.close()
-
+    finally: db.close()
 
 def get_contact_info(target_type: str, target_id: int) -> List[dict]:
     db = SessionLocal()
     try:
         contacts = []
         if target_type == "heir":
-            links = db.query(H_ContactLink).filter(H_ContactLink.heir_id == target_id).all()
+            links = db.query(H_ContactLink).filter(H_ContactLink.heir_id==target_id).all()
             for link in links:
                 c = db.query(Contact).get(link.contact_id)
-                if c:
-                    contacts.append(
-                        {"id": c.id, "type": c.type, "value": c.value, "sub_type": c.sub_type}
-                    )
+                if c: contacts.append({"id": c.id, "type": c.type, "value": c.value, "sub_type": c.sub_type})
         elif target_type == "deceased":
-            links = db.query(D_ContactLink).filter(D_ContactLink.deceased_id == target_id).all()
+            links = db.query(D_ContactLink).filter(D_ContactLink.deceased_id==target_id).all()
             for link in links:
                 c = db.query(Contact).get(link.contact_id)
-                if c:
-                    contacts.append(
-                        {"id": c.id, "type": c.type, "value": c.value, "sub_type": c.sub_type}
-                    )
+                if c: contacts.append({"id": c.id, "type": c.type, "value": c.value, "sub_type": c.sub_type})
         return contacts
-    finally:
-        db.close()
-
+    finally: db.close()
 
 def get_deceased_address_history(deceased_id: int) -> List[dict]:
-    """被相続人の過去の住所履歴を取得する"""
     db = SessionLocal()
     try:
-        links = db.query(D_AddressHistory).filter(D_AddressHistory.deceased_id == deceased_id).all()
+        links = db.query(D_AddressHistory).filter(D_AddressHistory.deceased_id==deceased_id).all()
         history = []
         for link in links:
             if not link.is_last_address:
                 addr = db.query(Address).get(link.address_id)
                 if addr:
-                    history.append(
-                        {
-                            "address_id": addr.id,
-                            "zip_code": addr.zip_code,
-                            "prefecture": addr.prefecture,
-                            "city_ward_town": addr.city_ward_town,
-                            "street_address": addr.street_address,
-                            "building_name": addr.building_name,
-                        }
-                    )
+                    history.append({"address_id": addr.id, "zip_code": addr.zip_code, "prefecture": addr.prefecture, "city_ward_town": addr.city_ward_town, "street_address": addr.street_address, "building_name": addr.building_name})
         return history
-    finally:
-        db.close()
-
-
-# --- 内部ヘルパー ---
-
+    finally: db.close()
 
 def _add_contacts_to_heir(db, heir_id, contact_list, type_str):
-    if not contact_list:
-        return
+    if not contact_list: return
     for c in contact_list:
         val = c.get("value")
-        sub = c.get("sub_type", "Primary")
         if val:
-            new_c = Contact(value=val, type=type_str, sub_type=sub)
-            db.add(new_c)
-            db.flush()
+            new_c = Contact(value=val, type=type_str, sub_type=c.get("sub_type", "Primary"))
+            db.add(new_c); db.flush()
             db.add(H_ContactLink(heir_id=heir_id, contact_id=new_c.id))
-
 
 def _update_contacts(db, target_type, target_id, contact_list, type_str):
     if target_type == "heir":
-        links = (
-            db.query(H_ContactLink)
-            .join(Contact)
-            .filter(H_ContactLink.heir_id == target_id, Contact.type == type_str)
-            .all()
-        )
-        for link in links:
-            db.delete(link)
+        links = db.query(H_ContactLink).join(Contact).filter(H_ContactLink.heir_id==target_id, Contact.type==type_str).all()
+        for l in links: db.delete(l)
         _add_contacts_to_heir(db, target_id, contact_list, type_str)
-
     elif target_type == "deceased":
-        links = (
-            db.query(D_ContactLink)
-            .join(Contact)
-            .filter(D_ContactLink.deceased_id == target_id, Contact.type == type_str)
-            .all()
-        )
-        for link in links:
-            db.delete(link)
-
+        links = db.query(D_ContactLink).join(Contact).filter(D_ContactLink.deceased_id==target_id, Contact.type==type_str).all()
+        for l in links: db.delete(l)
         if contact_list:
             for c in contact_list:
                 val = c.get("value")
-                sub = c.get("sub_type", "Primary")
                 if val:
-                    new_c = Contact(value=val, type=type_str, sub_type=sub)
-                    db.add(new_c)
-                    db.flush()
+                    new_c = Contact(value=val, type=type_str, sub_type=c.get("sub_type", "Primary"))
+                    db.add(new_c); db.flush()
                     db.add(D_ContactLink(deceased_id=target_id, contact_id=new_c.id))
 
-
-# --- その他 ---
-
-
 def search_address_by_zip_api(zip_code: str) -> Optional[dict]:
-    if not zip_code:
-        return None
-    clean_zip = zip_code.replace("-", "")
-    if len(clean_zip) != 7:
-        return None
+    if not zip_code: return None
     try:
-        url = f"https://zipcloud.ibsnet.co.jp/api/search?zipcode={clean_zip}"
-        res = requests.get(url)
+        res = requests.get(f"https://zipcloud.ibsnet.co.jp/api/search?zipcode={zip_code.replace('-', '')}")
         data = res.json()
         if data and data.get("results"):
             r = data["results"][0]
-            return {
-                "prefecture": r["address1"],
-                "city_ward_town": r["address2"],
-                "street_address": r["address3"],
-            }
+            return {"prefecture": r["address1"], "city_ward_town": r["address2"], "street_address": r["address3"]}
         return {}
-    except Exception:
-        return None
-
+    except: return None
 
 def search_zip_by_address_api(address: str) -> Optional[str]:
-    """
-    住所から郵便番号を検索する（HeartRails Geo APIを使用）
-    :param address: 住所文字列（例: 東京都千代田区千代田1-1）
-    :return: 郵便番号文字列 (例: "100-0001") または None
-    """
-    if not address:
-        return None
+    if not address: return None
     try:
-        # HeartRails Geo API Suggest API
-        # keywordに住所の一部を渡すと、候補を返してくれる
-        url = "http://geoapi.heartrails.com/api/json"
-        params = {
-            "method": "suggest",
-            "matching": "like",
-            "keyword": address
-        }
-        res = requests.get(url, params=params)
+        res = requests.get("http://geoapi.heartrails.com/api/json", params={"method": "suggest", "matching": "like", "keyword": address})
         data = res.json()
-        
         if data and data.get("response") and data["response"].get("location"):
-            # 最初の候補の郵便番号を返す
-            postal = data["response"]["location"][0].get("postal")
-            if postal:
-                # 3桁-4桁の形式に整形
-                return f"{postal[:3]}-{postal[3:]}"
+            p = data["response"]["location"][0].get("postal")
+            return f"{p[:3]}-{p[3:]}" if p else None
         return None
-    except Exception as e:
-        print(f"Zip search error: {e}")
-        return None
-
+    except: return None
 
 def get_kintone_integration_data(case_id: int) -> dict:
     case = get_case_by_id(case_id)
-    if not case:
-        return {}
+    if not case: return {}
     deceased = get_deceased_by_case_id(case_id)
-    deceased_name = f"{deceased.name_last} {deceased.name_first}" if deceased else ""
-    return {
-        "case_number": case.case_number,
-        "client_name": case.client_name,
-        "deceased_name": deceased_name,
-        "client_zip": "",  # 以下、必要に応じて拡張
-        "client_addr": "",
-        "client_kana": "",
-        "deceased_kana": "",
-        "client_tel": "",
-        "client_mail": "",
-        "inheritance_date": "",
-    }
+    d_name = f"{deceased.name_last} {deceased.name_first}" if deceased else ""
+    return {"case_number": case.case_number, "client_name": case.client_name, "deceased_name": d_name, "client_zip": "", "client_addr": "", "client_kana": "", "deceased_kana": "", "client_tel": "", "client_mail": "", "inheritance_date": ""}
 
-
-# --- 金融資産・書類作成関連 ---
-
+# --- 7. 金融資産・書類作成関連 ---
 
 def get_financial_asset_by_case(case_id: int):
+    """案件に紐づく銀行資産リストの取得"""
     db = SessionLocal()
     try:
         assets = db.query(FinancialAsset).filter(FinancialAsset.case_id == case_id).all()
         return [
             {
-                "id": a.id,
-                "bank_id": a.bank_id, # 💡 追加
-                "branch_id": a.branch_id, # 💡 追加
-                "account_type_id": a.account_type_id, # 💡 追加
+                "id": a.id, "bank_id": a.bank_id, 
+                "bank_name": a.bank_ref.bank_name if a.bank_ref else "不明",
                 "bank_code": a.bank_ref.bank_code if a.bank_ref else "",
-                "bank_name": a.bank_ref.bank_name if a.bank_ref else "",
                 "branch_name": a.branch_ref.branch_name if a.branch_ref else "",
-                "branch_code": a.branch_ref.branch_code if a.branch_ref else "",
-                "account_type": a.account_type_ref.type_name if a.account_type_ref else "",
-                "account_number": a.account_number,
-                "balance": a.balance,
-                "status": a.status,
-            }
-            for a in assets
+                "account_number": a.account_number, "balance": a.balance, "status": a.status
+            } for a in assets
         ]
     finally:
         db.close()
-
 
 def get_bank_cert_document_data(case_id: int, bank_code: str) -> dict:
     db = SessionLocal()
     try:
         case = db.query(Case).get(case_id)
-        if not case:
-            return {}
-
+        if not case: return {}
         deceased = db.query(Deceased).filter(Deceased.case_id == case_id).first()
-        client = None
-        if deceased:
-            client = (
-                db.query(Heir)
-                .filter(Heir.deceased_id == deceased.id, Heir.is_contracting_party == True)
-                .first()
-            )
-
-        assets = (
-            db.query(FinancialAsset)
-            .join(BankMaster)
-            .filter(FinancialAsset.case_id == case_id, BankMaster.bank_code == bank_code)
-            .all()
-        )
-
+        client = db.query(Heir).filter(Heir.deceased_id==deceased.id, Heir.is_contracting_party==True).first() if deceased else None
+        assets = db.query(FinancialAsset).join(BankMaster).filter(FinancialAsset.case_id==case_id, BankMaster.bank_code==bank_code).all()
+        
         res = {
             "case_number": case.case_number,
-            "deceased": {
-                "last_name": deceased.name_last if deceased else "",
-                "first_name": deceased.name_first if deceased else "",
-                "date_of_death": deceased.date_of_death if deceased else None,
-            }
-            if deceased
-            else {},
-            "contracting_party": {
-                "last_name": client.name_last if client else "",
-                "first_name": client.name_first if client else "",
-            }
-            if client
-            else {},
-            "bank_assets": [],
+            "deceased": {"last_name": deceased.name_last if deceased else "", "first_name": deceased.name_first if deceased else "", "date_of_death": deceased.date_of_death if deceased else None} if deceased else {},
+            "contracting_party": {"last_name": client.name_last if client else "", "first_name": client.name_first if client else ""} if client else {},
+            "bank_assets": []
         }
-
         for a in assets:
-            branch_name = a.branch_ref.branch_name if a.branch_ref else ""
-            branch_code = a.branch_ref.branch_code if a.branch_ref else ""
-            type_name = a.account_type_ref.type_name if a.account_type_ref else ""
-
-            res["bank_assets"].append(
-                {
-                    "id": a.id,
-                    "bank_name": a.bank_ref.bank_name,
-                    "branch_name": branch_name,
-                    "branch_code": branch_code,
-                    "account_type": type_name,
-                    "account_number": a.account_number,
-                    "balance": a.balance,
-                }
-            )
-
+            res["bank_assets"].append({
+                "id": a.id, "bank_name": a.bank_ref.bank_name,
+                "branch_name": a.branch_ref.branch_name if a.branch_ref else "",
+                "branch_code": a.branch_ref.branch_code if a.branch_ref else "",
+                "account_type": a.account_type_ref.type_name if a.account_type_ref else "",
+                "account_number": a.account_number, "balance": a.balance
+            })
         return res
-    finally:
-        db.close()
-
+    finally: db.close()
 
 def get_financial_assets_by_bank_code(case_id: int, bank_code: str) -> List[dict]:
-    """銀行コードに紐づく資産リストを取得 (書類作成等で使用)"""
     data = get_bank_cert_document_data(case_id, bank_code)
     return data.get("bank_assets", [])
-
 
 def get_financial_asset_automation_data(case_id: int, bank_code: str) -> dict:
     db = SessionLocal()
     try:
         case = db.query(Case).get(case_id)
-        deceased = db.query(Deceased).filter(Deceased.case_id == case_id).first()
-
-        if not case or not deceased:
-            return {}
-
-        client = (
-            db.query(Heir)
-            .filter(Heir.deceased_id == deceased.id, Heir.is_contracting_party == True)
-            .first()
-        )
-
-        asset = (
-            db.query(FinancialAsset)
-            .join(BankMaster, FinancialAsset.bank_id == BankMaster.id)
-            .outerjoin(BranchMaster, FinancialAsset.branch_id == BranchMaster.id)
-            .filter(FinancialAsset.case_id == case_id, BankMaster.bank_code == bank_code)
-            .first()
-        )
-
+        deceased = db.query(Deceased).filter(Deceased.case_id==case_id).first()
+        if not case or not deceased: return {}
+        client = db.query(Heir).filter(Heir.deceased_id==deceased.id, Heir.is_contracting_party==True).first()
+        asset = db.query(FinancialAsset).join(BankMaster).outerjoin(BranchMaster).filter(FinancialAsset.case_id==case_id, BankMaster.bank_code==bank_code).first()
+        
         client_tel = ""
         client_mail = ""
         if client:
             contacts = get_contact_info("heir", client.id)
-            client_tel = next(
-                (
-                    c["value"]
-                    for c in contacts
-                    if c["type"] == "PHONE" and c.get("sub_type") == "携帯"
-                ),
-                "",
-            )
-            if not client_tel:
-                client_tel = next((c["value"] for c in contacts if c["type"] == "PHONE"), "")
-
-            client_mail = next((c["value"] for c in contacts if c["type"] == "EMAIL"), "")
-
-        data = {
-            "case_number": case.case_number,
-            "deceased_name": f"{deceased.name_last} {deceased.name_first}",
-            "deceased_dob": deceased.date_of_birth.isoformat() if deceased.date_of_birth else "",
+            client_tel = next((c["value"] for c in contacts if c["type"]=="PHONE"), "")
+            client_mail = next((c["value"] for c in contacts if c["type"]=="EMAIL"), "")
+            
+        return {
+            "case_number": case.case_number, "deceased_name": f"{deceased.name_last} {deceased.name_first}",
             "contractor_name": f"{client.name_last} {client.name_first}" if client else "",
-            "contractor_name_kana": f"{client.name_last_kana} {client.name_first_kana}"
-            if client
-            else "",
-            "staff_code": case.case_number,
-            "staff_name_kanji": f"{client.name_last} {client.name_first}" if client else "",
-            "staff_name_kana": f"{client.name_last_kana} {client.name_first_kana}"
-            if client
-            else "",
-            "staff_tel": client_tel,
-            "staff_mail": client_mail,
-            "client_phone": client_tel,
-            "client_email": client_mail,
+            "client_phone": client_tel, "client_email": client_mail,
             "bank_branch_code": asset.branch_ref.branch_code if asset and asset.branch_ref else "",
-            "bank_account_number": asset.account_number if asset else "",
-            "firm_name_kanji": "行政書士法人チェスター",
-            "firm_name_kana": "ギョウセイショシホウジンチェスター",
-            "firm_zip": "1030028",
-            "firm_addr2": "八重洲口会館2階",
-            "firm_dob_year": "2000",
-            "firm_dob_month": "1",
-            "firm_dob_day": "1",
+            "bank_account_number": asset.account_number if asset else ""
         }
-        return data
-    finally:
-        db.close()
-
+    finally: db.close()
 
 def get_bank_masters(db=None) -> List[BankMaster]:
-    local_session = False
-    if db is None:
-        db = SessionLocal()
-        local_session = True
-    try:
-        return db.query(BankMaster).order_by(BankMaster.bank_code).all()
+    local = False
+    if db is None: db = SessionLocal(); local = True
+    try: return db.query(BankMaster).order_by(BankMaster.bank_code).all()
     finally:
-        if local_session:
-            db.close()
-
+        if local: db.close()
 
 def get_bank_master_by_id(bank_id: int) -> Optional[BankMaster]:
     db = SessionLocal()
-    try:
-        return db.query(BankMaster).get(bank_id)
-    finally:
-        db.close()
-
+    try: return db.query(BankMaster).get(bank_id)
+    finally: db.close()
 
 def get_branch_masters_by_bank_id(bank_id: int) -> List[BranchMaster]:
     db = SessionLocal()
-    try:
-        return db.query(BranchMaster).filter(BranchMaster.bank_id == bank_id).all()
-    finally:
-        db.close()
-
+    try: return db.query(BranchMaster).filter(BranchMaster.bank_id==bank_id).all()
+    finally: db.close()
 
 def get_account_type_masters(db=None) -> List[AccountTypeMaster]:
-    local_session = False
-    if db is None:
-        db = SessionLocal()
-        local_session = True
-    try:
-        return db.query(AccountTypeMaster).all()
+    local = False
+    if db is None: db = SessionLocal(); local = True
+    try: return db.query(AccountTypeMaster).all()
     finally:
-        if local_session:
-            db.close()
-
+        if local: db.close()
 
 def add_or_update_bank_master(bank_id: Optional[int], name: str, code: str) -> Optional[BankMaster]:
     db = SessionLocal()
     try:
         if bank_id:
             bank = db.query(BankMaster).get(bank_id)
-            if bank:
-                bank.bank_name = name
-                bank.bank_code = code
+            if bank: bank.bank_name = name; bank.bank_code = code
         else:
-            if db.query(BankMaster).filter(BankMaster.bank_code == code).first():
-                return None
+            if db.query(BankMaster).filter(BankMaster.bank_code==code).first(): return None
             bank = BankMaster(bank_name=name, bank_code=code)
             db.add(bank)
-
-        db.commit()
-        db.refresh(bank)
-        return bank
-    except Exception as e:
-        db.rollback()
-        print(f"Bank Master Error: {e}")
-        return None
-    finally:
-        db.close()
-
+        db.commit(); db.refresh(bank); return bank
+    except: db.rollback(); return None
+    finally: db.close()
 
 def add_branch_master(bank_id: int, name: str, code: str) -> Optional[BranchMaster]:
     db = SessionLocal()
     try:
-        if (
-            db.query(BranchMaster)
-            .filter(BranchMaster.bank_id == bank_id, BranchMaster.branch_code == code)
-            .first()
-        ):
-            raise ValueError("Duplicate branch code")
-
+        if db.query(BranchMaster).filter(BranchMaster.bank_id==bank_id, BranchMaster.branch_code==code).first(): raise ValueError("Duplicate")
         branch = BranchMaster(bank_id=bank_id, branch_name=name, branch_code=code)
-        db.add(branch)
-        db.commit()
-        db.refresh(branch)
-        return branch
-    except Exception as e:
-        db.rollback()
-        raise e
-    finally:
-        db.close()
+        db.add(branch); db.commit(); db.refresh(branch); return branch
+    except Exception as e: db.rollback(); raise e
+    finally: db.close()
 
-# 💡 追加: 支店コード更新関数
 def update_branch_code(branch_id: int, new_code: str) -> bool:
     db = SessionLocal()
     try:
         branch = db.query(BranchMaster).get(branch_id)
-        if branch:
-            branch.branch_code = new_code
-            db.commit()
-            return True
+        if branch: branch.branch_code = new_code; db.commit(); return True
         return False
-    except Exception as e:
-        db.rollback()
-        print(f"Update Branch Code Error: {e}")
-        return False
-    finally:
-        db.close()
+    except: db.rollback(); return False
+    finally: db.close()
 
-# 💡 追加: 支店名更新関数
 def update_branch_name(branch_id: int, new_name: str) -> bool:
     db = SessionLocal()
     try:
         branch = db.query(BranchMaster).get(branch_id)
-        if branch:
-            branch.branch_name = new_name
-            db.commit()
-            return True
+        if branch: branch.branch_name = new_name; db.commit(); return True
         return False
-    except Exception as e:
-        db.rollback()
-        print(f"Update Branch Name Error: {e}")
-        return False
-    finally:
-        db.close()
+    except: db.rollback(); return False
+    finally: db.close()
 
 def add_account_type_master(db=None, type_name: str = "") -> Optional[AccountTypeMaster]:
-    local_session = False
-    if db is None:
-        db = SessionLocal()
-        local_session = True
+    local = False
+    if db is None: db = SessionLocal(); local = True
     try:
-        if db.query(AccountTypeMaster).filter(AccountTypeMaster.type_name == type_name).first():
-            return None
-
+        if db.query(AccountTypeMaster).filter(AccountTypeMaster.type_name==type_name).first(): return None
         new_type = AccountTypeMaster(type_name=type_name)
-        db.add(new_type)
-        db.commit()
-        db.refresh(new_type)
-        return new_type
-    except Exception as e:
-        db.rollback()
-        print(f"Account Type Error: {e}")
-        return None
+        db.add(new_type); db.commit(); db.refresh(new_type); return new_type
+    except: db.rollback(); return None
     finally:
-        if local_session:
-            db.close()
-
+        if local: db.close()
 
 def get_financial_asset_by_case_and_type(case_id: int, asset_type: str) -> List[dict]:
     db = SessionLocal()
     try:
-        assets = (
-            db.query(FinancialAsset)
-            .filter(FinancialAsset.case_id == case_id, FinancialAsset.asset_type == asset_type)
-            .all()
-        )
+        assets = db.query(FinancialAsset).filter(FinancialAsset.case_id==case_id, FinancialAsset.asset_type==asset_type).all()
+        return [{"id": a.id, "bank_id": a.bank_id, "bank_name": a.bank_ref.bank_name if a.bank_ref else "不明",
+                 "branch_name": a.branch_ref.branch_name if a.branch_ref else "", "account_number": a.account_number,
+                 "bank_code": a.bank_ref.bank_code if a.bank_ref else "", "balance": a.balance, "status": a.status} for a in assets]
+    finally: db.close()
 
-        res = []
-        for a in assets:
-            res.append(
-                {
-                    "id": a.id,
-                    "asset_type": a.asset_type,
-                    "bank_id": a.bank_id,
-                    "bank_name": a.bank_ref.bank_name if a.bank_ref else "不明",
-                    "bank_code": a.bank_ref.bank_code if a.bank_ref else "",
-                    "branch_id": a.branch_id,
-                    "branch_name": a.branch_ref.branch_name if a.branch_ref else "",
-                    "branch_code": a.branch_ref.branch_code if a.branch_ref else "",
-                    "account_type_id": a.account_type_id,
-                    "account_type": a.account_type_ref.type_name if a.account_type_ref else "",
-                    "account_number": a.account_number,
-                    "balance": a.balance,
-                    "status": a.status,
-                }
-            )
-        return res
-    finally:
-        db.close()
-
-
-def add_financial_asset_with_type(
-    case_id: int,
-    asset_type: str,
-    bank_id: int,
-    branch_id: Optional[int],
-    account_type_id: Optional[int],
-    account_number: str,
-    balance: float,
-    status: str,
-) -> bool:
+def add_financial_asset_with_type(case_id: int, asset_type: str, bank_id: int, branch_id: Optional[int], account_type_id: Optional[int], account_number: str, balance: float, status: str) -> bool:
     db = SessionLocal()
     try:
-        asset = FinancialAsset(
-            case_id=case_id,
-            asset_type=asset_type,
-            bank_id=bank_id,
-            branch_id=branch_id,
-            account_type_id=account_type_id,
-            account_number=account_number,
-            balance=balance,
-            status=status,
-        )
-        db.add(asset)
-        db.commit()
-        return True
-    except Exception as e:
-        db.rollback()
-        print(f"Add Asset Error: {e}")
-        return False
-    finally:
-        db.close()
+        asset = FinancialAsset(case_id=case_id, asset_type=asset_type, bank_id=bank_id, branch_id=branch_id, account_type_id=account_type_id, account_number=account_number, balance=balance, status=status)
+        db.add(asset); db.commit(); return True
+    except: db.rollback(); return False
+    finally: db.close()
 
+def add_financial_asset(case_id: int, bank_id: int, branch_id: Optional[int], account_type_id: Optional[int], account_number: str, balance: float, status: str) -> bool:
+    return add_financial_asset_with_type(case_id, "BANK", bank_id, branch_id, account_type_id, account_number, balance, status)
 
-def add_financial_asset(
-    case_id: int,
-    bank_id: int,
-    branch_id: Optional[int],
-    account_type_id: Optional[int],
-    account_number: str,
-    balance: float,
-    status: str,
-) -> bool:
-    return add_financial_asset_with_type(
-        case_id, "BANK", bank_id, branch_id, account_type_id, account_number, balance, status
-    )
-
-
-def update_financial_asset(
-    asset_id: int,
-    bank_id: int,
-    branch_id: Optional[int],
-    account_type_id: Optional[int],
-    account_number: str,
-    balance: float,
-    status: str,
-) -> bool:
+def update_financial_asset(asset_id: int, bank_id: int, branch_id: Optional[int], account_type_id: Optional[int], account_number: str, balance: float, status: str) -> bool:
     db = SessionLocal()
     try:
         asset = db.query(FinancialAsset).get(asset_id)
         if asset:
-            asset.bank_id = bank_id
-            asset.branch_id = branch_id
-            asset.account_type_id = account_type_id
-            asset.account_number = account_number
-            asset.balance = balance
-            asset.status = status
-            db.commit()
-            return True
+            asset.bank_id = bank_id; asset.branch_id = branch_id; asset.account_type_id = account_type_id
+            asset.account_number = account_number; asset.balance = balance; asset.status = status
+            db.commit(); return True
         return False
-    except Exception as e:
-        db.rollback()
-        print(f"Update Asset Error: {e}")
-        return False
-    finally:
-        db.close()
-
+    except: db.rollback(); return False
+    finally: db.close()
 
 def delete_financial_asset(asset_id: int) -> bool:
     db = SessionLocal()
     try:
         asset = db.query(FinancialAsset).get(asset_id)
-        if asset:
-            db.delete(asset)
-            db.commit()
-            return True
+        if asset: db.delete(asset); db.commit(); return True
         return False
-    finally:
-        db.close()
+    finally: db.close()
 
+# --- 8. タスク管理 ---
 
 def get_all_tasks_for_case(case_id: int) -> List[dict]:
     db = SessionLocal()
     try:
-        tasks = (
-            db.query(Task, User.name)
-            .outerjoin(User, Task.assigned_user_id == User.id)
-            .filter(Task.case_id == case_id)
-            .order_by(Task.due_date)
-            .all()
-        )
-        result = []
-        for task, user_name in tasks:
-            result.append(
-                {
-                    "task_id": task.task_id,
-                    "case_id": task.case_id,
-                    "description": task.description,
-                    "due_date": task.due_date.strftime("%Y-%m-%d") if task.due_date else None,
-                    "assigned_user_id": task.assigned_user_id,
-                    "assigned_user_name": user_name if user_name else "未割当",
-                    "is_completed": task.is_completed,
-                }
-            )
-        return result
-    finally:
-        db.close()
+        tasks = db.query(Task, User.name).outerjoin(User, Task.assigned_user_id==User.id).filter(Task.case_id==case_id).order_by(Task.due_date).all()
+        return [{"task_id": t.task_id, "description": t.description, "due_date": t.due_date.strftime("%Y-%m-%d") if t.due_date else None, "assigned_user_name": u if u else "未割当", "is_completed": t.is_completed} for t, u in tasks]
+    finally: db.close()
 
-
-def save_task(
-    case_id: int,
-    task_id: Optional[int],
-    description: str,
-    due_date: str,
-    assigned_user_id: Optional[int],
-    is_completed: bool = False,
-) -> bool:
+def save_task(case_id: int, task_id: Optional[int], description: str, due_date: str, assigned_user_id: Optional[int], is_completed: bool = False) -> bool:
     db = SessionLocal()
     try:
-        dt_due = None
-        if due_date:
-            d = parse_all_flexible_date(due_date)
-            if d:
-                dt_due = datetime.datetime.combine(d, datetime.time.min)
-
+        dt_due = datetime.datetime.combine(parse_all_flexible_date(due_date), datetime.time.min) if due_date else None
         if task_id:
             task = db.query(Task).get(task_id)
-            if task:
-                task.description = description
-                task.due_date = dt_due
-                task.assigned_user_id = assigned_user_id
-                task.is_completed = is_completed
+            if task: task.description=description; task.due_date=dt_due; task.assigned_user_id=assigned_user_id; task.is_completed=is_completed
         else:
-            new_task = Task(
-                case_id=case_id,
-                description=description,
-                due_date=dt_due,
-                assigned_user_id=assigned_user_id,
-                is_completed=is_completed,
-            )
-            db.add(new_task)
-
-        db.commit()
-        return True
-    except Exception as e:
-        db.rollback()
-        print(f"Save Task Error: {e}")
-        return False
-    finally:
-        db.close()
-
+            db.add(Task(case_id=case_id, description=description, due_date=dt_due, assigned_user_id=assigned_user_id, is_completed=is_completed))
+        db.commit(); return True
+    except: db.rollback(); return False
+    finally: db.close()
 
 def delete_task(task_id: int) -> bool:
     db = SessionLocal()
     try:
         task = db.query(Task).get(task_id)
-        if task:
-            db.delete(task)
-            db.commit()
-            return True
+        if task: db.delete(task); db.commit(); return True
         return False
-    except Exception as e:
-        db.rollback()
-        print(f"Delete Task Error: {e}")
-        return False
-    finally:
-        db.close()
-
+    finally: db.close()
 
 def get_incomplete_tasks(user_id=None):
     db = SessionLocal()
     try:
-        query = (
-            db.query(Task, Case.case_number, User.name, Case.client_name)
-            .join(Case, Task.case_id == Case.case_id)
-            .join(User, Task.assigned_user_id == User.id)
-            .filter(Task.is_completed == False)
-        )
-
-        if user_id:
-            query = query.filter(Task.assigned_user_id == user_id)
-
+        query = db.query(Task, Case.case_number, User.name, Case.client_name).join(Case, Task.case_id==Case.case_id).join(User, Task.assigned_user_id==User.id).filter(Task.is_completed==False)
+        if user_id: query = query.filter(Task.assigned_user_id==user_id)
         tasks = query.order_by(Task.due_date).limit(10).all()
+        return [{"task_id": t.task_id, "case_id": t.case_id, "case_number": cn, "description": t.description, "due_date": t.due_date.strftime("%Y/%m/%d") if t.due_date else "N/A", "assigned_user": u, "client_name": cl} for t, cn, u, cl in tasks]
+    finally: db.close()
 
-        tasks_data = []
-        for task, case_number, assigned_user_name, client_name in tasks:
-            tasks_data.append(
-                {
-                    "task_id": task.task_id,
-                    "case_id": task.case_id,
-                    "case_number": case_number,
-                    "description": task.description,
-                    "due_date": task.due_date.strftime("%Y/%m/%d") if task.due_date else "N/A",
-                    "assigned_user": assigned_user_name,
-                    "client_name": client_name,
-                }
-            )
-        return tasks_data
-    finally:
-        db.close()
-
+# --- 9. 案件リストビュー ---
 
 def get_case_list(search_term="", status_id=None, user_id=None):
     db = SessionLocal()
     try:
-        # 💡 連絡先検索のためのエイリアス定義
         HeirContactLink = aliased(H_ContactLink)
         DeceasedContactLink = aliased(D_ContactLink)
         HeirContact = aliased(Contact)
@@ -1449,153 +844,93 @@ def get_case_list(search_term="", status_id=None, user_id=None):
                 Task.last_updated_at,
             )
             .join(Case.deceased_ref, isouter=True)
-            .join(Deceased.heirs, isouter=True)  # 相続人テーブルを結合
+            .join(Deceased.heirs, isouter=True)
             .join(Case.status_ref, isouter=True)
             .join(Task, Case.case_id == Task.case_id, isouter=True)
-            # 💡 連絡先情報の結合 (被相続人)
             .outerjoin(DeceasedContactLink, Deceased.id == DeceasedContactLink.deceased_id)
             .outerjoin(DeceasedContact, DeceasedContactLink.contact_id == DeceasedContact.id)
-            # 💡 連絡先情報の結合 (相続人)
             .outerjoin(HeirContactLink, Heir.id == HeirContactLink.heir_id)
             .outerjoin(HeirContact, HeirContactLink.contact_id == HeirContact.id)
             .order_by(Case.contract_date.desc())
         )
 
         if search_term:
-            term = f"%{search_term}%"
+            # 💡 修正: フルネーム検索、スペース無視検索の対応
+            t = f"%{search_term}%"
+            # スペースを除去した検索語（「山田太郎」で「山田 太郎」をヒットさせるため）
+            t_nospace = f"%{search_term.replace(' ', '').replace('　', '')}%"
+
             query = query.filter(
                 or_(
-                    Case.case_number.ilike(term),
-                    Case.client_name.ilike(term),
-                    Case.client_name_kana.ilike(term),
-                    # 被相続人検索
-                    Deceased.name_last.ilike(term),
-                    Deceased.name_first.ilike(term),
-                    Deceased.name_last_kana.ilike(term),
-                    Deceased.name_first_kana.ilike(term),
-                    # 相続人検索
-                    Heir.name_last.ilike(term),
-                    Heir.name_first.ilike(term),
-                    Heir.name_last_kana.ilike(term),
-                    Heir.name_first_kana.ilike(term),
-                    # 💡 電話番号検索 (被相続人 & 相続人)
-                    DeceasedContact.value.ilike(term),
-                    HeirContact.value.ilike(term),
+                    Case.case_number.ilike(t),
+                    Case.client_name.ilike(t),
+                    Case.client_name_kana.ilike(t),
+                    
+                    # 個別カラム検索
+                    Deceased.name_last.ilike(t),
+                    Deceased.name_first.ilike(t),
+                    Deceased.name_last_kana.ilike(t),
+                    Heir.name_last.ilike(t),
+                    Heir.name_first.ilike(t),
+                    Heir.name_last_kana.ilike(t),
+
+                    # フルネーム検索 (スペースあり)
+                    (Deceased.name_last + " " + Deceased.name_first).ilike(t),
+                    (Deceased.name_last_kana + " " + Deceased.name_first_kana).ilike(t),
+                    (Heir.name_last + " " + Heir.name_first).ilike(t),
+                    (Heir.name_last_kana + " " + Heir.name_first_kana).ilike(t),
+
+                    # フルネーム検索 (スペースなし)
+                    (Deceased.name_last + Deceased.name_first).ilike(t_nospace),
+                    (Deceased.name_last_kana + Deceased.name_first_kana).ilike(t_nospace),
+                    (Heir.name_last + Heir.name_first).ilike(t_nospace),
+                    (Heir.name_last_kana + Heir.name_first_kana).ilike(t_nospace),
+
+                    # 連絡先
+                    DeceasedContact.value.ilike(t),
+                    HeirContact.value.ilike(t),
                 )
             )
-
-        if status_id:
-            query = query.filter(Case.current_status_id == status_id)
-
-        if user_id:
-            query = query.filter((Case.manager_id == user_id) | (Case.operator_id == user_id))
-
+        
+        if status_id: query = query.filter(Case.current_status_id==status_id)
+        if user_id: query = query.filter(or_(Case.manager_id==user_id, Case.operator_id==user_id))
+        
         cases_data = query.limit(100).all()
-
         case_list = []
-        processed_ids = set()
-
-        for case, d_last, d_first, status_name, description, last_updated_at in cases_data:
-            if case.case_id in processed_ids:
-                continue
-            processed_ids.add(case.case_id)
-
-            deceased_name = f"{d_last} {d_first}" if d_last else "N/A"
-            role_label = ""
+        processed = set()
+        for c, dl, df, stat, desc, lup in cases_data:
+            if c.case_id in processed: continue
+            processed.add(c.case_id)
+            role = ""
             if user_id:
-                if case.manager_id == user_id and case.operator_id == user_id:
-                    role_label = "担当1 & 2"
-                elif case.manager_id == user_id:
-                    role_label = "担当1"
-                elif case.operator_id == user_id:
-                    role_label = "担当2"
-
-            case_list.append(
-                {
-                    "case_id": case.case_id,
-                    "case_number": case.case_number,
-                    # 💡 SOL案件番号を追加 (安全に取得するために getattr or default を使用)
-                    "sol_case_number": getattr(case, "sol_case_number", "---"),
-                    "client_name": case.client_name,
-                    "deceased_name": deceased_name,
-                    "contract_date": case.contract_date.strftime("%Y/%m/%d")
-                    if case.contract_date
-                    else "N/A",
-                    "status": status_name if status_name else "未設定",
-                    "role_label": role_label,
-                    "manager_id": case.manager_id,
-                    "operator_id": case.operator_id,
-                    "description": description if description else "",
-                    "last_updated_at": last_updated_at.strftime("%Y/%m/%d")
-                    if last_updated_at
-                    else "N/A",
-                }
-            )
+                if c.manager_id == user_id: role = "担当1"
+                elif c.operator_id == user_id: role = "担当2"
+            
+            case_list.append({
+                "case_id": c.case_id, "case_number": c.case_number, "sol_case_number": getattr(c, "sol_case_number", "---"),
+                "client_name": c.client_name, "deceased_name": f"{dl} {df}" if dl else "N/A",
+                "contract_date": c.contract_date.strftime("%Y/%m/%d") if c.contract_date else "N/A",
+                "status": stat if stat else "未設定", "role_label": role, "description": desc if desc else "",
+                "last_updated_at": lup.strftime("%Y/%m/%d") if lup else "N/A"
+            })
         return case_list
-    finally:
-        db.close()
-
+    finally: db.close()
 
 def get_my_cases(user_id: int, limit: int = 10):
     db = SessionLocal()
     try:
-        query = (
-            db.query(Case)
-            .options(joinedload(Case.deceased_ref), joinedload(Case.status_ref))
-            .filter((Case.manager_id == user_id) | (Case.operator_id == user_id))
-            .order_by(Case.current_status_id, Case.contract_date.desc())
-        )
-        cases = query.limit(limit).all()
-        case_list = []
-        for case in cases:
-            deceased_name = (
-                case.deceased_ref.name_last + " " + case.deceased_ref.name_first
-                if case.deceased_ref
-                else "N/A"
-            )
-            case_list.append(
-                {
-                    "case_id": case.case_id,
-                    "case_number": case.case_number,
-                    # 💡 SOL案件番号を追加
-                    "sol_case_number": getattr(case, "sol_case_number", "---"),
-                    "client_name": case.client_name,
-                    "deceased_name": deceased_name,
-                    "status": case.status_ref.name if case.status_ref else "N/A",
-                }
-            )
-        return case_list
-    finally:
-        db.close()
-
+        cases = db.query(Case).options(joinedload(Case.deceased_ref), joinedload(Case.status_ref)).filter(or_(Case.manager_id==user_id, Case.operator_id==user_id)).order_by(Case.current_status_id, Case.contract_date.desc()).limit(limit).all()
+        return [{"case_id": c.case_id, "case_number": c.case_number, "sol_case_number": getattr(c, "sol_case_number", "---"), "client_name": c.client_name, "deceased_name": f"{c.deceased_ref.name_last} {c.deceased_ref.name_first}" if c.deceased_ref else "N/A", "status": c.status_ref.name if c.status_ref else "N/A"} for c in cases]
+    finally: db.close()
 
 def get_user_capacity_data():
     db = SessionLocal()
     try:
         users = db.query(User).all()
-        capacity_data = []
-        for user in users:
-            user_id = user.id
-            task_count = (
-                db.query(func.count(Task.task_id))
-                .filter(Task.assigned_user_id == user_id, Task.is_completed == False)
-                .scalar()
-            )
-            case_count = (
-                db.query(func.count(Case.case_id))
-                .filter((Case.manager_id == user_id) | (Case.operator_id == user_id))
-                .scalar()
-            )
-            capacity_data.append(
-                {
-                    "user_id": user_id,
-                    "name": user.name,
-                    "role": user.role,
-                    "total_incomplete_tasks": task_count,
-                    "total_cases_handled": case_count,
-                }
-            )
-        capacity_data.sort(key=lambda x: x["total_incomplete_tasks"], reverse=True)
-        return capacity_data
-    finally:
-        db.close()
+        data = []
+        for u in users:
+            tc = db.query(func.count(Task.task_id)).filter(Task.assigned_user_id==u.id, Task.is_completed==False).scalar()
+            cc = db.query(func.count(Case.case_id)).filter(or_(Case.manager_id==u.id, Case.operator_id==u.id)).scalar()
+            data.append({"user_id": u.id, "name": u.name, "role": u.role, "total_incomplete_tasks": tc, "total_cases_handled": cc})
+        return sorted(data, key=lambda x: x["total_incomplete_tasks"], reverse=True)
+    finally: db.close()
