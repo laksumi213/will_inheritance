@@ -2,7 +2,7 @@
 import re
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 # パス解決: プロジェクトルートをsys.pathに追加してインポートエラーを防ぐ
@@ -23,19 +23,20 @@ from flet import (
 
 # 設定ファイルのインポート
 from src.config import APP_THEME, DEFAULT_THEME_MODE
+from src.services.deceased_service import get_case_id_by_deceased_id
 
 # Viewのインポート
 from src.views.case_hub import CaseHubView
-from src.views.home import CaseDashboardView
-from src.views.register import ClientRegisterView
-from src.services.deceased_service import get_case_id_by_deceased_id
-
-# 編集画面 (個別ファイルからのインポートを維持)
-from src.views.deceased_edit import DeceasedEditView
-from src.views.heir_edit import HeirEditView
 
 # 💡 変更点: 旧ツール(pdf_tool)を廃止し、高機能版(coordinate_view)を採用
 from src.views.coordinate_view import CoordinateSelectorView
+
+# 編集画面 (個別ファイルからのインポートを維持)
+from src.views.deceased_edit import DeceasedEditView
+from src.views.encryption_tool import EncryptionToolView
+from src.views.heir_edit import HeirEditView
+from src.views.home import CaseDashboardView
+from src.views.register import ClientRegisterView
 
 
 def main(page: Page) -> None:
@@ -62,6 +63,7 @@ def main(page: Page) -> None:
 
     # --- DB初期化処理 ---
     from src.models.database import init_db
+
     init_db()
 
     # -------------------------------------------------------------------------
@@ -82,14 +84,17 @@ def main(page: Page) -> None:
         if case_id:
             detail_route = f"/detail/{case_id}"
             # 詳細画面がまだスタックにない場合のみ追加
-            has_detail = any(v.route.startswith(f"/detail/{case_id}") or v.route.startswith(f"/case/{case_id}") for v in page.views)
-            
+            has_detail = any(
+                v.route.startswith(f"/detail/{case_id}") or v.route.startswith(f"/case/{case_id}")
+                for v in page.views
+            )
+
             if not has_detail:
                 print(f"DEBUG: Rebuilding stack - Adding CaseHubView for case_id={case_id}")
-                
+
                 # CaseHubViewを作成
                 hub_instance = CaseHubView(page, case_id)
-                
+
                 # Viewを作成
                 hub_view = View(
                     route=detail_route,
@@ -102,19 +107,16 @@ def main(page: Page) -> None:
                     title=Text(f"{client_name}の詳細画面 (ID:{case_id})"),
                     bgcolor=Colors.BLUE_GREY_700,
                     leading=IconButton(
-                        Icons.ARROW_BACK, 
-                        on_click=lambda e: page.go("/"),
-                        tooltip="ホームに戻る"
+                        Icons.ARROW_BACK, on_click=lambda e: page.go("/"), tooltip="ホームに戻る"
                     ),
                 )
                 # インスタンス紐付け
                 setattr(hub_view, "_hub_instance", hub_instance)
-                
+
                 # コンテンツ初期化
                 hub_instance.route_to_content(detail_route, update_ui=False)
-                
-                page.views.append(hub_view)
 
+                page.views.append(hub_view)
 
     # =========================================================================
     # ルーティング処理 (page.on_route_change)
@@ -130,16 +132,16 @@ def main(page: Page) -> None:
 
         # 💡 変更点: PDF座標取得ツール
         if e.route == "/pdf_tool":
-            _ensure_base_stack() # ホームを下に敷く
+            _ensure_base_stack()  # ホームを下に敷く
             page.views.append(
                 View(
-                    route="/pdf_tool", 
+                    route="/pdf_tool",
                     controls=[CoordinateSelectorView(page)],
                     appbar=AppBar(
                         title=Text("PDF座標取得・編集ツール"),
                         bgcolor=Colors.BLUE_GREY_800,
                         leading=IconButton(Icons.ARROW_BACK, on_click=lambda _: page.go("/")),
-                    )
+                    ),
                 )
             )
             page.update()
@@ -158,7 +160,7 @@ def main(page: Page) -> None:
                 # 既存のHubインスタンスを探す (再利用ロジック)
                 hub_instance: Optional[CaseHubView] = None
                 target_view: Optional[View] = None
-                
+
                 for view in page.views:
                     if hasattr(view, "_hub_instance"):
                         instance = getattr(view, "_hub_instance")
@@ -166,21 +168,21 @@ def main(page: Page) -> None:
                             hub_instance = instance
                             target_view = view
                             break
-                
+
                 if hub_instance and target_view:
                     # 【再利用】不要な上層Viewを削除してHubを表示
                     while page.views[-1] != target_view:
                         page.views.pop()
-                    
+
                     target_view.route = e.route
                     hub_instance.route_to_content(e.route, update_ui=True)
-                    
+
                 else:
                     # 【新規作成】
                     hub_instance = CaseHubView(page, case_id)
                     new_view = View(route=e.route, controls=[hub_instance], padding=0)
                     setattr(new_view, "_hub_instance", hub_instance)
-                    
+
                     # AppBar設定
                     client_name = getattr(hub_instance, "client_name", "")
                     new_view.appbar = AppBar(
@@ -188,7 +190,7 @@ def main(page: Page) -> None:
                         bgcolor=Colors.BLUE_GREY_700,
                         leading=IconButton(Icons.ARROW_BACK, on_click=lambda e: page.go("/")),
                     )
-                    
+
                     hub_instance.route_to_content(e.route, update_ui=False)
                     page.views.append(new_view)
 
@@ -204,7 +206,7 @@ def main(page: Page) -> None:
             query_params = parse_qs(parsed_url.query)
             case_id_list = query_params.get("case_id", [])
             case_id = int(case_id_list[0]) if case_id_list else 0
-            
+
             # case_id が URL にない場合のフォールバック
             if case_id == 0 and deceased_id > 0:
                 case_id = get_case_id_by_deceased_id(deceased_id) or 0
@@ -220,18 +222,18 @@ def main(page: Page) -> None:
         elif re.match(r"^/heir_edit/(\d+)(\?.*)?$", e.route):
             match = re.match(r"^/heir_edit/(\d+)(\?.*)?$", e.route)
             heir_id = int(match.group(1))
-            
+
             parsed_url = urlparse(e.route)
             query_params = parse_qs(parsed_url.query)
-            
+
             deceased_id_list = query_params.get("deceased_id", [])
             deceased_id = int(deceased_id_list[0]) if deceased_id_list else 0
-            
+
             case_id_list = query_params.get("case_id", [])
             case_id = int(case_id_list[0]) if case_id_list else 0
-            
+
             if case_id == 0 and deceased_id > 0:
-                 case_id = get_case_id_by_deceased_id(deceased_id) or 0
+                case_id = get_case_id_by_deceased_id(deceased_id) or 0
 
             _ensure_base_stack(case_id)
 
@@ -242,15 +244,15 @@ def main(page: Page) -> None:
         elif re.match(r"^/heir_edit/new(\?.*)?$", e.route):
             parsed_url = urlparse(e.route)
             query_params = parse_qs(parsed_url.query)
-            
+
             deceased_id_list = query_params.get("deceased_id", [])
             deceased_id = int(deceased_id_list[0]) if deceased_id_list else 0
-            
+
             case_id_list = query_params.get("case_id", [])
             case_id = int(case_id_list[0]) if case_id_list else 0
-            
+
             if case_id == 0 and deceased_id > 0:
-                 case_id = get_case_id_by_deceased_id(deceased_id) or 0
+                case_id = get_case_id_by_deceased_id(deceased_id) or 0
 
             _ensure_base_stack(case_id)
 
@@ -269,6 +271,22 @@ def main(page: Page) -> None:
             page.views.append(ClientRegisterView(page))
             page.update()
 
+        # 💡 追加: 暗号化ツール画面
+        elif e.route == "/encryption_tool":
+            _ensure_base_stack()
+            page.views.append(
+                View(
+                    route="/encryption_tool",
+                    controls=[EncryptionToolView(page)],
+                    appbar=AppBar(
+                        title=Text("暗号化ZIP作成ツール"),
+                        bgcolor="surfaceVariant",
+                        leading=IconButton(Icons.ARROW_BACK, on_click=lambda _: page.go("/")),
+                    ),
+                )
+            )
+            page.update()
+
         # --- 不明なルート ---
         else:
             print(f"Unknown route: {e.route}")
@@ -285,7 +303,7 @@ def main(page: Page) -> None:
     # イベントハンドラ設定と初期起動
     # =========================================================================
     page.on_route_change = route_change
-    
+
     def view_pop(e):
         page.views.pop()
         top_view = page.views[-1]
@@ -301,4 +319,5 @@ def main(page: Page) -> None:
 
 if __name__ == "__main__":
     from flet import app
+
     app(target=main)

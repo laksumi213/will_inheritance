@@ -280,6 +280,13 @@ class CaseDashboardView(Column):
                         title=Text("PDF座標設定ツール"),
                         on_click=lambda e: self.page.go("/pdf_tool"),
                     ),
+                    # ★追加箇所: 暗号化ツールへのリンク
+                    ListTile(
+                        leading=Icon(Icons.ENHANCED_ENCRYPTION, color=Colors.BLUE_400),
+                        title=Text("暗号化ZIP作成"),
+                        subtitle=Text("名寄帳・戸籍送付用"),
+                        on_click=lambda e: self.page.go("/encryption_tool"),
+                    ),
                 ]
             ),
             padding=10,
