@@ -22,6 +22,7 @@ from flet import (
     View,
     alignment,
     padding,
+    Chip, # 追加
 )
 
 from src.utils.date_utils import convert_seireki_to_wareki, parse_all_flexible_date, on_date_blur_handler
@@ -39,6 +40,7 @@ from src.services.deceased_service import (
     search_zip_by_address_api,
     get_deceased_by_id,
 )
+from src.services.ai_service import ai_service # 追加
 
 
 def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
@@ -92,6 +94,20 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
     last_street_field = TextField(label="番地 (丁目/番/号)", width=250)
     last_building_field = TextField(label="建物名・部屋番号", width=400)
 
+    # 💡 AI候補表示エリア
+    candidate_chips_row = Row(wrap=True, spacing=5)
+    candidate_container = Container(
+        content=Column([
+            Text("💡 都道府県が見つかりませんでした。以下から選択してください:", size=12, color=Colors.ORANGE_900),
+            candidate_chips_row
+        ], spacing=5),
+        visible=False,
+        bgcolor=Colors.ORANGE_50,
+        padding=10,
+        border_radius=5,
+        border=border.all(1, Colors.ORANGE_200)
+    )
+
     # 住所自動入力ハンドラ (Zip -> Address)
     def address_zip_handler(e, pref_f, city_f, street_f):
         zip_code = e.control.value.strip()
@@ -132,40 +148,31 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
             zip_f.value = zip_code
             page.update()
 
-    # 💡 住所貼り付けハンドラ
-    def parse_and_fill_address(e):
-        full_address = e.control.value
-        if not full_address: return
+    # ヘルパー: フィールドへのセットとZIP検索
+    def _fill_address_fields_local(pref: str, rest: str):
+        last_pref_field.value = pref
         
-        full_address = full_address.replace("　", " ").strip()
-        
-        match_pref = re.match(r'(.*?([都道府県]))(.+)', full_address)
-        if match_pref:
-            pref = match_pref.group(1)
-            rest = match_pref.group(3).strip()
+        # 市区町村抽出
+        match_city = re.match(r'^(.+?[郡市区町村])(.+)', rest)
+        if match_city:
+            city = match_city.group(1)
+            rest_street = match_city.group(2).strip()
             
-            last_pref_field.value = pref
+            last_city_field.value = city
             
-            match_city = re.match(r'^(.+?[郡市区町村])(.+)', rest)
-            if match_city:
-                city = match_city.group(1)
-                rest_street = match_city.group(2).strip()
-                last_city_field.value = city
-                
-                parts = rest_street.split(" ", 1)
-                last_street_field.value = parts[0]
-                last_building_field.value = parts[1] if len(parts) > 1 else ""
-            else:
-                last_city_field.value = ""
-                last_street_field.value = rest
-                last_building_field.value = ""
+            parts = rest_street.split(" ", 1)
+            last_street_field.value = parts[0]
+            last_building_field.value = parts[1] if len(parts) > 1 else ""
+        else:
+            last_city_field.value = ""
+            last_street_field.value = rest
+            last_building_field.value = ""
         
-        # 郵便番号検索
+        # ZIP検索
         full_addr_for_zip = f"{last_pref_field.value}{last_city_field.value}{last_street_field.value}"
         if full_addr_for_zip:
              try:
                 zip_code = search_zip_by_address_api(full_addr_for_zip)
-                # フォールバック
                 if not zip_code:
                      zip_code = search_zip_by_address_api(f"{last_pref_field.value}{last_city_field.value}")
                 
@@ -173,8 +180,68 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
                     last_zip_field.value = zip_code
              except Exception as ex:
                 print(f"Auto zip search failed: {ex}")
-
+        
         page.update()
+
+    # ヘルパー: 候補選択時
+    def _on_candidate_select(pref: str, rest: str):
+        candidate_container.visible = False
+        _fill_address_fields_local(pref, rest)
+
+    # AI推測ロジック
+    def _predict_prefecture_with_ai(address_fragment: str):
+        page.open(SnackBar(Text("都道府県を検索中..."), bgcolor=Colors.BLUE_GREY_400))
+        page.update()
+
+        def task():
+            try:
+                candidates = ai_service.predict_prefectures_sync(address_fragment)
+                
+                if not candidates:
+                    page.open(SnackBar(Text("都道府県を特定できませんでした。"), bgcolor=Colors.ORANGE))
+                    candidate_container.visible = False
+                elif len(candidates) == 1:
+                    pref = candidates[0]
+                    page.open(SnackBar(Text(f"「{pref}」を補完しました。"), bgcolor=Colors.GREEN))
+                    _fill_address_fields_local(pref, address_fragment)
+                else:
+                    # 複数候補
+                    candidate_chips_row.controls.clear()
+                    for cand in candidates:
+                        candidate_chips_row.controls.append(
+                            Chip(
+                                label=Text(cand),
+                                on_select=lambda e, p=cand: _on_candidate_select(p, address_fragment),
+                                bgcolor=Colors.WHITE
+                            )
+                        )
+                    candidate_container.visible = True
+            except Exception as e:
+                print(f"AI Error: {e}")
+                candidate_container.visible = False
+            page.update()
+
+        page.run_thread(task)
+
+    # 💡 住所貼り付けハンドラ
+    def parse_and_fill_address(e):
+        full_address = e.control.value
+        if not full_address:
+            candidate_container.visible = False
+            page.update()
+            return
+        
+        full_address = full_address.replace("　", " ").strip()
+        
+        match_pref = re.match(r'(.*?([都道府県]))(.+)', full_address)
+        if match_pref:
+            candidate_container.visible = False
+            pref = match_pref.group(1)
+            rest = match_pref.group(3).strip()
+            _fill_address_fields_local(pref, rest)
+        else:
+            # 都道府県なし -> AIへ
+            _predict_prefecture_with_ai(full_address)
 
     last_paste_address_field = TextField(
         label="📍 住所貼り付け (ここに入力すると自動分割されます)",
@@ -183,7 +250,8 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
         text_size=13,
         color="onSecondaryContainer",
         bgcolor="secondaryContainer",
-        border_color=Colors.TRANSPARENT
+        border_color=Colors.TRANSPARENT,
+        hint_text="都道府県がない場合、AIが補完します"
     )
 
     last_zip_field.on_blur = lambda e: address_zip_handler(e, last_pref_field, last_city_field, last_street_field)
@@ -275,6 +343,7 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
                 past_addresses_column.controls.append(create_past_address_fields(h))
 
             contacts = deceased_service.get_contact_info("deceased", deceased.id)
+            
             
             phone_contacts = [c for c in contacts if c["type"] == "PHONE"]
             phone_inputs_column.controls.clear()
@@ -435,6 +504,7 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
                     Text("※ 死亡時の住民票上の住所を入力してください", size=12, color="onSurfaceVariant"),
                     # 💡 住所貼り付けフィールド
                     last_paste_address_field,
+                    candidate_container, # 候補表示
                     Row([last_zip_field, last_pref_field, last_city_field, last_street_field, last_building_field], wrap=True),
                     Divider(),
 

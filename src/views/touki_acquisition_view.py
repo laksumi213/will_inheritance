@@ -177,11 +177,15 @@ class ToukiAcquisitionView(Column):
                 # 値には検索用の住所（所在 + 地番）を使用
                 search_addr = f"{asset.location} {asset.lot_number or asset.house_number}".strip()
                 
+                # 💡 修正点: keyには一意なIDを使用し、data属性に住所と種別を持たせる
                 options.append(dropdown.Option(
-                    key=search_addr,
+                    key=str(asset.id),  # 一意なID
                     text=label,
-                    # data属性に種別を隠し持たせることで自動判別を可能にする
-                    data={"normalized_type": normalized_type}
+                    # data属性に必要な情報を辞書で格納
+                    data={
+                        "search_addr": search_addr,
+                        "normalized_type": normalized_type
+                    }
                 ))
             
             if not options:
@@ -191,7 +195,7 @@ class ToukiAcquisitionView(Column):
                 self.asset_dropdown.disabled = False
             
             self.asset_dropdown.options = options
-            self.update()
+            self.asset_dropdown.update()
             
         except Exception as e:
             self._show_error(f"データ読込エラー: {e}")
@@ -235,18 +239,22 @@ class ToukiAcquisitionView(Column):
 
     def _on_asset_select(self, e: ControlEvent) -> None:
         """【重要】ドロップダウン選択時に住所と種別を自動的に連動させる"""
-        # 現在選択されたOptionオブジェクトを特定
-        selected_option = next((opt for opt in self.asset_dropdown.options if opt.key == self.asset_dropdown.value), None)
+        # 現在選択されたOptionオブジェクトを特定 (key=IDで完全一致検索)
+        selected_id = self.asset_dropdown.value
+        selected_option = next((opt for opt in self.asset_dropdown.options if opt.key == selected_id), None)
         
         if selected_option and selected_option.key != "none":
-            # 1. 住所フィールドに値を反映
-            self.address_field.value = selected_option.key
+            # data属性から情報を取得
+            data = selected_option.data or {}
             
-            # 2. data属性から種別を読み取り、内部変数を自動更新
-            if selected_option.data:
-                detected_type = selected_option.data.get("normalized_type")
-                if detected_type:
-                    self.target_type = detected_type
+            search_addr = data.get("search_addr", "")
+            detected_type = data.get("normalized_type", "土地")
+
+            # 1. 住所フィールドに値を反映
+            self.address_field.value = search_addr
+            
+            # 2. 内部変数を自動更新
+            self.target_type = detected_type
             
             self.update()
 
@@ -269,7 +277,6 @@ class ToukiAcquisitionView(Column):
                 return
 
         # ボタンをローディング状態（視覚的フィードバック）にする
-        # ※ 以前動かなかった箇所を修正
         self.page.open(SnackBar(Text('ブラウザを起動します。しばらくお待ちください...'), bgcolor=Colors.BLUE_700))
         self.execute_btn.disabled = True
         self.update()

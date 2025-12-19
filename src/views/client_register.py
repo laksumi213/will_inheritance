@@ -1,5 +1,6 @@
 # src/views/client_register.py
 import re
+import datetime
 from typing import Dict, List, Optional, Any
 
 from flet import (
@@ -30,6 +31,7 @@ from flet import (
     dropdown,
     MainAxisAlignment,
     Control,
+    Chip, # 追加
 )
 
 # 共通設定とモデル
@@ -48,6 +50,7 @@ from src.services.deceased_service import (
     search_zip_by_address_api,
     is_case_number_duplicate,
 )
+from src.services.ai_service import ai_service # 追加
 
 # 日付ユーティリティ
 from src.utils.date_utils import on_date_blur_handler
@@ -123,8 +126,11 @@ class ClientRegisterView(View):
 
                         # 5. 現住所
                         Text("🏠 現住所", weight=FontWeight.BOLD, size=18, color="primary"),
-                        # 💡 住所貼り付けフィールド
+                        # 💡 住所貼り付けフィールド (ここに入力すると自動分割されます)
                         self.paste_address_field,
+                        # 💡 AI候補表示エリア
+                        self.candidate_container,
+                        
                         Row([self.zip_field, self.pref_field, self.city_field]),
                         Row([self.street_field, self.building_field]),
                         Divider(height=30),
@@ -230,6 +236,7 @@ class ClientRegisterView(View):
         self.hometown_field = TextField(label="本籍地 (契約者)")
 
         # 住所情報
+        # 💡 住所貼り付けフィールド (自動分割機能付き)
         self.paste_address_field = TextField(
             label="📍 住所貼り付け (ここに入力すると自動分割されます)",
             width=600,
@@ -237,8 +244,23 @@ class ClientRegisterView(View):
             text_size=13,
             color="onSecondaryContainer",
             bgcolor="secondaryContainer",
-            border_color=Colors.TRANSPARENT
+            border_color=Colors.TRANSPARENT,
+            hint_text="都道府県がない場合、AIが補完します"
         )
+        # 💡 AI候補表示エリア
+        self.candidate_chips_row = Row(wrap=True, spacing=5)
+        self.candidate_container = Container(
+            content=Column([
+                Text("💡 都道府県が見つかりませんでした。以下から選択してください:", size=12, color=Colors.ORANGE_900),
+                self.candidate_chips_row
+            ], spacing=5),
+            visible=False,
+            bgcolor=Colors.ORANGE_50,
+            padding=10,
+            border_radius=5,
+            border=border.all(1, Colors.ORANGE_200)
+        )
+        
         self.zip_field = TextField(label="郵便番号", width=150, on_blur=self.search_address_by_zip)
         self.pref_field = TextField(label="都道府県", width=150, on_blur=self.search_zip_by_address)
         self.city_field = TextField(label="市区町村", width=200, on_blur=self.search_zip_by_address)
@@ -347,6 +369,8 @@ class ClientRegisterView(View):
         """住所貼り付けフィールドの変更時に自動分割してセットする"""
         full_address = self.paste_address_field.value
         if not full_address:
+            self.candidate_container.visible = False
+            self.page.update()
             return
         
         # 全角スペースを半角に
@@ -356,55 +380,109 @@ class ClientRegisterView(View):
         # 2〜3文字の都道府県名 + (都|道|府|県)
         match_pref = re.match(r'(.*?([都道府県]))(.+)', full_address)
         if match_pref:
+            # 都道府県がある場合：通常処理
+            self.candidate_container.visible = False
             pref = match_pref.group(1)
             rest = match_pref.group(3).strip()
+            self._fill_address_fields(pref, rest)
+        else:
+            # 都道府県がない場合：AI推測
+            self._predict_prefecture_with_ai(full_address)
+
+    def _fill_address_fields(self, pref: str, rest: str):
+        """分割された住所情報をフィールドにセットする内部メソッド"""
+        self.pref_field.value = pref
+        
+        # 2. 市区町村の抽出
+        match_city = re.match(r'^(.+?[郡市区町村])(.+)', rest)
+        if match_city:
+            city = match_city.group(1)
+            rest_street = match_city.group(2).strip()
             
-            self.pref_field.value = pref
+            self.city_field.value = city
             
-            # 2. 市区町村の抽出
-            # 郡、市、区、町、村 で終わる最短の文字列
-            match_city = re.match(r'^(.+?[郡市区町村])(.+)', rest)
-            if match_city:
-                city = match_city.group(1)
-                rest_street = match_city.group(2).strip()
-                
-                self.city_field.value = city
-                
-                # 3. 番地と建物の分離
-                # 空白がある場合、そこで分割
-                parts = rest_street.split(" ", 1)
-                street = parts[0]
-                building = parts[1] if len(parts) > 1 else ""
-                
-                self.street_field.value = street
-                self.building_field.value = building
-            else:
-                # 市区町村が特定できない場合、残りを市区町村に入れるか番地に入れるか
-                # ここでは残りを番地に入れる
-                self.city_field.value = ""
-                self.street_field.value = rest
-                self.building_field.value = ""
+            # 3. 番地と建物の分離
+            parts = rest_street.split(" ", 1)
+            street = parts[0]
+            building = parts[1] if len(parts) > 1 else ""
+            
+            self.street_field.value = street
+            self.building_field.value = building
+        else:
+            self.city_field.value = ""
+            self.street_field.value = rest
+            self.building_field.value = ""
         
         # 4. 郵便番号の自動検索
-        # 💡 修正: 分割結果から「都+市+町+番地」を再構築してAPIへ
-        # 番地を含めるとAPIが厳密すぎてヒットしない場合があるため、まずはフルでトライし、ダメなら「都+市」でトライするロジックが理想的だが、
-        # ここではまずフルで試す
         full_addr_for_zip = f"{self.pref_field.value}{self.city_field.value}{self.street_field.value}"
         if full_addr_for_zip:
-             try:
-                zip_code = search_zip_by_address_api(full_addr_for_zip)
-                
-                # 失敗した場合、番地なしでトライするフォールバック
-                if not zip_code:
-                    fallback_addr = f"{self.pref_field.value}{self.city_field.value}"
-                    zip_code = search_zip_by_address_api(fallback_addr)
-                
-                if zip_code:
-                    self.zip_field.value = zip_code
-             except Exception as ex:
-                print(f"Auto zip search failed: {ex}")
+             self.page.run_thread(lambda: self._search_zip_async(full_addr_for_zip))
 
         self.page.update()
+
+    def _predict_prefecture_with_ai(self, address_fragment: str):
+        """AIを使って都道府県を推測し、候補を表示または自動反映する"""
+        self.page.open(SnackBar(Text("都道府県を検索中..."), bgcolor=Colors.BLUE_GREY_400))
+        self.page.update()
+
+        def task():
+            try:
+                candidates = ai_service.predict_prefectures_sync(address_fragment)
+                
+                if not candidates:
+                    self.page.open(SnackBar(Text("都道府県を特定できませんでした。手動で入力してください。"), bgcolor=Colors.ORANGE))
+                    self.candidate_container.visible = False
+                elif len(candidates) == 1:
+                    # 1つだけなら自動反映
+                    pref = candidates[0]
+                    self.page.open(SnackBar(Text(f"「{pref}」を補完しました。"), bgcolor=Colors.GREEN))
+                    self._fill_address_fields(pref, address_fragment)
+                else:
+                    # 複数候補なら選択させる
+                    self._show_candidates(candidates, address_fragment)
+            except Exception as e:
+                print(f"AI Predict Error: {e}")
+                self.candidate_container.visible = False
+            self.page.update()
+
+        self.page.run_thread(task)
+
+    def _show_candidates(self, candidates: List[str], rest_address: str):
+        """候補チップを表示する"""
+        self.candidate_chips_row.controls.clear()
+        
+        for cand in candidates:
+            self.candidate_chips_row.controls.append(
+                Chip(
+                    label=Text(cand),
+                    on_select=lambda e, p=cand: self._on_candidate_select(p, rest_address),
+                    bgcolor=Colors.WHITE
+                )
+            )
+        self.candidate_container.visible = True
+        self.page.update()
+
+    def _on_candidate_select(self, pref: str, rest: str):
+        """候補選択時の処理"""
+        self.candidate_container.visible = False
+        self._fill_address_fields(pref, rest)
+
+    def _search_zip_async(self, full_addr: str):
+        """非同期で郵便番号検索"""
+        try:
+            from src.services.deceased_service import search_zip_by_address_api
+            zip_code = search_zip_by_address_api(full_addr)
+            
+            if not zip_code:
+                # フォールバック
+                fallback_addr = f"{self.pref_field.value}{self.city_field.value}"
+                zip_code = search_zip_by_address_api(fallback_addr)
+            
+            if zip_code:
+                self.zip_field.value = zip_code
+                self.page.update()
+        except Exception as ex:
+            print(f"Auto zip search failed: {ex}")
 
     # --- 住所自動入力ロジック ---
     def search_address_by_zip(self, e) -> None:
@@ -443,17 +521,7 @@ class ClientRegisterView(View):
             return
 
         full_address = f"{pref}{city}{street}"
-        try:
-            zip_code = search_zip_by_address_api(full_address)
-            # フォールバック
-            if not zip_code:
-                zip_code = search_zip_by_address_api(f"{pref}{city}")
-            
-            if zip_code:
-                self.zip_field.value = zip_code
-                self.page.update()
-        except Exception as ex:
-            print(f"Zip search error: {ex}")
+        self.page.run_thread(lambda: self._search_zip_async(full_address))
 
     # --- フォルダ選択ロジック ---
     def get_directory_result(self, e: FilePickerResultEvent) -> None:

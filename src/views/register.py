@@ -1,6 +1,7 @@
 # src/views/register.py
 import json
 import asyncio
+import re
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -32,6 +33,7 @@ from flet import (
     dropdown,
     MainAxisAlignment,
     Control,
+    Chip, # 追加
 )
 
 # 共通設定とモデル
@@ -47,8 +49,10 @@ from src.services.deceased_service import (
     get_next_case_number_service,
     update_case_folder_path,
     search_address_by_zip_api,
+    search_zip_by_address_api,
     is_case_number_duplicate,
 )
+from src.services.ai_service import ai_service # AIサービスを追加
 
 # 日付ユーティリティ
 from src.utils.date_utils import on_date_blur_handler
@@ -97,17 +101,17 @@ class ClientRegisterView(View):
                     controls=[
                         Text("新しい相続案件を登録します。", size=16, weight=FontWeight.BOLD),
                         
-                        # 1. AI自動入力セクション (無効化済みですがUIは残すか、非表示にします)
+                        # 1. AI自動入力セクション
                         self._create_ai_section(),
                         Divider(height=20, color=Colors.TRANSPARENT),
 
                         # 2. 案件情報
-                        Text("案件情報", weight=FontWeight.BOLD, size=18),
+                        Text("案件情報", weight=FontWeight.BOLD, size=18, color="primary"),
                         Row([self.case_number_field, self.manager_field, self.operator_field]),
                         Divider(),
 
                         # 3. 契約者情報
-                        Text("👤 契約者（依頼者）情報 *", weight=FontWeight.BOLD, size=18),
+                        Text("👤 契約者（依頼者）情報 *", weight=FontWeight.BOLD, size=18, color="primary"),
                         Row([self.name_last_field, self.name_first_field]),
                         Row([self.kana_last_field, self.kana_first_field]),
                         Row([self.rel_field]),
@@ -115,7 +119,7 @@ class ClientRegisterView(View):
                         Divider(),
 
                         # 4. 連絡先情報
-                        Text("📞 連絡先情報", weight=FontWeight.BOLD, size=18),
+                        Text("📞 連絡先情報", weight=FontWeight.BOLD, size=18, color="primary"),
                         self._create_phone_section(),
                         self.phone_inputs_column,
                         self._create_email_section(),
@@ -123,19 +127,26 @@ class ClientRegisterView(View):
                         Divider(),
 
                         # 5. 現住所
-                        Text("🏠 現住所", weight=FontWeight.BOLD, size=18),
+                        Text("🏠 現住所", weight=FontWeight.BOLD, size=18, color="primary"),
+                        # 💡 住所貼り付けフィールド (ここに入力すると自動分割されます)
+                        self.paste_address_field,
+                        # 💡 AI候補表示エリア (初期は非表示)
+                        self.candidate_container,
+                        
                         Row([self.zip_field, self.pref_field, self.city_field]),
                         Row([self.street_field, self.building_field]),
                         Divider(height=30),
 
                         # 6. フォルダパス
-                        Text("📁 案件フォルダ設定", weight=FontWeight.BOLD, size=18),
+                        Text("📁 案件フォルダ設定", weight=FontWeight.BOLD, size=18, color="primary"),
                         Row([
                             self.path_field,
                             ElevatedButton(
                                 "フォルダ選択",
                                 icon=Icons.FOLDER_OPEN,
                                 on_click=self.open_folder_dialog,
+                                bgcolor="secondaryContainer",
+                                color="onSecondaryContainer",
                             ),
                         ]),
                         
@@ -164,7 +175,9 @@ class ClientRegisterView(View):
                             controls=[
                                 ElevatedButton(
                                     "キャンセル", 
-                                    on_click=lambda e: self.page.go("/")
+                                    on_click=lambda e: self.page.go("/"),
+                                    bgcolor="surfaceVariant",
+                                    color="onSurfaceVariant",
                                 ),
                                 ElevatedButton(
                                     "保存して詳細へ進む",
@@ -225,10 +238,35 @@ class ClientRegisterView(View):
         self.hometown_field = TextField(label="本籍地 (契約者)")
 
         # 住所情報
+        # 💡 住所貼り付けフィールド (自動分割機能付き)
+        self.paste_address_field = TextField(
+            label="📍 住所貼り付け (ここに入力すると自動分割されます)",
+            width=600,
+            on_change=self.parse_and_fill_address,
+            text_size=13,
+            color="onSecondaryContainer",
+            bgcolor="secondaryContainer",
+            border_color=Colors.TRANSPARENT,
+            hint_text="都道府県がない場合、AIが補完します"
+        )
+        # 💡 AI候補表示エリア
+        self.candidate_chips_row = Row(wrap=True, spacing=5)
+        self.candidate_container = Container(
+            content=Column([
+                Text("💡 都道府県が見つかりませんでした。以下から選択してください:", size=12, color=Colors.ORANGE_900),
+                self.candidate_chips_row
+            ], spacing=5),
+            visible=False,
+            bgcolor=Colors.ORANGE_50,
+            padding=10,
+            border_radius=5,
+            border=border.all(1, Colors.ORANGE_200)
+        )
+
         self.zip_field = TextField(label="郵便番号", width=150, on_blur=self.search_address_by_zip)
-        self.pref_field = TextField(label="都道府県", width=150)
-        self.city_field = TextField(label="市区町村", width=200)
-        self.street_field = TextField(label="番地", width=150)
+        self.pref_field = TextField(label="都道府県", width=150, on_blur=self.search_zip_by_address)
+        self.city_field = TextField(label="市区町村", width=200, on_blur=self.search_zip_by_address)
+        self.street_field = TextField(label="番地", width=150, on_blur=self.search_zip_by_address)
         self.building_field = TextField(label="建物名・部屋番号")
 
         # フォルダパス
@@ -258,7 +296,7 @@ class ClientRegisterView(View):
         )
 
         # AIステータス用
-        self.upload_indicator = ProgressRing(visible=False, width=20, height=20)
+        self.upload_indicator = ProgressRing(visible=False, width=20, height=20, color="secondary")
         self.upload_status_text = Text("", size=14, color="secondary")
 
     def _create_ai_section(self) -> Container:
@@ -267,18 +305,18 @@ class ClientRegisterView(View):
             content=Column(
                 [
                     Row([
-                        Icon(Icons.AUTO_AWESOME, color="grey"),
-                        Text("AI自動入力 (無効)", size=16, weight=FontWeight.BOLD, color="grey"),
+                        Icon(Icons.AUTO_AWESOME, color="outline"),
+                        Text("AI自動入力 (無効)", size=16, weight=FontWeight.BOLD, color="outline"),
                     ]),
-                    Text("現在、AI機能は利用できません。", size=14, color="grey"),
+                    Text("現在、AI機能は利用できません。", size=14, color="outline"),
                     Row([
                         ElevatedButton(
                             "PDFファイルを選択",
                             icon=Icons.UPLOAD_FILE,
                             on_click=lambda _: self.page.open(SnackBar(Text("AI機能は現在無効化されています。"), bgcolor=Colors.GREY)),
                             style=ButtonStyle(
-                                bgcolor="surface",
-                                color="grey",
+                                bgcolor="surfaceVariant",
+                                color="onSurfaceVariant",
                             ),
                             disabled=True # 無効化
                         ),
@@ -289,9 +327,9 @@ class ClientRegisterView(View):
                 spacing=5,
             ),
             padding=15,
-            border=border.all(1, "grey"),
+            border=border.all(1, "outlineVariant"),
             border_radius=8,
-            bgcolor=Colors.GREY_100,
+            bgcolor="surfaceVariant",
         )
 
     def _create_phone_section(self) -> Row:
@@ -302,6 +340,8 @@ class ClientRegisterView(View):
                     "追加",
                     icon=Icons.ADD,
                     on_click=lambda e: add_new_contact_row(e, self.phone_inputs_column, is_email=False),
+                    bgcolor="secondaryContainer",
+                    color="onSecondaryContainer",
                 ),
             ],
             alignment=MainAxisAlignment.SPACE_BETWEEN,
@@ -315,6 +355,8 @@ class ClientRegisterView(View):
                     "追加",
                     icon=Icons.ADD,
                     on_click=lambda e: add_new_contact_row(e, self.email_inputs_column, is_email=True),
+                    bgcolor="secondaryContainer",
+                    color="onSecondaryContainer",
                 ),
             ],
             alignment=MainAxisAlignment.SPACE_BETWEEN,
@@ -323,6 +365,131 @@ class ClientRegisterView(View):
     def _add_initial_contacts(self, column: Column, is_email: bool) -> None:
         new_row, _ = create_contact_input_row(column, initial_value="", is_email=is_email)
         column.controls.append(new_row)
+
+    # --- 住所自動分割ロジック ---
+    def parse_and_fill_address(self, e):
+        """住所貼り付けフィールドの変更時に自動分割してセットする"""
+        full_address = self.paste_address_field.value
+        if not full_address:
+            self.candidate_container.visible = False
+            self.page.update()
+            return
+        
+        # 全角スペースを半角に
+        full_address = full_address.replace("　", " ").strip()
+
+        # 1. 都道府県の抽出
+        match_pref = re.match(r'(.*?([都道府県]))(.+)', full_address)
+        if match_pref:
+            # 都道府県がある場合：通常処理
+            self.candidate_container.visible = False
+            pref = match_pref.group(1)
+            rest = match_pref.group(3).strip()
+            self._fill_address_fields(pref, rest)
+        else:
+            # 都道府県がない場合：AI推測
+            self._predict_prefecture_with_ai(full_address)
+
+    def _fill_address_fields(self, pref: str, rest: str):
+        """分割された住所情報をフィールドにセットする内部メソッド"""
+        self.pref_field.value = pref
+        
+        # 2. 市区町村の抽出
+        # 郡、市、区、町、村 で終わる最短の文字列
+        match_city = re.match(r'^(.+?[郡市区町村])(.+)', rest)
+        if match_city:
+            city = match_city.group(1)
+            rest_street = match_city.group(2).strip()
+            
+            self.city_field.value = city
+            
+            # 3. 番地と建物の分離
+            parts = rest_street.split(" ", 1)
+            street = parts[0]
+            building = parts[1] if len(parts) > 1 else ""
+            
+            self.street_field.value = street
+            self.building_field.value = building
+        else:
+            # 市区町村が特定できない場合
+            self.city_field.value = ""
+            self.street_field.value = rest
+            self.building_field.value = ""
+        
+        # 4. 郵便番号の自動検索
+        full_addr_for_zip = f"{self.pref_field.value}{self.city_field.value}{self.street_field.value}"
+        if full_addr_for_zip:
+             self.page.run_thread(lambda: self._search_zip_async(full_addr_for_zip))
+
+        self.page.update()
+
+    def _predict_prefecture_with_ai(self, address_fragment: str):
+        """AIを使って都道府県を推測し、候補を表示または自動反映する"""
+        self.page.open(SnackBar(Text("都道府県を検索中..."), bgcolor=Colors.BLUE_GREY_400))
+        self.page.update()
+
+        def task():
+            try:
+                candidates = ai_service.predict_prefectures_sync(address_fragment)
+                
+                if not candidates:
+                    self.page.open(SnackBar(Text("都道府県を特定できませんでした。手動で入力してください。"), bgcolor=Colors.ORANGE))
+                    self.candidate_container.visible = False
+                elif len(candidates) == 1:
+                    # 1つだけなら自動反映
+                    pref = candidates[0]
+                    # 貼り付けられた文字列と結合して再度パース処理へ（再帰はせず直接フィル）
+                    # ここでは address_fragment は都道府県を含まない想定なので、そのまま rest として扱う
+                    # ただし、「横浜市...」のように住所自体は完全な場合もあるため、結合して再パースした方が安全かもしれないが、
+                    # ここでは pref と fragment を分離して扱う
+                    self.page.open(SnackBar(Text(f"「{pref}」を補完しました。"), bgcolor=Colors.GREEN))
+                    self._fill_address_fields(pref, address_fragment)
+                else:
+                    # 複数候補なら選択させる
+                    self._show_candidates(candidates, address_fragment)
+            except Exception as e:
+                print(f"AI Predict Error: {e}")
+                self.candidate_container.visible = False
+            self.page.update()
+
+        self.page.run_thread(task)
+
+    def _show_candidates(self, candidates: List[str], rest_address: str):
+        """候補チップを表示する"""
+        self.candidate_chips_row.controls.clear()
+        
+        for cand in candidates:
+            self.candidate_chips_row.controls.append(
+                Chip(
+                    label=Text(cand),
+                    on_select=lambda e, p=cand: self._on_candidate_select(p, rest_address),
+                    bgcolor=Colors.WHITE
+                )
+            )
+        self.candidate_container.visible = True
+        self.page.update()
+
+    def _on_candidate_select(self, pref: str, rest: str):
+        """候補選択時の処理"""
+        self.candidate_container.visible = False
+        self._fill_address_fields(pref, rest)
+
+    def _search_zip_async(self, full_addr: str):
+        """非同期で郵便番号検索"""
+        try:
+            from src.services.deceased_service import search_zip_by_address_api
+            zip_code = search_zip_by_address_api(full_addr)
+            
+            if not zip_code:
+                # フォールバック
+                fallback_addr = f"{self.pref_field.value}{self.city_field.value}"
+                zip_code = search_zip_by_address_api(fallback_addr)
+            
+            if zip_code:
+                self.zip_field.value = zip_code
+                self.page.update()
+        except Exception as ex:
+            print(f"Auto zip search failed: {ex}")
 
     # --- 住所自動入力ロジック ---
     def search_address_by_zip(self, e) -> None:
@@ -336,7 +503,7 @@ class ClientRegisterView(View):
             if address_info is None:
                 self.pref_field.value = "通信エラー"
             elif address_info == {}:
-                self.page.open(SnackBar(Text("住所が見つかりませんでした"), bgcolor="error"))
+                self.page.open(SnackBar(Text("住所が見つかりませんでした"), bgcolor=Colors.RED))
             else:
                 self.pref_field.value = address_info.get("prefecture", "")
                 self.city_field.value = address_info.get("city_ward_town", "")
@@ -344,9 +511,24 @@ class ClientRegisterView(View):
                 self.street_field.focus()
 
         except Exception as ex:
-             self.page.open(SnackBar(Text(f"住所検索エラー: {ex}"), bgcolor="error"))
+             self.page.open(SnackBar(Text(f"住所検索エラー: {ex}"), bgcolor=Colors.RED))
         
         self.page.update()
+
+    def search_zip_by_address(self, e) -> None:
+        """住所入力から郵便番号を検索"""
+        pref = self.pref_field.value or ""
+        city = self.city_field.value or ""
+        street = self.street_field.value or ""
+        
+        if not pref or not city:
+            return
+
+        if self.zip_field.value:
+            return
+
+        full_address = f"{pref}{city}{street}"
+        self.page.run_thread(lambda: self._search_zip_async(full_address))
 
     # --- フォルダ選択ロジック ---
     def get_directory_result(self, e: FilePickerResultEvent) -> None:
@@ -383,18 +565,18 @@ class ClientRegisterView(View):
 
         # 1. 必須項目チェック
         if not case_num_input or not name_last_input:
-            self.page.open(SnackBar(Text("必須項目（案件番号、契約者氏名(姓)）を入力してください。"), bgcolor="error"))
+            self.page.open(SnackBar(Text("必須項目（案件番号、契約者氏名(姓)）を入力してください。"), bgcolor=Colors.RED))
             self.page.update()
             return
 
         # 2. 案件番号の重複チェック
         try:
             if is_case_number_duplicate(case_num_input):
-                self.page.open(SnackBar(Text(f"案件番号 '{case_num_input}' は既に存在します。"), bgcolor="error"))
+                self.page.open(SnackBar(Text(f"案件番号 '{case_num_input}' は既に存在します。"), bgcolor=Colors.RED))
                 self.page.update()
                 return
         except Exception as ex:
-             self.page.open(SnackBar(Text(f"DBエラー: {ex}"), bgcolor="error"))
+             self.page.open(SnackBar(Text(f"DBエラー: {ex}"), bgcolor=Colors.RED))
              self.page.update()
              return
 
@@ -440,14 +622,14 @@ class ClientRegisterView(View):
 
                 self._update_case_additional_info(case_id)
 
-                self.page.open(SnackBar(Text("新規案件を登録しました。"), bgcolor="green"))
+                self.page.open(SnackBar(Text("新規案件を登録しました。"), bgcolor=Colors.GREEN))
                 self.page.go(f"/detail/{case_id}")
             else:
                 raise Exception("データベース登録処理でIDが返されませんでした。")
 
         except Exception as ex:
             print(f"保存エラー: {ex}")
-            self.page.open(SnackBar(Text(f"保存エラー: {str(ex)}"), bgcolor="error"))
+            self.page.open(SnackBar(Text(f"保存エラー: {str(ex)}"), bgcolor=Colors.RED))
             self.page.update()
 
     def _update_case_additional_info(self, case_id: int) -> None:
@@ -482,3 +664,12 @@ class ClientRegisterView(View):
             print(f"Additional Info Update Error: {e}")
         finally:
             db.close()
+
+# --- 互換性のためのダミー関数 ---
+def reset_all_global_fields():
+    """
+    以前の仕様との互換性を保つためのダミー関数。
+    現在はClientRegisterViewクラス内で状態が管理され、
+    画面遷移時に新しいインスタンスが生成されるため、明示的なリセットは不要です。
+    """
+    pass

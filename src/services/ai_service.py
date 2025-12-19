@@ -25,7 +25,6 @@ class AIService:
     """
 
     # 優先順位順のモデルリスト
-    # 手書き認識には Pro モデルが比較的強い傾向があります
     MODEL_CANDIDATES = [
         'gemini-2.5-flash',       # 最新の標準モデル (推奨: 高速・低コスト)
         'gemini-2.5-pro',         # 最新の高性能モデル (高精度)
@@ -168,6 +167,45 @@ class AIService:
         ]
         """
         return self._run_analysis(base64_image, prompt)
+
+    # 💡 住所補完（都道府県推測） ---
+    def predict_prefectures_sync(self, address_fragment: str) -> List[str]:
+        """
+        都道府県が欠落している住所文字列から、可能性のある都道府県を推測する。
+        """
+        if not self.model or not address_fragment:
+            return []
+
+        prompt = f"""
+        以下の住所の一部から、該当する可能性のある日本の都道府県を推測し、リストで返してください。
+        
+        対象住所文字列: "{address_fragment}"
+        
+        【ルール】
+        - 「中央区」のように複数の都道府県に存在する可能性がある場合は、可能性が高い順に最大3つまで挙げてください。
+        - 「横浜市」のように一意に定まる場合は1つだけ挙げてください。
+        - 結果は以下のJSON配列形式のみで出力してください。Markdownの装飾は不要です。
+        
+        ["東京都", "大阪府"]
+        """
+        
+        try:
+            response = self.model.generate_content(prompt)
+            text = response.text
+            # JSONブロックの除去
+            json_str = text
+            if "```json" in text:
+                json_str = text.split("```json")[1].split("```")[0]
+            elif "```" in text:
+                json_str = text.split("```")[1].split("```")[0]
+            
+            result = json.loads(json_str.strip())
+            if isinstance(result, list):
+                return result
+            return []
+        except Exception as e:
+            logger.error(f"Prefecture prediction failed: {e}")
+            return []
 
     # --- 共通実行ロジック ---
     def _run_analysis(self, base64_image: str, prompt: str) -> Any:
