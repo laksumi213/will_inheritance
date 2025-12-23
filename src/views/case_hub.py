@@ -30,15 +30,15 @@ from flet import (
 # サービス・ユーティリティ
 from src.services.deceased_service import get_case_folder_path, get_contracting_party_name
 from src.utils.file_system import open_case_folder
+
+# 各種ビューのインポート
+# 循環参照を避けるため、可能な限り遅延インポートすることも検討できますが、
+# ここではトップレベルでインポートし、balance_cert_doc側で対策しています。
 from src.views.any_view import AnyView
 from src.views.balance_cert_doc import BalanceCertDocView
 from src.views.bank_edit import BankEditView
-
-# 各種ビューのインポート
 from src.views.detail import DeceasedDetailView
 from src.views.freeze_proc_view import FreezeProcView
-
-# 遺産分割協議書画面のインポート
 from src.views.inheritance_division_view import InheritanceDivisionView
 from src.views.inheritance_doc_view import InheritanceDocView
 from src.views.mizuho_balance_doc_view import MizuhoBalanceDocView
@@ -47,8 +47,6 @@ from src.views.securities_edit import SecuritiesEditView
 from src.views.smbc_balance_doc_view import SmbcBalanceDocView
 from src.views.task_management_view import TaskManagementView
 from src.views.visit_reserve_select_bank_view import VisitReserveSelectBankView
-
-# 💡 新規追加: 登記情報取得画面
 from src.views.touki_acquisition_view import ToukiAcquisitionView
 
 
@@ -106,7 +104,6 @@ class CaseHubView(Row):
                 "route_suffix": "asset/register",
                 "view_func": lambda: RealEstateEditView(self.page, self.case_id),
             },
-            # 💡 新規追加: 登記情報取得
             "touki_acq": {
                 "icon": Icons.DOMAIN_VERIFICATION,
                 "label": "登記情報取得",
@@ -163,7 +160,10 @@ class CaseHubView(Row):
 
         self.selected_key = initial_key
         self.destination_keys = list(self.destinations.keys())
-        self.selected_index = self.destination_keys.index(initial_key)
+        if initial_key in self.destination_keys:
+            self.selected_index = self.destination_keys.index(initial_key)
+        else:
+            self.selected_index = 0
 
         # --- コンテンツエリアの初期化 ---
         self.main_content_container = Container(
@@ -196,7 +196,7 @@ class CaseHubView(Row):
             self.main_content_container,
         ]
 
-        # 初期コンテンツのロード（ルート情報を渡す）
+        # 初期コンテンツのロード
         self.route_to_content(current_route, update_ui=False)
 
     def on_nav_change(self, e):
@@ -225,12 +225,16 @@ class CaseHubView(Row):
 
         # 1. 書類作成画面かつ、特定の銀行ルートが指定されている場合
         if key == "balance_cert_doc" and specific_route:
-            smbc_route_suffix = "/smbc"
-            mizuho_route_suffix = "/mizuho"
-
-            if specific_route.endswith(smbc_route_suffix):
+            # URLパラメータや末尾のスラッシュに柔軟に対応するため部分一致で判定
+            
+            if "/smbc" in specific_route:
+                print("DEBUG: Showing SMBC View")
+                # 三井住友銀行 (0009)
                 content_control = SmbcBalanceDocView(self.page, self.case_id, "0009")
-            elif specific_route.endswith(mizuho_route_suffix):
+            
+            elif "/mizuho" in specific_route:
+                print("DEBUG: Showing Mizuho View")
+                # みずほ銀行 (0001)
                 content_control = MizuhoBalanceDocView(self.page, self.case_id, "0001")
 
             if content_control is not None:
@@ -238,9 +242,6 @@ class CaseHubView(Row):
                 return
 
         # 2. コンテンツの生成またはキャッシュからの取得
-        # 💡 キャッシュロジック: 一度生成した画面は保持するが、
-        #    ToukiAcquisitionViewなどはデータ更新の可能性があるためキャッシュしない方が良い場合もある
-        #    ここでは標準的な挙動としてキャッシュを利用する
         if key != "overview" and key in self.views_cache:
             content_control = self.views_cache[key]
         else:
@@ -263,7 +264,6 @@ class CaseHubView(Row):
                     self.views_cache[key] = content_control
 
             except Exception as e:
-                # エラー内容をコンソールとUIに出力
                 print(f"❌ Error loading view '{key}': {e}")
                 traceback.print_exc()
 

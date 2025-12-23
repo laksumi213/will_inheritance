@@ -9,16 +9,15 @@ from flet import (
     Icon,
     Icons,
     ListTile,
-    ListView,
     Page,
     Text,
-    border,
     ControlEvent,
-    RoundedRectangleBorder
+    RoundedRectangleBorder,
+    SnackBar,
 )
 
-from src.services.deceased_service import get_financial_asset_by_case
-
+# 循環参照回避のため、メソッド内でインポートするか、TYPE_CHECKINGを使用するのが一般的ですが、
+# ここではImportErrorを確実に回避するため、メソッド内インポートを採用します。
 
 class BalanceCertDocView(Column):
     """
@@ -32,10 +31,10 @@ class BalanceCertDocView(Column):
             scroll="auto",
             spacing=20,
         )
-        self.page = page  # ページ参照を保持
+        self.page = page
         self.case_id = case_id
 
-        # 💡 修正: 初期化時に immediately load を行わず、空のコントロールリストを設定
+        # 銀行リスト表示用コンテナ
         self.bank_list_container = Column(
             controls=[Text("銀行情報をロード中...", color="onSurfaceVariant")],
             expand=True, 
@@ -60,19 +59,28 @@ class BalanceCertDocView(Column):
     def did_mount(self):
         """
         コントロールがPageにアタッチされた後、一度だけ実行される
-        ここで初めてデータロードとUIの更新を行う
+        ここでデータロードとUIの更新を行う
         """
         self._load_bank_list()
 
     def _load_bank_list(self):
         """登録済みの銀行リストを生成・更新する"""
+        # 循環参照を防ぐため、ここでサービスをインポート
+        from src.services.deceased_service import get_financial_asset_by_case
         
         # 1. 案件の金融資産リストを取得
-        financial_assets = get_financial_asset_by_case(self.case_id)
+        try:
+            financial_assets = get_financial_asset_by_case(self.case_id)
+        except Exception as e:
+            print(f"Error loading assets: {e}")
+            if self.page:
+                self.page.open(SnackBar(Text(f"データ取得エラー: {e}"), bgcolor=Colors.RED))
+            financial_assets = []
         
         # 2. 銀行名とコードのユニークなセットを作成
         unique_banks = {}
         for asset in financial_assets:
+            # 銀行コードがない、または空の場合はスキップ
             if 'bank_code' not in asset or not asset['bank_code']:
                 continue
             
@@ -88,19 +96,7 @@ class BalanceCertDocView(Column):
             for code, bank_info in unique_banks.items():
                 name = bank_info['name']
 
-                def open_doc_create_page(e: ControlEvent, code=code):
-                    """書類作成ボタン/リスト押下時のルーティング"""
-                    if not self.page:
-                        return
-                    
-                    # 銀行コードに基づいて次のルーティングを決定
-                    if code == "0001":
-                        self.page.go(f"/case/{self.case_id}/doc/balance_cert/mizuho")
-                    elif code == "0009":
-                        self.page.go(f"/case/{self.case_id}/doc/balance_cert/smbc")
-                    else:
-                        self.page.go(f"/case/{self.case_id}/doc/balance_cert/standard/{code}")
-
+                # コントロール作成
                 controls.append(
                     ListTile(
                         leading=Icon(Icons.ACCOUNT_BALANCE, color="primary"),
@@ -109,15 +105,17 @@ class BalanceCertDocView(Column):
                             color="onSurface",
                             weight=FontWeight.W_500
                         ),
+                        subtitle=Text("残高証明書発行依頼書を作成します"),
                         trailing=ElevatedButton(
                             "書類作成へ",
                             icon=Icons.EDIT_DOCUMENT,
-                            on_click=open_doc_create_page,
-                            data=code,
+                            on_click=self._handle_doc_create,
+                            data=code, # 銀行コードをdata属性に埋め込む
                             bgcolor="primaryContainer",
                             color="onPrimaryContainer",
                         ),
-                        on_click=open_doc_create_page,
+                        on_click=self._handle_doc_create,
+                        data=code, # ListTile自体にも埋め込む
                         bgcolor="surfaceVariant",
                         shape=RoundedRectangleBorder(radius=5),
                     )
@@ -125,13 +123,36 @@ class BalanceCertDocView(Column):
         else:
             controls.append(
                 Container(
-                    content=Text("現在、この案件に登録されている銀行口座情報がありません。\n先に「銀行登録」メニューから口座情報を登録してください。", color=Colors.ERROR),
+                    content=Text(
+                        "現在、この案件に登録されている銀行口座情報がありません。\n先に「銀行登録」メニューから口座情報を登録してください。", 
+                        color=Colors.ERROR
+                    ),
                     padding=20
                 )
             )
 
-        # 3. コントロールを更新 (この時点でコントロールはPageにアタッチ済み)
+        # 3. コントロールを更新
         self.bank_list_container.controls = controls
         self.bank_list_container.update()
+
+    def _handle_doc_create(self, e: ControlEvent):
+        """書類作成ボタン/リスト押下時のルーティング処理"""
+        # data属性から銀行コードを取得
+        code = e.control.data
         
-        # NOTE: 自身の update() 呼び出しは不要 (親の update() で対応)
+        if not code:
+            self.page.open(SnackBar(Text("銀行コードが取得できませんでした"), bgcolor=Colors.RED))
+            return
+
+        print(f"DEBUG: Navigating to doc create page for bank code: {code}")
+
+        # 銀行コードに基づいて次のルーティングを決定
+        if code == "0001":
+            # みずほ銀行
+            self.page.go(f"/case/{self.case_id}/doc/balance_cert/mizuho")
+        elif code == "0009":
+            # 三井住友銀行
+            self.page.go(f"/case/{self.case_id}/doc/balance_cert/smbc")
+        else:
+            # その他（汎用）
+            self.page.go(f"/case/{self.case_id}/doc/balance_cert/standard/{code}")

@@ -4,11 +4,15 @@ import jaconv
 import mojimoji
 from datetime import datetime
 from typing import Dict, Any, Optional
+from pathlib import Path
 
-# 💡 修正: インポートパスを新しいディレクトリ構成 (src.utils) に変更
+# 設定ファイルからパス設定を読み込む
+from src.config import settings
+
+# PDF作成ユーティリティ
 from src.utils.pdf_create import PdfCreate
 
-# services は src の中
+# サービス
 from src.services.deceased_service import get_case_folder_path_service
 
 
@@ -28,32 +32,56 @@ def generate_smbc_balance_certificate(
 
 
 def _get_output_directory(case_id: int, case_number: str, contractor_name: str) -> str:
-    """保存先ディレクトリパスを解決する"""
+    """
+    保存先ディレクトリパスを解決する。
+    「残証申請書類」フォルダがあればそこを優先し、なければ案件フォルダ直下（またはデフォルト）を返す。
+    """
     
     # 契約者氏名（スペースなし）
     contractor_name_clean = contractor_name.replace(" ", "").replace("　", "")
     
-    output_directory = ""
+    base_directory = ""
 
+    # 1. 基本となるパス（案件フォルダ）の特定
     if os.name == "nt":
         # Windows環境
         # DBからパスを取得
         db_path = get_case_folder_path_service(case_id)
         if db_path:
-            output_directory = db_path
+            base_directory = db_path
         else:
             # フォールバックパス
-            output_directory = rf"\\192.168.11.20\行政書士法人チェスター\01.個別ＪＯＢ\{case_number}{contractor_name_clean}"
-            print(f"DBパス未取得のためフォールバック使用: {output_directory}")
+            base_directory = os.path.join(settings.BASE_DIR, "output")
+            print(f"DBパス未取得のためフォールバック使用: {base_directory}")
 
     else:
-        # POSIX環境 (Mac/Linux/Dockerなど) - 開発用
-        # src/services/pdf/smbc_pdf_service.py から見てプロジェクトルートを探す
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
-        output_directory = os.path.join(base_dir, "generated_pdfs")
-        os.makedirs(output_directory, exist_ok=True)
+        # POSIX環境 (Mac/Linux/Dockerなど)
+        base_directory = os.path.join(settings.BASE_DIR, "output")
     
-    return output_directory
+    # 2. 「残証申請書類」フォルダの探索ロジック
+    target_keyword = "残証申請書類"
+    final_output_dir = base_directory
+
+    if base_directory and os.path.exists(base_directory):
+        try:
+            p = Path(base_directory)
+            # 再帰的にディレクトリを検索
+            matches = [d for d in p.rglob(f"*{target_keyword}*") if d.is_dir()]
+            
+            if matches:
+                # 見つかった場合、最終更新日時が最も新しいものを採用
+                best_match = max(matches, key=lambda d: d.stat().st_mtime)
+                final_output_dir = str(best_match)
+                print(f"フォルダ自動振り分け: {final_output_dir}")
+            else:
+                print(f"'{target_keyword}' フォルダが見つからないため、ルートに保存します。")
+        except Exception as e:
+            print(f"フォルダ探索中にエラーが発生しました: {e}")
+            # エラー時はフォールバックとしてbase_directoryをそのまま使用
+
+    # ディレクトリ作成（念のため）
+    os.makedirs(final_output_dir, exist_ok=True)
+    return final_output_dir
 
 
 def _create_window_pdf(data: Dict[str, Any], bank_code: str, case_id: int) -> str:
@@ -129,20 +157,18 @@ def _create_window_pdf(data: Dict[str, Any], bank_code: str, case_id: int) -> st
         pdf.draw_string(109, 142, day_draw, 12)
 
     # 保存処理
-    filename = f"{case_number}_{d_name}_{bank_name}_残高証明書依頼書.pdf"
+    filename = f"{case_number}{d_name}様_{bank_name}_残高証明書依頼書.pdf"
     output_path = os.path.join(output_directory, filename)
     
     # テンプレートパスの解決: assets/pdf/三井住友銀行_残高証明書依頼書.pdf
-    # src/services/pdf/smbc_pdf_service.py -> ../../../assets
-    base_src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    template_path = os.path.join(
-        base_src_dir,
-        "assets", "pdf", "三井住友銀行_残高証明書依頼書.pdf"
-    )
+    template_path = settings.ASSETS_DIR / "pdf" / "三井住友銀行_残高証明書依頼書.pdf"
+
+    if not template_path.exists():
+        raise FileNotFoundError(f"テンプレートファイルが見つかりません: {template_path}")
 
     pdf.pdf_save(
         output_path,
-        template_path,
+        str(template_path),
         page=1,
         open_bool=True,
     )
@@ -193,19 +219,18 @@ def _create_mailing_pdf(data: Dict[str, Any], bank_code: str, case_id: int) -> s
     pdf.draw_string(173, 180.5, "〇", 18)
 
     # 保存処理
-    filename = f"{case_number}_{d_name}_{bank_name}_残高証明書依頼書_郵送専用.pdf"
+    filename = f"{case_number}{d_name}様_{bank_name}_残高証明書依頼書_郵送専用.pdf"
     output_path = os.path.join(output_directory, filename)
 
     # テンプレートパス
-    base_src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    template_path = os.path.join(
-        base_src_dir,
-        "assets", "pdf", "三井住友銀行_残高証明書依頼書_郵送専用.pdf"
-    )
+    template_path = settings.ASSETS_DIR / "pdf" / "三井住友銀行_残高証明書依頼書_郵送専用.pdf"
+
+    if not template_path.exists():
+        raise FileNotFoundError(f"テンプレートファイルが見つかりません: {template_path}")
 
     pdf.pdf_save(
         output_path,
-        template_path,
+        str(template_path),
         page=1,
         open_bool=True,
     )

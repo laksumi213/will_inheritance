@@ -589,11 +589,81 @@ def search_zip_by_address_api(address: str) -> Optional[str]:
     except: return None
 
 def get_kintone_integration_data(case_id: int) -> dict:
+    """Kintone連携用のデータを取得する（契約者詳細情報を含む）"""
+    # 1. 案件情報の取得
     case = get_case_by_id(case_id)
-    if not case: return {}
+    if not case:
+        return {}
+
+    # 2. 被相続人情報の取得
     deceased = get_deceased_by_case_id(case_id)
-    d_name = f"{deceased.name_last} {deceased.name_first}" if deceased else ""
-    return {"case_number": case.case_number, "client_name": case.client_name, "deceased_name": d_name, "client_zip": "", "client_addr": "", "client_kana": "", "deceased_kana": "", "client_tel": "", "client_mail": "", "inheritance_date": ""}
+    
+    d_name = ""
+    d_kana = ""
+    inheritance_date = ""
+
+    # 被相続人データの抽出
+    if deceased:
+        d_name = f"{deceased.name_last}　{deceased.name_first}"
+        d_kana = f"{deceased.name_last_kana or ''}　{deceased.name_first_kana or ''}".strip()
+        if deceased.date_of_death:
+            inheritance_date = deceased.date_of_death.strftime("%Y-%m-%d")
+
+    # 3. 契約者（依頼者）情報の特定
+    client_name = case.client_name
+    client_kana = case.client_name_kana or ""
+    client_zip = ""
+    client_addr = ""
+    client_tel = ""
+    client_mail = ""
+
+    # 相続人リストから契約者を探索
+    contractor = None
+    if deceased and deceased.heirs:
+        # is_contracting_party が True の相続人を探す
+        contractor = next((h for h in deceased.heirs if h.is_contracting_party), None)
+    
+    if contractor:
+        # 名前・フリガナの更新（Heirテーブルの方が正確な場合があるため）
+        client_name = f"{contractor.name_last}　{contractor.name_first}"
+        client_kana = f"{contractor.name_last_kana or ''}　{contractor.name_first_kana or ''}".strip()
+
+        # 住所情報の取得
+        addr_info = get_address_info("heir", contractor.id)
+        if addr_info:
+            client_zip = addr_info.get("zip_code", "")
+            # 住所連結: 都道府県 + 市区町村 + 番地 + (建物名)
+            client_addr = f"{addr_info.get('prefecture', '')}{addr_info.get('city_ward_town', '')}{addr_info.get('street_address', '')}"
+            if addr_info.get("building_name"):
+                client_addr += f"　{addr_info.get('building_name')}"
+        
+        # 連絡先情報の取得
+        contacts = get_contact_info("heir", contractor.id)
+        # 電話番号 (Primary優先)
+        phones = [c for c in contacts if c["type"] == "PHONE"]
+        if phones:
+            # Primaryがあればそれを、なければ最初のものを採用
+            primary_phone = next((p for p in phones if p.get("sub_type") == "Primary"), phones[0])
+            client_tel = primary_phone.get("value", "")
+
+        # メールアドレス (Primary優先)
+        emails = [c for c in contacts if c["type"] == "EMAIL"]
+        if emails:
+            primary_email = next((e for e in emails if e.get("sub_type") == "Primary"), emails[0])
+            client_mail = primary_email.get("value", "")
+
+    return {
+        "case_number": case.case_number,
+        "client_name": client_name,
+        "deceased_name": d_name,
+        "client_zip": client_zip,
+        "client_addr": client_addr,
+        "client_kana": client_kana,
+        "deceased_kana": d_kana,
+        "client_tel": client_tel,
+        "client_mail": client_mail,
+        "inheritance_date": inheritance_date
+    }
 
 # --- 7. 金融資産・書類作成関連 ---
 

@@ -1,5 +1,5 @@
 # src/views/deceased_edit.py
-import re 
+import re
 from flet import (
     AppBar,
     Colors,
@@ -18,20 +18,25 @@ from flet import (
     SnackBar,
     Text,
     TextField,
-    TextStyle,
     View,
     alignment,
     padding,
-    Chip, # 追加
+    Chip,
+    border,
 )
 
-from src.utils.date_utils import convert_seireki_to_wareki, parse_all_flexible_date, on_date_blur_handler
 from src.components.business.contact_controls import (
     add_new_contact_row,
     collect_contacts,
     create_contact_input_row,
     add_initial_contact_rows,
 )
+from src.utils.date_utils import (
+    convert_seireki_to_wareki,
+    parse_all_flexible_date,
+    on_date_blur_handler,
+)
+
 from src.services import deceased_service
 from src.services.deceased_service import (
     get_address_by_id,
@@ -40,7 +45,7 @@ from src.services.deceased_service import (
     search_zip_by_address_api,
     get_deceased_by_id,
 )
-from src.services.ai_service import ai_service # 追加
+from src.services.ai_service import ai_service
 
 
 def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
@@ -94,7 +99,7 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
     last_street_field = TextField(label="番地 (丁目/番/号)", width=250)
     last_building_field = TextField(label="建物名・部屋番号", width=400)
 
-    # 💡 AI候補表示エリア
+    # AI候補表示エリア
     candidate_chips_row = Row(wrap=True, spacing=5)
     candidate_container = Container(
         content=Column([
@@ -121,28 +126,32 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
             street_f.value = addr_info.get("street_address", "")
             e.control.error_text = None
         else:
-            e.control.error_text = "住所が見つかりません"
+            e.control.error_text = "住所が見つかりませんでした"
         page.update()
 
     # 郵便番号自動入力ハンドラ (Address -> Zip)
     def auto_fill_zip_handler(e, zip_f, pref_f, city_f, street_f):
-        # 既に郵便番号が入っている場合はスキップ
-        if zip_f.value:
-            return
+        if zip_f.value: return # 既に入力済ならスキップ
         
         pref = pref_f.value or ""
         city = city_f.value or ""
         street = street_f.value or ""
-        
-        if not pref or not city:
-            return
+        if not pref or not city: return
 
-        full_address = f"{pref}{city}{street}"
-        zip_code = search_zip_by_address_api(full_address)
-        
-        # フォールバック: 番地なしで再検索
+        # 精度向上ロジック: 町域のみを抽出
+        zip_code = None
+        if street:
+            # 💡 修正: 全角数字も含めて除外対象にする正規表現に変更
+            match = re.match(r'^([^0-9\-\uFF10-\uFF19]+)', street)
+            if match:
+                town_part = match.group(1).strip()
+                zip_code = search_zip_by_address_api(f"{pref}{city}{town_part}")
+
         if not zip_code:
-            zip_code = search_zip_by_address_api(f"{pref}{city}")
+            zip_code = search_zip_by_address_api(f"{pref}{city}{street}")
+        
+        # 💡 修正: 「市レベルでのフォールバック」を削除
+        # これにより、町名不一致時に代表番号（矢上町など）がセットされるのを防ぎます。
 
         if zip_code:
             zip_f.value = zip_code
@@ -157,7 +166,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
         if match_city:
             city = match_city.group(1)
             rest_street = match_city.group(2).strip()
-            
             last_city_field.value = city
             
             parts = rest_street.split(" ", 1)
@@ -168,19 +176,8 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
             last_street_field.value = rest
             last_building_field.value = ""
         
-        # ZIP検索
-        full_addr_for_zip = f"{last_pref_field.value}{last_city_field.value}{last_street_field.value}"
-        if full_addr_for_zip:
-             try:
-                zip_code = search_zip_by_address_api(full_addr_for_zip)
-                if not zip_code:
-                     zip_code = search_zip_by_address_api(f"{last_pref_field.value}{last_city_field.value}")
-                
-                if zip_code:
-                    last_zip_field.value = zip_code
-             except Exception as ex:
-                print(f"Auto zip search failed: {ex}")
-        
+        # 非同期でZIP検索
+        page.run_thread(lambda: auto_fill_zip_handler(None, last_zip_field, last_pref_field, last_city_field, last_street_field))
         page.update()
 
     # ヘルパー: 候補選択時
@@ -196,7 +193,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
         def task():
             try:
                 candidates = ai_service.predict_prefectures_sync(address_fragment)
-                
                 if not candidates:
                     page.open(SnackBar(Text("都道府県を特定できませんでした。"), bgcolor=Colors.ORANGE))
                     candidate_container.visible = False
@@ -205,7 +201,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
                     page.open(SnackBar(Text(f"「{pref}」を補完しました。"), bgcolor=Colors.GREEN))
                     _fill_address_fields_local(pref, address_fragment)
                 else:
-                    # 複数候補
                     candidate_chips_row.controls.clear()
                     for cand in candidates:
                         candidate_chips_row.controls.append(
@@ -223,7 +218,7 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
 
         page.run_thread(task)
 
-    # 💡 住所貼り付けハンドラ
+    # 住所貼り付けハンドラ
     def parse_and_fill_address(e):
         full_address = e.control.value
         if not full_address:
@@ -240,7 +235,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
             rest = match_pref.group(3).strip()
             _fill_address_fields_local(pref, rest)
         else:
-            # 都道府県なし -> AIへ
             _predict_prefecture_with_ai(full_address)
 
     last_paste_address_field = TextField(
@@ -343,7 +337,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
                 past_addresses_column.controls.append(create_past_address_fields(h))
 
             contacts = deceased_service.get_contact_info("deceased", deceased.id)
-            
             
             phone_contacts = [c for c in contacts if c["type"] == "PHONE"]
             phone_inputs_column.controls.clear()
@@ -458,7 +451,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
     # ----------------------------------------------------
     
     def on_cancel_click(e):
-        print(f"DEBUG: Cancel Clicked. Going to -> {back_route}")
         page.go(back_route)
 
     view_controls = [
@@ -475,7 +467,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
                     Text("1. 基本情報", size=18, weight=FontWeight.BOLD, color="onSurface"),
                     Row([name_last_field, name_first_field]),
                     Row([kana_last_field, kana_first_field]),
-                    # Row([rel_field], visible=True),
                     Divider(),
                     
                     Text("2. 生年月日・死亡日", size=18, weight=FontWeight.BOLD, color="onSurface"),

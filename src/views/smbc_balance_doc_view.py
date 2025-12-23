@@ -28,34 +28,41 @@ from src.services.pdf.smbc_pdf_service import generate_smbc_balance_certificate
 def SmbcBalanceDocView(page: Page, case_id: int, bank_code: str):
     """
     三井住友銀行 残高証明書発行依頼書 作成画面
+    関数ベースのViewコンポーネント。Containerを返す。
     """
 
     # --- データ取得 ---
-    data = get_bank_cert_document_data(case_id, bank_code)
+    try:
+        data = get_bank_cert_document_data(case_id, bank_code)
+    except Exception as e:
+        print(f"Data load error: {e}")
+        data = None
 
     # --- エラーハンドリング: データが見つからない場合 ---
     if not data:
-        # このreturnはColumnをそのまま返すため、Containerでラップする必要はない
-        return Column(
-            controls=[
-                Container(
-                    content=Row(
-                        controls=[
-                            Icon(Icons.ERROR_OUTLINE, color=Colors.RED),
-                            Text(
-                                "エラー: 案件情報または指定された銀行コードの口座情報が見つかりません。",
-                                size=16,
-                                color=Colors.RED,
-                            ),
-                        ]
+        return Container(
+            content=Column(
+                controls=[
+                    Container(
+                        content=Row(
+                            controls=[
+                                Icon(Icons.ERROR_OUTLINE, color=Colors.RED),
+                                Text(
+                                    "エラー: 案件情報または指定された銀行コードの口座情報が見つかりません。",
+                                    size=16,
+                                    color=Colors.RED,
+                                ),
+                            ]
+                        ),
+                        padding=20,
                     ),
-                    padding=20,
-                ),
-                ElevatedButton(
-                    "戻る", 
-                    on_click=lambda e: page.go(f"/case/{case_id}/doc/balance_cert")
-                ),
-            ]
+                    ElevatedButton(
+                        "戻る", 
+                        on_click=lambda e: page.go(f"/case/{case_id}/doc/balance_cert")
+                    ),
+                ]
+            ),
+            expand=True
         )
 
     # --- UI用変数の展開 ---
@@ -69,6 +76,15 @@ def SmbcBalanceDocView(page: Page, case_id: int, bank_code: str):
     bank_name = bank_assets[0]["bank_name"] if bank_assets else "銀行名不明"
     
     # --- ボタンコントロールの定義 ---
+    # ボタンのスタイル定義
+    def _button_style(color: str):
+        return ButtonStyle(
+            color=Colors.WHITE,
+            bgcolor=color,
+            padding=20,
+            shape=RoundedRectangleBorder(radius=10),
+        )
+
     mailing_btn = ElevatedButton(
         content=Row([Icon(Icons.MAIL), Text("作成（郵送専用）")]),
         style=_button_style(Colors.TEAL),
@@ -93,7 +109,9 @@ def SmbcBalanceDocView(page: Page, case_id: int, bank_code: str):
         page.update()
 
         try:
-            # 2. Service層の関数を呼び出し（重い処理）
+            # 2. Service層の関数を呼び出し
+            # スレッドで実行しないとUIがフリーズする可能性があるため、必要に応じて threading.Thread を検討
+            # ここではシンプルに同期実行します (Fletのイベントハンドラはスレッドで動くため基本OK)
             output_path = generate_smbc_balance_certificate(
                 data=data,
                 bank_code=bank_code,
@@ -118,6 +136,9 @@ def SmbcBalanceDocView(page: Page, case_id: int, bank_code: str):
         except Exception as err:
             # エラー処理
             print(f"PDF生成エラー: {err}")
+            import traceback
+            traceback.print_exc()
+            
             page.open(
                 SnackBar(
                     content=Text(f"エラーが発生しました: {str(err)}", color=Colors.WHITE),
@@ -136,8 +157,17 @@ def SmbcBalanceDocView(page: Page, case_id: int, bank_code: str):
     mailing_btn.on_click = lambda e: handle_create_pdf(e, is_mailing=True)
     window_btn.on_click = lambda e: handle_create_pdf(e, is_mailing=False)
 
+    def _info_row(label: str, value: str) -> Row:
+        """情報表示用のヘルパー行コンポーネント"""
+        return Row(
+            controls=[
+                Text(label, width=150, color=Colors.GREY_700, weight=FontWeight.W_500),
+                Text(value, weight=FontWeight.BOLD, size=16),
+            ],
+            alignment=MainAxisAlignment.START,
+        )
+
     # --- 画面レイアウト ---
-    # 💡 修正: ColumnをContainerでラップし、padding, expand, scrollプロパティをContainerに移す
     return Container(
         content=Column(
             controls=[
@@ -199,29 +229,9 @@ def SmbcBalanceDocView(page: Page, case_id: int, bank_code: str):
                     on_click=lambda e: page.go(f"/case/{case_id}/doc/balance_cert")
                 ),
             ],
-            scroll="AUTO", # Columnにscrollを移す
-            expand=True,    # Columnにexpandを移す
+            scroll="AUTO",
+            expand=True,
         ),
-        expand=True,    # Containerが領域全体を占める
-        padding=20,     # ContainerでPaddingを処理
-    )
-
-def _info_row(label: str, value: str) -> Row:
-    """情報表示用のヘルパー行コンポーネント"""
-    return Row(
-        controls=[
-            Text(label, width=150, color=Colors.GREY_700, weight=FontWeight.W_500),
-            Text(value, weight=FontWeight.BOLD, size=16),
-        ],
-        alignment=MainAxisAlignment.START,
-    )
-
-def _button_style(color: str):
-    """ボタンのスタイル定義 (MaterialStateを使用しない形に修正)"""
-    return ButtonStyle(
-        color=Colors.WHITE,
-        bgcolor=color,
+        expand=True,
         padding=20,
-        # 💡 修正: 辞書型やMaterialStateを使わず、直接値を渡す（全状態で適用）
-        shape=RoundedRectangleBorder(radius=10),
     )

@@ -2995,11 +2995,81 @@ def search_zip_by_address_api(address: str) -> Optional[str]:
     except: return None
 
 def get_kintone_integration_data(case_id: int) -> dict:
+    """Kintone連携用のデータを取得する（契約者詳細情報を含む）"""
+    # 1. 案件情報の取得
     case = get_case_by_id(case_id)
-    if not case: return {}
+    if not case:
+        return {}
+
+    # 2. 被相続人情報の取得
     deceased = get_deceased_by_case_id(case_id)
-    d_name = f"{deceased.name_last} {deceased.name_first}" if deceased else ""
-    return {"case_number": case.case_number, "client_name": case.client_name, "deceased_name": d_name, "client_zip": "", "client_addr": "", "client_kana": "", "deceased_kana": "", "client_tel": "", "client_mail": "", "inheritance_date": ""}
+    
+    d_name = ""
+    d_kana = ""
+    inheritance_date = ""
+
+    # 被相続人データの抽出
+    if deceased:
+        d_name = f"{deceased.name_last}　{deceased.name_first}"
+        d_kana = f"{deceased.name_last_kana or ''}　{deceased.name_first_kana or ''}".strip()
+        if deceased.date_of_death:
+            inheritance_date = deceased.date_of_death.strftime("%Y-%m-%d")
+
+    # 3. 契約者（依頼者）情報の特定
+    client_name = case.client_name
+    client_kana = case.client_name_kana or ""
+    client_zip = ""
+    client_addr = ""
+    client_tel = ""
+    client_mail = ""
+
+    # 相続人リストから契約者を探索
+    contractor = None
+    if deceased and deceased.heirs:
+        # is_contracting_party が True の相続人を探す
+        contractor = next((h for h in deceased.heirs if h.is_contracting_party), None)
+    
+    if contractor:
+        # 名前・フリガナの更新（Heirテーブルの方が正確な場合があるため）
+        client_name = f"{contractor.name_last}　{contractor.name_first}"
+        client_kana = f"{contractor.name_last_kana or ''}　{contractor.name_first_kana or ''}".strip()
+
+        # 住所情報の取得
+        addr_info = get_address_info("heir", contractor.id)
+        if addr_info:
+            client_zip = addr_info.get("zip_code", "")
+            # 住所連結: 都道府県 + 市区町村 + 番地 + (建物名)
+            client_addr = f"{addr_info.get('prefecture', '')}{addr_info.get('city_ward_town', '')}{addr_info.get('street_address', '')}"
+            if addr_info.get("building_name"):
+                client_addr += f"　{addr_info.get('building_name')}"
+        
+        # 連絡先情報の取得
+        contacts = get_contact_info("heir", contractor.id)
+        # 電話番号 (Primary優先)
+        phones = [c for c in contacts if c["type"] == "PHONE"]
+        if phones:
+            # Primaryがあればそれを、なければ最初のものを採用
+            primary_phone = next((p for p in phones if p.get("sub_type") == "Primary"), phones[0])
+            client_tel = primary_phone.get("value", "")
+
+        # メールアドレス (Primary優先)
+        emails = [c for c in contacts if c["type"] == "EMAIL"]
+        if emails:
+            primary_email = next((e for e in emails if e.get("sub_type") == "Primary"), emails[0])
+            client_mail = primary_email.get("value", "")
+
+    return {
+        "case_number": case.case_number,
+        "client_name": client_name,
+        "deceased_name": d_name,
+        "client_zip": client_zip,
+        "client_addr": client_addr,
+        "client_kana": client_kana,
+        "deceased_kana": d_kana,
+        "client_tel": client_tel,
+        "client_mail": client_mail,
+        "inheritance_date": inheritance_date
+    }
 
 # --- 7. 金融資産・書類作成関連 ---
 
@@ -6597,11 +6667,15 @@ import jaconv
 import mojimoji
 from datetime import datetime
 from typing import Dict, Any, Optional
+from pathlib import Path
 
-# 💡 修正: インポートパスを新しいディレクトリ構成 (src.utils) に変更
+# 設定ファイルからパス設定を読み込む
+from src.config import settings
+
+# PDF作成ユーティリティ
 from src.utils.pdf_create import PdfCreate
 
-# services は src の中
+# サービス
 from src.services.deceased_service import get_case_folder_path_service
 
 
@@ -6621,32 +6695,56 @@ def generate_smbc_balance_certificate(
 
 
 def _get_output_directory(case_id: int, case_number: str, contractor_name: str) -> str:
-    """保存先ディレクトリパスを解決する"""
+    """
+    保存先ディレクトリパスを解決する。
+    「残証申請書類」フォルダがあればそこを優先し、なければ案件フォルダ直下（またはデフォルト）を返す。
+    """
     
     # 契約者氏名（スペースなし）
     contractor_name_clean = contractor_name.replace(" ", "").replace("　", "")
     
-    output_directory = ""
+    base_directory = ""
 
+    # 1. 基本となるパス（案件フォルダ）の特定
     if os.name == "nt":
         # Windows環境
         # DBからパスを取得
         db_path = get_case_folder_path_service(case_id)
         if db_path:
-            output_directory = db_path
+            base_directory = db_path
         else:
             # フォールバックパス
-            output_directory = rf"\\192.168.11.20\行政書士法人チェスター\01.個別ＪＯＢ\{case_number}{contractor_name_clean}"
-            print(f"DBパス未取得のためフォールバック使用: {output_directory}")
+            base_directory = os.path.join(settings.BASE_DIR, "output")
+            print(f"DBパス未取得のためフォールバック使用: {base_directory}")
 
     else:
-        # POSIX環境 (Mac/Linux/Dockerなど) - 開発用
-        # src/services/pdf/smbc_pdf_service.py から見てプロジェクトルートを探す
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
-        output_directory = os.path.join(base_dir, "generated_pdfs")
-        os.makedirs(output_directory, exist_ok=True)
+        # POSIX環境 (Mac/Linux/Dockerなど)
+        base_directory = os.path.join(settings.BASE_DIR, "output")
     
-    return output_directory
+    # 2. 「残証申請書類」フォルダの探索ロジック
+    target_keyword = "残証申請書類"
+    final_output_dir = base_directory
+
+    if base_directory and os.path.exists(base_directory):
+        try:
+            p = Path(base_directory)
+            # 再帰的にディレクトリを検索
+            matches = [d for d in p.rglob(f"*{target_keyword}*") if d.is_dir()]
+            
+            if matches:
+                # 見つかった場合、最終更新日時が最も新しいものを採用
+                best_match = max(matches, key=lambda d: d.stat().st_mtime)
+                final_output_dir = str(best_match)
+                print(f"フォルダ自動振り分け: {final_output_dir}")
+            else:
+                print(f"'{target_keyword}' フォルダが見つからないため、ルートに保存します。")
+        except Exception as e:
+            print(f"フォルダ探索中にエラーが発生しました: {e}")
+            # エラー時はフォールバックとしてbase_directoryをそのまま使用
+
+    # ディレクトリ作成（念のため）
+    os.makedirs(final_output_dir, exist_ok=True)
+    return final_output_dir
 
 
 def _create_window_pdf(data: Dict[str, Any], bank_code: str, case_id: int) -> str:
@@ -6722,20 +6820,18 @@ def _create_window_pdf(data: Dict[str, Any], bank_code: str, case_id: int) -> st
         pdf.draw_string(109, 142, day_draw, 12)
 
     # 保存処理
-    filename = f"{case_number}_{d_name}_{bank_name}_残高証明書依頼書.pdf"
+    filename = f"{case_number}{d_name}様_{bank_name}_残高証明書依頼書.pdf"
     output_path = os.path.join(output_directory, filename)
     
     # テンプレートパスの解決: assets/pdf/三井住友銀行_残高証明書依頼書.pdf
-    # src/services/pdf/smbc_pdf_service.py -> ../../../assets
-    base_src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    template_path = os.path.join(
-        base_src_dir,
-        "assets", "pdf", "三井住友銀行_残高証明書依頼書.pdf"
-    )
+    template_path = settings.ASSETS_DIR / "pdf" / "三井住友銀行_残高証明書依頼書.pdf"
+
+    if not template_path.exists():
+        raise FileNotFoundError(f"テンプレートファイルが見つかりません: {template_path}")
 
     pdf.pdf_save(
         output_path,
-        template_path,
+        str(template_path),
         page=1,
         open_bool=True,
     )
@@ -6786,19 +6882,18 @@ def _create_mailing_pdf(data: Dict[str, Any], bank_code: str, case_id: int) -> s
     pdf.draw_string(173, 180.5, "〇", 18)
 
     # 保存処理
-    filename = f"{case_number}_{d_name}_{bank_name}_残高証明書依頼書_郵送専用.pdf"
+    filename = f"{case_number}{d_name}様_{bank_name}_残高証明書依頼書_郵送専用.pdf"
     output_path = os.path.join(output_directory, filename)
 
     # テンプレートパス
-    base_src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    template_path = os.path.join(
-        base_src_dir,
-        "assets", "pdf", "三井住友銀行_残高証明書依頼書_郵送専用.pdf"
-    )
+    template_path = settings.ASSETS_DIR / "pdf" / "三井住友銀行_残高証明書依頼書_郵送専用.pdf"
+
+    if not template_path.exists():
+        raise FileNotFoundError(f"テンプレートファイルが見つかりません: {template_path}")
 
     pdf.pdf_save(
         output_path,
-        template_path,
+        str(template_path),
         page=1,
         open_bool=True,
     )
@@ -8182,16 +8277,15 @@ from flet import (
     Icon,
     Icons,
     ListTile,
-    ListView,
     Page,
     Text,
-    border,
     ControlEvent,
-    RoundedRectangleBorder
+    RoundedRectangleBorder,
+    SnackBar,
 )
 
-from src.services.deceased_service import get_financial_asset_by_case
-
+# 循環参照回避のため、メソッド内でインポートするか、TYPE_CHECKINGを使用するのが一般的ですが、
+# ここではImportErrorを確実に回避するため、メソッド内インポートを採用します。
 
 class BalanceCertDocView(Column):
     """
@@ -8205,10 +8299,10 @@ class BalanceCertDocView(Column):
             scroll="auto",
             spacing=20,
         )
-        self.page = page  # ページ参照を保持
+        self.page = page
         self.case_id = case_id
 
-        # 💡 修正: 初期化時に immediately load を行わず、空のコントロールリストを設定
+        # 銀行リスト表示用コンテナ
         self.bank_list_container = Column(
             controls=[Text("銀行情報をロード中...", color="onSurfaceVariant")],
             expand=True, 
@@ -8233,19 +8327,28 @@ class BalanceCertDocView(Column):
     def did_mount(self):
         """
         コントロールがPageにアタッチされた後、一度だけ実行される
-        ここで初めてデータロードとUIの更新を行う
+        ここでデータロードとUIの更新を行う
         """
         self._load_bank_list()
 
     def _load_bank_list(self):
         """登録済みの銀行リストを生成・更新する"""
+        # 循環参照を防ぐため、ここでサービスをインポート
+        from src.services.deceased_service import get_financial_asset_by_case
         
         # 1. 案件の金融資産リストを取得
-        financial_assets = get_financial_asset_by_case(self.case_id)
+        try:
+            financial_assets = get_financial_asset_by_case(self.case_id)
+        except Exception as e:
+            print(f"Error loading assets: {e}")
+            if self.page:
+                self.page.open(SnackBar(Text(f"データ取得エラー: {e}"), bgcolor=Colors.RED))
+            financial_assets = []
         
         # 2. 銀行名とコードのユニークなセットを作成
         unique_banks = {}
         for asset in financial_assets:
+            # 銀行コードがない、または空の場合はスキップ
             if 'bank_code' not in asset or not asset['bank_code']:
                 continue
             
@@ -8261,19 +8364,7 @@ class BalanceCertDocView(Column):
             for code, bank_info in unique_banks.items():
                 name = bank_info['name']
 
-                def open_doc_create_page(e: ControlEvent, code=code):
-                    """書類作成ボタン/リスト押下時のルーティング"""
-                    if not self.page:
-                        return
-                    
-                    # 銀行コードに基づいて次のルーティングを決定
-                    if code == "0001":
-                        self.page.go(f"/case/{self.case_id}/doc/balance_cert/mizuho")
-                    elif code == "0009":
-                        self.page.go(f"/case/{self.case_id}/doc/balance_cert/smbc")
-                    else:
-                        self.page.go(f"/case/{self.case_id}/doc/balance_cert/standard/{code}")
-
+                # コントロール作成
                 controls.append(
                     ListTile(
                         leading=Icon(Icons.ACCOUNT_BALANCE, color="primary"),
@@ -8282,15 +8373,17 @@ class BalanceCertDocView(Column):
                             color="onSurface",
                             weight=FontWeight.W_500
                         ),
+                        subtitle=Text("残高証明書発行依頼書を作成します"),
                         trailing=ElevatedButton(
                             "書類作成へ",
                             icon=Icons.EDIT_DOCUMENT,
-                            on_click=open_doc_create_page,
-                            data=code,
+                            on_click=self._handle_doc_create,
+                            data=code, # 銀行コードをdata属性に埋め込む
                             bgcolor="primaryContainer",
                             color="onPrimaryContainer",
                         ),
-                        on_click=open_doc_create_page,
+                        on_click=self._handle_doc_create,
+                        data=code, # ListTile自体にも埋め込む
                         bgcolor="surfaceVariant",
                         shape=RoundedRectangleBorder(radius=5),
                     )
@@ -8298,16 +8391,39 @@ class BalanceCertDocView(Column):
         else:
             controls.append(
                 Container(
-                    content=Text("現在、この案件に登録されている銀行口座情報がありません。\n先に「銀行登録」メニューから口座情報を登録してください。", color=Colors.ERROR),
+                    content=Text(
+                        "現在、この案件に登録されている銀行口座情報がありません。\n先に「銀行登録」メニューから口座情報を登録してください。", 
+                        color=Colors.ERROR
+                    ),
                     padding=20
                 )
             )
 
-        # 3. コントロールを更新 (この時点でコントロールはPageにアタッチ済み)
+        # 3. コントロールを更新
         self.bank_list_container.controls = controls
         self.bank_list_container.update()
+
+    def _handle_doc_create(self, e: ControlEvent):
+        """書類作成ボタン/リスト押下時のルーティング処理"""
+        # data属性から銀行コードを取得
+        code = e.control.data
         
-        # NOTE: 自身の update() 呼び出しは不要 (親の update() で対応)
+        if not code:
+            self.page.open(SnackBar(Text("銀行コードが取得できませんでした"), bgcolor=Colors.RED))
+            return
+
+        print(f"DEBUG: Navigating to doc create page for bank code: {code}")
+
+        # 銀行コードに基づいて次のルーティングを決定
+        if code == "0001":
+            # みずほ銀行
+            self.page.go(f"/case/{self.case_id}/doc/balance_cert/mizuho")
+        elif code == "0009":
+            # 三井住友銀行
+            self.page.go(f"/case/{self.case_id}/doc/balance_cert/smbc")
+        else:
+            # その他（汎用）
+            self.page.go(f"/case/{self.case_id}/doc/balance_cert/standard/{code}")
 
 ==================================================
 FILE_PATH: .\src\views\bank_edit.py
@@ -9681,15 +9797,15 @@ from flet import (
 # サービス・ユーティリティ
 from src.services.deceased_service import get_case_folder_path, get_contracting_party_name
 from src.utils.file_system import open_case_folder
+
+# 各種ビューのインポート
+# 循環参照を避けるため、可能な限り遅延インポートすることも検討できますが、
+# ここではトップレベルでインポートし、balance_cert_doc側で対策しています。
 from src.views.any_view import AnyView
 from src.views.balance_cert_doc import BalanceCertDocView
 from src.views.bank_edit import BankEditView
-
-# 各種ビューのインポート
 from src.views.detail import DeceasedDetailView
 from src.views.freeze_proc_view import FreezeProcView
-
-# 遺産分割協議書画面のインポート
 from src.views.inheritance_division_view import InheritanceDivisionView
 from src.views.inheritance_doc_view import InheritanceDocView
 from src.views.mizuho_balance_doc_view import MizuhoBalanceDocView
@@ -9698,8 +9814,6 @@ from src.views.securities_edit import SecuritiesEditView
 from src.views.smbc_balance_doc_view import SmbcBalanceDocView
 from src.views.task_management_view import TaskManagementView
 from src.views.visit_reserve_select_bank_view import VisitReserveSelectBankView
-
-# 💡 新規追加: 登記情報取得画面
 from src.views.touki_acquisition_view import ToukiAcquisitionView
 
 
@@ -9757,7 +9871,6 @@ class CaseHubView(Row):
                 "route_suffix": "asset/register",
                 "view_func": lambda: RealEstateEditView(self.page, self.case_id),
             },
-            # 💡 新規追加: 登記情報取得
             "touki_acq": {
                 "icon": Icons.DOMAIN_VERIFICATION,
                 "label": "登記情報取得",
@@ -9814,7 +9927,10 @@ class CaseHubView(Row):
 
         self.selected_key = initial_key
         self.destination_keys = list(self.destinations.keys())
-        self.selected_index = self.destination_keys.index(initial_key)
+        if initial_key in self.destination_keys:
+            self.selected_index = self.destination_keys.index(initial_key)
+        else:
+            self.selected_index = 0
 
         # --- コンテンツエリアの初期化 ---
         self.main_content_container = Container(
@@ -9847,7 +9963,7 @@ class CaseHubView(Row):
             self.main_content_container,
         ]
 
-        # 初期コンテンツのロード（ルート情報を渡す）
+        # 初期コンテンツのロード
         self.route_to_content(current_route, update_ui=False)
 
     def on_nav_change(self, e):
@@ -9876,12 +9992,16 @@ class CaseHubView(Row):
 
         # 1. 書類作成画面かつ、特定の銀行ルートが指定されている場合
         if key == "balance_cert_doc" and specific_route:
-            smbc_route_suffix = "/smbc"
-            mizuho_route_suffix = "/mizuho"
-
-            if specific_route.endswith(smbc_route_suffix):
+            # URLパラメータや末尾のスラッシュに柔軟に対応するため部分一致で判定
+            
+            if "/smbc" in specific_route:
+                print("DEBUG: Showing SMBC View")
+                # 三井住友銀行 (0009)
                 content_control = SmbcBalanceDocView(self.page, self.case_id, "0009")
-            elif specific_route.endswith(mizuho_route_suffix):
+            
+            elif "/mizuho" in specific_route:
+                print("DEBUG: Showing Mizuho View")
+                # みずほ銀行 (0001)
                 content_control = MizuhoBalanceDocView(self.page, self.case_id, "0001")
 
             if content_control is not None:
@@ -9889,9 +10009,6 @@ class CaseHubView(Row):
                 return
 
         # 2. コンテンツの生成またはキャッシュからの取得
-        # 💡 キャッシュロジック: 一度生成した画面は保持するが、
-        #    ToukiAcquisitionViewなどはデータ更新の可能性があるためキャッシュしない方が良い場合もある
-        #    ここでは標準的な挙動としてキャッシュを利用する
         if key != "overview" and key in self.views_cache:
             content_control = self.views_cache[key]
         else:
@@ -9914,7 +10031,6 @@ class CaseHubView(Row):
                     self.views_cache[key] = content_control
 
             except Exception as e:
-                # エラー内容をコンソールとUIに出力
                 print(f"❌ Error loading view '{key}': {e}")
                 traceback.print_exc()
 
@@ -10027,7 +10143,7 @@ from flet import (
     dropdown,
     MainAxisAlignment,
     Control,
-    Chip, # 追加
+    Chip,
 )
 
 # 共通設定とモデル
@@ -10046,7 +10162,7 @@ from src.services.deceased_service import (
     search_zip_by_address_api,
     is_case_number_duplicate,
 )
-from src.services.ai_service import ai_service # 追加
+from src.services.ai_service import ai_service
 
 # 日付ユーティリティ
 from src.utils.date_utils import on_date_blur_handler
@@ -10122,9 +10238,9 @@ class ClientRegisterView(View):
 
                         # 5. 現住所
                         Text("🏠 現住所", weight=FontWeight.BOLD, size=18, color="primary"),
-                        # 💡 住所貼り付けフィールド (ここに入力すると自動分割されます)
+                        # 住所貼り付けフィールド
                         self.paste_address_field,
-                        # 💡 AI候補表示エリア
+                        # AI候補表示エリア
                         self.candidate_container,
                         
                         Row([self.zip_field, self.pref_field, self.city_field]),
@@ -10208,7 +10324,7 @@ class ClientRegisterView(View):
             read_only=False,
         )
 
-        # 担当者1の初期値設定 ("管理者 太郎" を検索)
+        # 担当者1の初期値設定
         default_manager_id = ""
         for uid, name in self.user_map.items():
             if "管理者 太郎" in name:
@@ -10219,7 +10335,7 @@ class ClientRegisterView(View):
             label="担当者1", 
             width=200, 
             options=self.user_options,
-            value=default_manager_id  # 初期値を設定
+            value=default_manager_id
         )
         self.operator_field = Dropdown(label="担当者2", width=200, options=self.user_options)
 
@@ -10232,7 +10348,6 @@ class ClientRegisterView(View):
         self.hometown_field = TextField(label="本籍地 (契約者)")
 
         # 住所情報
-        # 💡 住所貼り付けフィールド (自動分割機能付き)
         self.paste_address_field = TextField(
             label="📍 住所貼り付け (ここに入力すると自動分割されます)",
             width=600,
@@ -10243,7 +10358,7 @@ class ClientRegisterView(View):
             border_color=Colors.TRANSPARENT,
             hint_text="都道府県がない場合、AIが補完します"
         )
-        # 💡 AI候補表示エリア
+        # AI候補表示エリア
         self.candidate_chips_row = Row(wrap=True, spacing=5)
         self.candidate_container = Container(
             content=Column([
@@ -10256,7 +10371,7 @@ class ClientRegisterView(View):
             border_radius=5,
             border=border.all(1, Colors.ORANGE_200)
         )
-        
+
         self.zip_field = TextField(label="郵便番号", width=150, on_blur=self.search_address_by_zip)
         self.pref_field = TextField(label="都道府県", width=150, on_blur=self.search_zip_by_address)
         self.city_field = TextField(label="市区町村", width=200, on_blur=self.search_zip_by_address)
@@ -10369,11 +10484,9 @@ class ClientRegisterView(View):
             self.page.update()
             return
         
-        # 全角スペースを半角に
         full_address = full_address.replace("　", " ").strip()
 
         # 1. 都道府県の抽出
-        # 2〜3文字の都道府県名 + (都|道|府|県)
         match_pref = re.match(r'(.*?([都道府県]))(.+)', full_address)
         if match_pref:
             # 都道府県がある場合：通常処理
@@ -10394,14 +10507,12 @@ class ClientRegisterView(View):
         if match_city:
             city = match_city.group(1)
             rest_street = match_city.group(2).strip()
-            
             self.city_field.value = city
             
             # 3. 番地と建物の分離
             parts = rest_street.split(" ", 1)
             street = parts[0]
             building = parts[1] if len(parts) > 1 else ""
-            
             self.street_field.value = street
             self.building_field.value = building
         else:
@@ -10409,11 +10520,8 @@ class ClientRegisterView(View):
             self.street_field.value = rest
             self.building_field.value = ""
         
-        # 4. 郵便番号の自動検索
-        full_addr_for_zip = f"{self.pref_field.value}{self.city_field.value}{self.street_field.value}"
-        if full_addr_for_zip:
-             self.page.run_thread(lambda: self._search_zip_async(full_addr_for_zip))
-
+        # 4. 郵便番号の自動検索（非同期）
+        self.page.run_thread(lambda: self._search_zip_async(pref, self.city_field.value, self.street_field.value))
         self.page.update()
 
     def _predict_prefecture_with_ai(self, address_fragment: str):
@@ -10429,12 +10537,10 @@ class ClientRegisterView(View):
                     self.page.open(SnackBar(Text("都道府県を特定できませんでした。手動で入力してください。"), bgcolor=Colors.ORANGE))
                     self.candidate_container.visible = False
                 elif len(candidates) == 1:
-                    # 1つだけなら自動反映
                     pref = candidates[0]
                     self.page.open(SnackBar(Text(f"「{pref}」を補完しました。"), bgcolor=Colors.GREEN))
                     self._fill_address_fields(pref, address_fragment)
                 else:
-                    # 複数候補なら選択させる
                     self._show_candidates(candidates, address_fragment)
             except Exception as e:
                 print(f"AI Predict Error: {e}")
@@ -10446,7 +10552,6 @@ class ClientRegisterView(View):
     def _show_candidates(self, candidates: List[str], rest_address: str):
         """候補チップを表示する"""
         self.candidate_chips_row.controls.clear()
-        
         for cand in candidates:
             self.candidate_chips_row.controls.append(
                 Chip(
@@ -10459,20 +10564,37 @@ class ClientRegisterView(View):
         self.page.update()
 
     def _on_candidate_select(self, pref: str, rest: str):
-        """候補選択時の処理"""
         self.candidate_container.visible = False
         self._fill_address_fields(pref, rest)
 
-    def _search_zip_async(self, full_addr: str):
-        """非同期で郵便番号検索"""
+    def _search_zip_async(self, pref: str, city: str, street: str):
+        """
+        非同期で郵便番号検索を行う。
+        番地（数字）が含まれていると検索精度が落ちるため、町域のみでの検索を優先する。
+        """
         try:
             from src.services.deceased_service import search_zip_by_address_api
-            zip_code = search_zip_by_address_api(full_addr)
             
+            zip_code = None
+            
+            # 1. 町域レベルでの検索 (数字・ハイフンを除去)
+            # 例: "緑町12-9" -> "緑町"
+            if street:
+                # 💡 修正: 全角数字(０-９)も区切り文字として認識させる
+                match = re.match(r'^([^0-9\-\uFF10-\uFF19]+)', street)
+                if match:
+                    town_part = match.group(1).strip()
+                    target = f"{pref}{city}{town_part}"
+                    zip_code = search_zip_by_address_api(target)
+
+            # 2. ヒットしなければフル住所 (番地なしの場合の保険)
             if not zip_code:
-                # フォールバック
-                fallback_addr = f"{self.pref_field.value}{self.city_field.value}"
-                zip_code = search_zip_by_address_api(fallback_addr)
+                full = f"{pref}{city}{street}"
+                zip_code = search_zip_by_address_api(full)
+            
+            # 💡 修正: 「市レベルでのフォールバック」は削除しました。
+            # "長崎市"だけで検索すると、代表番号やリスト先頭の番号(矢上町など)が返り、
+            # 正しくない番号がセットされるリスクが高いためです。
             
             if zip_code:
                 self.zip_field.value = zip_code
@@ -10488,7 +10610,6 @@ class ClientRegisterView(View):
             
         try:
             address_info = search_address_by_zip_api(zip_code)
-            
             if address_info is None:
                 self.pref_field.value = "通信エラー"
             elif address_info == {}:
@@ -10498,10 +10619,8 @@ class ClientRegisterView(View):
                 self.city_field.value = address_info.get("city_ward_town", "")
                 self.street_field.value = address_info.get("street_address", "")
                 self.street_field.focus()
-
         except Exception as ex:
              self.page.open(SnackBar(Text(f"住所検索エラー: {ex}"), bgcolor=Colors.RED))
-        
         self.page.update()
 
     def search_zip_by_address(self, e) -> None:
@@ -10512,12 +10631,10 @@ class ClientRegisterView(View):
         
         if not pref or not city:
             return
-
         if self.zip_field.value:
             return
 
-        full_address = f"{pref}{city}{street}"
-        self.page.run_thread(lambda: self._search_zip_async(full_address))
+        self.page.run_thread(lambda: self._search_zip_async(pref, city, street))
 
     # --- フォルダ選択ロジック ---
     def get_directory_result(self, e: FilePickerResultEvent) -> None:
@@ -10638,7 +10755,6 @@ class ClientRegisterView(View):
                         return datetime.strptime(d_str, "%Y-%m-%d").date()
                     except ValueError:
                         try:
-                            # 万が一手入力で不正な形式が残っていた場合のフェイルセーフ
                             from src.utils.date_utils import parse_all_flexible_date
                             return parse_all_flexible_date(d_str)
                         except:
@@ -10656,11 +10772,6 @@ class ClientRegisterView(View):
 
 # --- 互換性のためのダミー関数 ---
 def reset_all_global_fields():
-    """
-    以前の仕様との互換性を保つためのダミー関数。
-    現在はClientRegisterViewクラス内で状態が管理され、
-    画面遷移時に新しいインスタンスが生成されるため、明示的なリセットは不要です。
-    """
     pass
 
 ==================================================
@@ -11272,7 +11383,7 @@ FILE_PATH: .\src\views\deceased_edit.py
 ==================================================
 
 # src/views/deceased_edit.py
-import re 
+import re
 from flet import (
     AppBar,
     Colors,
@@ -11291,20 +11402,25 @@ from flet import (
     SnackBar,
     Text,
     TextField,
-    TextStyle,
     View,
     alignment,
     padding,
-    Chip, # 追加
+    Chip,
+    border,
 )
 
-from src.utils.date_utils import convert_seireki_to_wareki, parse_all_flexible_date, on_date_blur_handler
 from src.components.business.contact_controls import (
     add_new_contact_row,
     collect_contacts,
     create_contact_input_row,
     add_initial_contact_rows,
 )
+from src.utils.date_utils import (
+    convert_seireki_to_wareki,
+    parse_all_flexible_date,
+    on_date_blur_handler,
+)
+
 from src.services import deceased_service
 from src.services.deceased_service import (
     get_address_by_id,
@@ -11313,7 +11429,7 @@ from src.services.deceased_service import (
     search_zip_by_address_api,
     get_deceased_by_id,
 )
-from src.services.ai_service import ai_service # 追加
+from src.services.ai_service import ai_service
 
 
 def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
@@ -11367,7 +11483,7 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
     last_street_field = TextField(label="番地 (丁目/番/号)", width=250)
     last_building_field = TextField(label="建物名・部屋番号", width=400)
 
-    # 💡 AI候補表示エリア
+    # AI候補表示エリア
     candidate_chips_row = Row(wrap=True, spacing=5)
     candidate_container = Container(
         content=Column([
@@ -11394,28 +11510,32 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
             street_f.value = addr_info.get("street_address", "")
             e.control.error_text = None
         else:
-            e.control.error_text = "住所が見つかりません"
+            e.control.error_text = "住所が見つかりませんでした"
         page.update()
 
     # 郵便番号自動入力ハンドラ (Address -> Zip)
     def auto_fill_zip_handler(e, zip_f, pref_f, city_f, street_f):
-        # 既に郵便番号が入っている場合はスキップ
-        if zip_f.value:
-            return
+        if zip_f.value: return # 既に入力済ならスキップ
         
         pref = pref_f.value or ""
         city = city_f.value or ""
         street = street_f.value or ""
-        
-        if not pref or not city:
-            return
+        if not pref or not city: return
 
-        full_address = f"{pref}{city}{street}"
-        zip_code = search_zip_by_address_api(full_address)
-        
-        # フォールバック: 番地なしで再検索
+        # 精度向上ロジック: 町域のみを抽出
+        zip_code = None
+        if street:
+            # 💡 修正: 全角数字も含めて除外対象にする正規表現に変更
+            match = re.match(r'^([^0-9\-\uFF10-\uFF19]+)', street)
+            if match:
+                town_part = match.group(1).strip()
+                zip_code = search_zip_by_address_api(f"{pref}{city}{town_part}")
+
         if not zip_code:
-            zip_code = search_zip_by_address_api(f"{pref}{city}")
+            zip_code = search_zip_by_address_api(f"{pref}{city}{street}")
+        
+        # 💡 修正: 「市レベルでのフォールバック」を削除
+        # これにより、町名不一致時に代表番号（矢上町など）がセットされるのを防ぎます。
 
         if zip_code:
             zip_f.value = zip_code
@@ -11430,7 +11550,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
         if match_city:
             city = match_city.group(1)
             rest_street = match_city.group(2).strip()
-            
             last_city_field.value = city
             
             parts = rest_street.split(" ", 1)
@@ -11441,19 +11560,8 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
             last_street_field.value = rest
             last_building_field.value = ""
         
-        # ZIP検索
-        full_addr_for_zip = f"{last_pref_field.value}{last_city_field.value}{last_street_field.value}"
-        if full_addr_for_zip:
-             try:
-                zip_code = search_zip_by_address_api(full_addr_for_zip)
-                if not zip_code:
-                     zip_code = search_zip_by_address_api(f"{last_pref_field.value}{last_city_field.value}")
-                
-                if zip_code:
-                    last_zip_field.value = zip_code
-             except Exception as ex:
-                print(f"Auto zip search failed: {ex}")
-        
+        # 非同期でZIP検索
+        page.run_thread(lambda: auto_fill_zip_handler(None, last_zip_field, last_pref_field, last_city_field, last_street_field))
         page.update()
 
     # ヘルパー: 候補選択時
@@ -11469,7 +11577,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
         def task():
             try:
                 candidates = ai_service.predict_prefectures_sync(address_fragment)
-                
                 if not candidates:
                     page.open(SnackBar(Text("都道府県を特定できませんでした。"), bgcolor=Colors.ORANGE))
                     candidate_container.visible = False
@@ -11478,7 +11585,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
                     page.open(SnackBar(Text(f"「{pref}」を補完しました。"), bgcolor=Colors.GREEN))
                     _fill_address_fields_local(pref, address_fragment)
                 else:
-                    # 複数候補
                     candidate_chips_row.controls.clear()
                     for cand in candidates:
                         candidate_chips_row.controls.append(
@@ -11496,7 +11602,7 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
 
         page.run_thread(task)
 
-    # 💡 住所貼り付けハンドラ
+    # 住所貼り付けハンドラ
     def parse_and_fill_address(e):
         full_address = e.control.value
         if not full_address:
@@ -11513,7 +11619,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
             rest = match_pref.group(3).strip()
             _fill_address_fields_local(pref, rest)
         else:
-            # 都道府県なし -> AIへ
             _predict_prefecture_with_ai(full_address)
 
     last_paste_address_field = TextField(
@@ -11616,7 +11721,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
                 past_addresses_column.controls.append(create_past_address_fields(h))
 
             contacts = deceased_service.get_contact_info("deceased", deceased.id)
-            
             
             phone_contacts = [c for c in contacts if c["type"] == "PHONE"]
             phone_inputs_column.controls.clear()
@@ -11731,7 +11835,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
     # ----------------------------------------------------
     
     def on_cancel_click(e):
-        print(f"DEBUG: Cancel Clicked. Going to -> {back_route}")
         page.go(back_route)
 
     view_controls = [
@@ -11748,7 +11851,6 @@ def DeceasedEditView(page: Page, deceased_id: int, case_id: int):
                     Text("1. 基本情報", size=18, weight=FontWeight.BOLD, color="onSurface"),
                     Row([name_last_field, name_first_field]),
                     Row([kana_last_field, kana_first_field]),
-                    # Row([rel_field], visible=True),
                     Divider(),
                     
                     Text("2. 生年月日・死亡日", size=18, weight=FontWeight.BOLD, color="onSurface"),
@@ -11901,6 +12003,7 @@ def launch_kintone_automation(case_id: int) -> None:
     if not kintone_data:
         print("エラー: データが見つかりませんでした")
         return
+    print(kintone_data)
 
     load_dotenv()
     KINTONE_USER = os.getenv("KINTONE_USER")
@@ -12035,7 +12138,7 @@ def launch_kintone_automation(case_id: int) -> None:
                     driver.execute_script("arguments[0].click();", input_area)
                     input_area.clear()
                     input_area.send_keys(user_name)
-                    time.sleep(2.0) 
+                    time.sleep(0.5) 
                     input_area.send_keys(Keys.ARROW_DOWN)
                     time.sleep(0.2)
                     input_area.send_keys(Keys.ENTER)
@@ -12046,7 +12149,7 @@ def launch_kintone_automation(case_id: int) -> None:
 
             # --- D. 実行フロー ---
             print("--- 基本情報 入力開始 ---")
-            input_text_keyboard("顧客コード", kintone_data["case_number"])
+            # input_text_keyboard("顧客コード", kintone_data["case_number"])
             
             # ドロップダウン (XPathは環境依存の可能性があるため注意)
             select_dropdown_arrow("拠点", 5, "//div[./span[@id=':kf']]")
@@ -12060,29 +12163,27 @@ def launch_kintone_automation(case_id: int) -> None:
             input_user_select_arrow("行チェ通知先", "森町", '//*[@id=":nsearch-:o-text"]')
 
             print("--- 顧客情報 ---")
-            input_text_keyboard("郵便番号", kintone_data["client_zip"])
             input_text_keyboard("顧客名", kintone_data["client_name"])
-            input_text_keyboard("被相続人名", kintone_data["deceased_name"])
-            
-            time.sleep(3.0) # 補完待ち
-            
-            input_text_keyboard("住所", kintone_data["client_addr"], clear=True)
-            input_text_keyboard("顧客名(ふりがな)", kintone_data["client_kana"], clear=True)
-            input_text_keyboard("被相続人名（ふりがな）", kintone_data["deceased_kana"], clear=True)
-            
+            input_text_keyboard("顧客名(ふりがな)", kintone_data["client_kana"])
             input_text_keyboard("TEL", kintone_data["client_tel"])
             input_text_keyboard("メールアドレス", kintone_data["client_mail"])
+            input_text_keyboard("郵便番号", kintone_data["client_zip"])
+
+            input_text_keyboard("被相続人名", kintone_data["deceased_name"])
+            input_text_keyboard("被相続人名（ふりがな）", kintone_data["deceased_kana"])
             input_text_keyboard("相続開始日", kintone_data["inheritance_date"])
 
-            print("--- 手動操作リクエスト ---")
-            show_manual_instruction("【案件情報】タブをクリックして開いてください。\n\n切り替えが終わったら、このウィンドウの「OK」を押してください。")
-            time.sleep(1.0)
+            input_text_keyboard("住所", kintone_data["client_addr"], clear=True)
 
-            print("--- 案件情報 入力開始 ---")
-            from datetime import datetime
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            input_text_keyboard("紹介日", today_str)
-            select_dropdown_arrow("◎登記", 2, "") 
+            # print("--- 手動操作リクエスト ---")
+            # show_manual_instruction("【案件情報】タブをクリックして開いてください。\n\n切り替えが終わったら、このウィンドウの「OK」を押してください。")
+            # time.sleep(1.0)
+
+            # print("--- 案件情報 入力開始 ---")
+            # from datetime import datetime
+            # today_str = datetime.now().strftime("%Y-%m-%d")
+            # input_text_keyboard("紹介日", today_str)
+            # select_dropdown_arrow("◎登記", 2, "") 
 
             print("✅ 全項目の入力処理が完了しました。")
 
@@ -12409,9 +12510,9 @@ def DeceasedDetailView(page: Page, case_id: int) -> View:
             path_field.value = normalized_path or ""
 
         for heir in current_deceased.heirs:
-            heir_name = f"{heir.name_last} {heir.name_first}"
+            heir_name = f"{heir.name_last}　{heir.name_first}"
             # 💡 追加: 相続人のふりがなを取得
-            heir_kana = f"{heir.name_last_kana or ''} {heir.name_first_kana or ''}".strip()
+            heir_kana = f"{heir.name_last_kana or ''}　{heir.name_first_kana or ''}".strip()
             mark = "【契約者】" if getattr(heir, "is_contracting_party", False) else ""
             
             # 連絡先・住所取得ロジック
@@ -13230,7 +13331,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
     if not is_new_heir:
         data = get_heir_by_id(heir_id)
         if not data:
-            return View(f"/heir_edit/{heir_id}", [Text("相続人データが見つかりません。")])
+            return View(f"/heir_edit/{heir_id}", [Text("相続人データが見つかりませんでした。")])
 
         deceased_id = data.deceased_id
         address_info = get_address_info("heir", heir_id)
@@ -13338,7 +13439,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
 
     zip_field.on_blur = search_address_by_zip
 
-    # 💡 住所貼り付けロジック
+    # 💡 住所貼り付けロジック (他画面と同様に修正)
     def parse_and_fill_address(e):
         full_address = e.control.value
         if not full_address: return
@@ -13366,23 +13467,45 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
                 street_field.value = rest
                 building_field.value = ""
         
-        # 郵便番号検索
-        full_addr_for_zip = f"{pref_field.value}{city_field.value}{street_field.value}"
-        if full_addr_for_zip:
-             try:
-                # 簡易逆引き
-                from src.services.deceased_service import search_zip_by_address_api
-                zip_code = search_zip_by_address_api(full_addr_for_zip)
-                # フォールバック
-                if not zip_code:
-                     zip_code = search_zip_by_address_api(f"{pref_field.value}{city_field.value}")
-
-                if zip_code:
-                    zip_field.value = zip_code
-             except Exception as ex:
-                print(f"Auto zip search failed: {ex}")
+        # 郵便番号検索 (修正済みロジック)
+        if pref_field.value and city_field.value:
+            # 別スレッドで検索を実行
+            page.run_thread(lambda: _search_zip_async(pref_field.value, city_field.value, street_field.value))
 
         page.update()
+
+    def _search_zip_async(pref: str, city: str, street: str):
+        """
+        非同期で郵便番号検索を行う。
+        誤検知を防ぐため、町域での検索のみを行い、市レベルでのフォールバックは行わない。
+        """
+        try:
+            from src.services.deceased_service import search_zip_by_address_api
+            
+            zip_code = None
+            
+            # 1. 町域レベルでの検索
+            if street:
+                # 数字とハイフンを除去して町名を抽出
+                match = re.match(r'^([^0-9\-\uFF10-\uFF19]+)', street)
+                if match:
+                    town_part = match.group(1).strip()
+                    target = f"{pref}{city}{town_part}"
+                    zip_code = search_zip_by_address_api(target)
+
+            # 2. ヒットしなければフル住所
+            if not zip_code:
+                full = f"{pref}{city}{street}"
+                zip_code = search_zip_by_address_api(full)
+            
+            # 💡 修正: ここにあった「市レベルでのフォールバック (fallback = f"{pref}{city}")」を削除
+            # これにより、町名が一致しない場合に誤った代表番号がセットされるのを防ぐ
+
+            if zip_code:
+                zip_field.value = zip_code
+                page.update()
+        except Exception as ex:
+            print(f"Auto zip search failed: {ex}")
 
     paste_address_field = TextField(
         label="📍 住所貼り付け (ここに入力すると自動分割されます)",
@@ -13513,7 +13636,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
                         Divider(),
                         
                         Text("🏠 住所", weight=FontWeight.BOLD, size=16, color="onSurface"),
-                        # 💡 貼り付けフィールド追加
+                        # 💡 貼り付けフィールド
                         paste_address_field,
                         Row([zip_field, pref_field, city_field, street_field, building_field]),
                         Divider(),
@@ -15623,7 +15746,7 @@ from flet import (
     dropdown,
     MainAxisAlignment,
     Control,
-    Chip, # 追加
+    Chip,
 )
 
 # 共通設定とモデル
@@ -15642,7 +15765,7 @@ from src.services.deceased_service import (
     search_zip_by_address_api,
     is_case_number_duplicate,
 )
-from src.services.ai_service import ai_service # AIサービスを追加
+from src.services.ai_service import ai_service
 
 # 日付ユーティリティ
 from src.utils.date_utils import on_date_blur_handler
@@ -15718,9 +15841,9 @@ class ClientRegisterView(View):
 
                         # 5. 現住所
                         Text("🏠 現住所", weight=FontWeight.BOLD, size=18, color="primary"),
-                        # 💡 住所貼り付けフィールド (ここに入力すると自動分割されます)
+                        # 住所貼り付けフィールド
                         self.paste_address_field,
-                        # 💡 AI候補表示エリア (初期は非表示)
+                        # AI候補表示エリア
                         self.candidate_container,
                         
                         Row([self.zip_field, self.pref_field, self.city_field]),
@@ -15804,7 +15927,7 @@ class ClientRegisterView(View):
             read_only=False,
         )
 
-        # 担当者1の初期値設定 ("管理者 太郎" を検索)
+        # 担当者1の初期値設定
         default_manager_id = ""
         for uid, name in self.user_map.items():
             if "管理者 太郎" in name:
@@ -15815,7 +15938,7 @@ class ClientRegisterView(View):
             label="担当者1", 
             width=200, 
             options=self.user_options,
-            value=default_manager_id  # 初期値を設定
+            value=default_manager_id
         )
         self.operator_field = Dropdown(label="担当者2", width=200, options=self.user_options)
 
@@ -15828,7 +15951,6 @@ class ClientRegisterView(View):
         self.hometown_field = TextField(label="本籍地 (契約者)")
 
         # 住所情報
-        # 💡 住所貼り付けフィールド (自動分割機能付き)
         self.paste_address_field = TextField(
             label="📍 住所貼り付け (ここに入力すると自動分割されます)",
             width=600,
@@ -15839,7 +15961,7 @@ class ClientRegisterView(View):
             border_color=Colors.TRANSPARENT,
             hint_text="都道府県がない場合、AIが補完します"
         )
-        # 💡 AI候補表示エリア
+        # AI候補表示エリア
         self.candidate_chips_row = Row(wrap=True, spacing=5)
         self.candidate_container = Container(
             content=Column([
@@ -15965,7 +16087,6 @@ class ClientRegisterView(View):
             self.page.update()
             return
         
-        # 全角スペースを半角に
         full_address = full_address.replace("　", " ").strip()
 
         # 1. 都道府県の抽出
@@ -15985,32 +16106,25 @@ class ClientRegisterView(View):
         self.pref_field.value = pref
         
         # 2. 市区町村の抽出
-        # 郡、市、区、町、村 で終わる最短の文字列
         match_city = re.match(r'^(.+?[郡市区町村])(.+)', rest)
         if match_city:
             city = match_city.group(1)
             rest_street = match_city.group(2).strip()
-            
             self.city_field.value = city
             
             # 3. 番地と建物の分離
             parts = rest_street.split(" ", 1)
             street = parts[0]
             building = parts[1] if len(parts) > 1 else ""
-            
             self.street_field.value = street
             self.building_field.value = building
         else:
-            # 市区町村が特定できない場合
             self.city_field.value = ""
             self.street_field.value = rest
             self.building_field.value = ""
         
-        # 4. 郵便番号の自動検索
-        full_addr_for_zip = f"{self.pref_field.value}{self.city_field.value}{self.street_field.value}"
-        if full_addr_for_zip:
-             self.page.run_thread(lambda: self._search_zip_async(full_addr_for_zip))
-
+        # 4. 郵便番号の自動検索（非同期）
+        self.page.run_thread(lambda: self._search_zip_async(pref, self.city_field.value, self.street_field.value))
         self.page.update()
 
     def _predict_prefecture_with_ai(self, address_fragment: str):
@@ -16026,16 +16140,10 @@ class ClientRegisterView(View):
                     self.page.open(SnackBar(Text("都道府県を特定できませんでした。手動で入力してください。"), bgcolor=Colors.ORANGE))
                     self.candidate_container.visible = False
                 elif len(candidates) == 1:
-                    # 1つだけなら自動反映
                     pref = candidates[0]
-                    # 貼り付けられた文字列と結合して再度パース処理へ（再帰はせず直接フィル）
-                    # ここでは address_fragment は都道府県を含まない想定なので、そのまま rest として扱う
-                    # ただし、「横浜市...」のように住所自体は完全な場合もあるため、結合して再パースした方が安全かもしれないが、
-                    # ここでは pref と fragment を分離して扱う
                     self.page.open(SnackBar(Text(f"「{pref}」を補完しました。"), bgcolor=Colors.GREEN))
                     self._fill_address_fields(pref, address_fragment)
                 else:
-                    # 複数候補なら選択させる
                     self._show_candidates(candidates, address_fragment)
             except Exception as e:
                 print(f"AI Predict Error: {e}")
@@ -16047,7 +16155,6 @@ class ClientRegisterView(View):
     def _show_candidates(self, candidates: List[str], rest_address: str):
         """候補チップを表示する"""
         self.candidate_chips_row.controls.clear()
-        
         for cand in candidates:
             self.candidate_chips_row.controls.append(
                 Chip(
@@ -16060,20 +16167,38 @@ class ClientRegisterView(View):
         self.page.update()
 
     def _on_candidate_select(self, pref: str, rest: str):
-        """候補選択時の処理"""
         self.candidate_container.visible = False
         self._fill_address_fields(pref, rest)
 
-    def _search_zip_async(self, full_addr: str):
-        """非同期で郵便番号検索"""
+    def _search_zip_async(self, pref: str, city: str, street: str):
+        """
+        非同期で郵便番号検索を行う。
+        番地（数字）が含まれていると検索精度が落ちるため、町域のみでの検索を優先する。
+        """
         try:
             from src.services.deceased_service import search_zip_by_address_api
-            zip_code = search_zip_by_address_api(full_addr)
+            
+            zip_code = None
+            
+            # 1. 町域レベルでの検索 (数字・ハイフンを除去)
+            # 例: "今泉2-20-9" -> "今泉"
+            if street:
+                match = re.match(r'^([^0-9\-]+)', street)
+                if match:
+                    town_part = match.group(1).strip()
+                    target = f"{pref}{city}{town_part}"
+                    zip_code = search_zip_by_address_api(target)
+
+            # 2. ヒットしなければ、または町域抽出失敗時は、市レベル等でフォールバック
+            if not zip_code:
+                # 従来通りフル住所でトライ（稀にヒットする場合があるため）
+                full = f"{pref}{city}{street}"
+                zip_code = search_zip_by_address_api(full)
             
             if not zip_code:
-                # フォールバック
-                fallback_addr = f"{self.pref_field.value}{self.city_field.value}"
-                zip_code = search_zip_by_address_api(fallback_addr)
+                # 市レベルでのフォールバック（広域番号）
+                fallback = f"{pref}{city}"
+                zip_code = search_zip_by_address_api(fallback)
             
             if zip_code:
                 self.zip_field.value = zip_code
@@ -16089,7 +16214,6 @@ class ClientRegisterView(View):
             
         try:
             address_info = search_address_by_zip_api(zip_code)
-            
             if address_info is None:
                 self.pref_field.value = "通信エラー"
             elif address_info == {}:
@@ -16099,10 +16223,8 @@ class ClientRegisterView(View):
                 self.city_field.value = address_info.get("city_ward_town", "")
                 self.street_field.value = address_info.get("street_address", "")
                 self.street_field.focus()
-
         except Exception as ex:
              self.page.open(SnackBar(Text(f"住所検索エラー: {ex}"), bgcolor=Colors.RED))
-        
         self.page.update()
 
     def search_zip_by_address(self, e) -> None:
@@ -16113,12 +16235,10 @@ class ClientRegisterView(View):
         
         if not pref or not city:
             return
-
         if self.zip_field.value:
             return
 
-        full_address = f"{pref}{city}{street}"
-        self.page.run_thread(lambda: self._search_zip_async(full_address))
+        self.page.run_thread(lambda: self._search_zip_async(pref, city, street))
 
     # --- フォルダ選択ロジック ---
     def get_directory_result(self, e: FilePickerResultEvent) -> None:
@@ -16239,7 +16359,6 @@ class ClientRegisterView(View):
                         return datetime.strptime(d_str, "%Y-%m-%d").date()
                     except ValueError:
                         try:
-                            # 万が一手入力で不正な形式が残っていた場合のフェイルセーフ
                             from src.utils.date_utils import parse_all_flexible_date
                             return parse_all_flexible_date(d_str)
                         except:
@@ -16257,11 +16376,6 @@ class ClientRegisterView(View):
 
 # --- 互換性のためのダミー関数 ---
 def reset_all_global_fields():
-    """
-    以前の仕様との互換性を保つためのダミー関数。
-    現在はClientRegisterViewクラス内で状態が管理され、
-    画面遷移時に新しいインスタンスが生成されるため、明示的なリセットは不要です。
-    """
     pass
 
 ==================================================
@@ -17519,34 +17633,41 @@ from src.services.pdf.smbc_pdf_service import generate_smbc_balance_certificate
 def SmbcBalanceDocView(page: Page, case_id: int, bank_code: str):
     """
     三井住友銀行 残高証明書発行依頼書 作成画面
+    関数ベースのViewコンポーネント。Containerを返す。
     """
 
     # --- データ取得 ---
-    data = get_bank_cert_document_data(case_id, bank_code)
+    try:
+        data = get_bank_cert_document_data(case_id, bank_code)
+    except Exception as e:
+        print(f"Data load error: {e}")
+        data = None
 
     # --- エラーハンドリング: データが見つからない場合 ---
     if not data:
-        # このreturnはColumnをそのまま返すため、Containerでラップする必要はない
-        return Column(
-            controls=[
-                Container(
-                    content=Row(
-                        controls=[
-                            Icon(Icons.ERROR_OUTLINE, color=Colors.RED),
-                            Text(
-                                "エラー: 案件情報または指定された銀行コードの口座情報が見つかりません。",
-                                size=16,
-                                color=Colors.RED,
-                            ),
-                        ]
+        return Container(
+            content=Column(
+                controls=[
+                    Container(
+                        content=Row(
+                            controls=[
+                                Icon(Icons.ERROR_OUTLINE, color=Colors.RED),
+                                Text(
+                                    "エラー: 案件情報または指定された銀行コードの口座情報が見つかりません。",
+                                    size=16,
+                                    color=Colors.RED,
+                                ),
+                            ]
+                        ),
+                        padding=20,
                     ),
-                    padding=20,
-                ),
-                ElevatedButton(
-                    "戻る", 
-                    on_click=lambda e: page.go(f"/case/{case_id}/doc/balance_cert")
-                ),
-            ]
+                    ElevatedButton(
+                        "戻る", 
+                        on_click=lambda e: page.go(f"/case/{case_id}/doc/balance_cert")
+                    ),
+                ]
+            ),
+            expand=True
         )
 
     # --- UI用変数の展開 ---
@@ -17560,6 +17681,15 @@ def SmbcBalanceDocView(page: Page, case_id: int, bank_code: str):
     bank_name = bank_assets[0]["bank_name"] if bank_assets else "銀行名不明"
     
     # --- ボタンコントロールの定義 ---
+    # ボタンのスタイル定義
+    def _button_style(color: str):
+        return ButtonStyle(
+            color=Colors.WHITE,
+            bgcolor=color,
+            padding=20,
+            shape=RoundedRectangleBorder(radius=10),
+        )
+
     mailing_btn = ElevatedButton(
         content=Row([Icon(Icons.MAIL), Text("作成（郵送専用）")]),
         style=_button_style(Colors.TEAL),
@@ -17584,7 +17714,9 @@ def SmbcBalanceDocView(page: Page, case_id: int, bank_code: str):
         page.update()
 
         try:
-            # 2. Service層の関数を呼び出し（重い処理）
+            # 2. Service層の関数を呼び出し
+            # スレッドで実行しないとUIがフリーズする可能性があるため、必要に応じて threading.Thread を検討
+            # ここではシンプルに同期実行します (Fletのイベントハンドラはスレッドで動くため基本OK)
             output_path = generate_smbc_balance_certificate(
                 data=data,
                 bank_code=bank_code,
@@ -17609,6 +17741,9 @@ def SmbcBalanceDocView(page: Page, case_id: int, bank_code: str):
         except Exception as err:
             # エラー処理
             print(f"PDF生成エラー: {err}")
+            import traceback
+            traceback.print_exc()
+            
             page.open(
                 SnackBar(
                     content=Text(f"エラーが発生しました: {str(err)}", color=Colors.WHITE),
@@ -17627,8 +17762,17 @@ def SmbcBalanceDocView(page: Page, case_id: int, bank_code: str):
     mailing_btn.on_click = lambda e: handle_create_pdf(e, is_mailing=True)
     window_btn.on_click = lambda e: handle_create_pdf(e, is_mailing=False)
 
+    def _info_row(label: str, value: str) -> Row:
+        """情報表示用のヘルパー行コンポーネント"""
+        return Row(
+            controls=[
+                Text(label, width=150, color=Colors.GREY_700, weight=FontWeight.W_500),
+                Text(value, weight=FontWeight.BOLD, size=16),
+            ],
+            alignment=MainAxisAlignment.START,
+        )
+
     # --- 画面レイアウト ---
-    # 💡 修正: ColumnをContainerでラップし、padding, expand, scrollプロパティをContainerに移す
     return Container(
         content=Column(
             controls=[
@@ -17690,31 +17834,11 @@ def SmbcBalanceDocView(page: Page, case_id: int, bank_code: str):
                     on_click=lambda e: page.go(f"/case/{case_id}/doc/balance_cert")
                 ),
             ],
-            scroll="AUTO", # Columnにscrollを移す
-            expand=True,    # Columnにexpandを移す
+            scroll="AUTO",
+            expand=True,
         ),
-        expand=True,    # Containerが領域全体を占める
-        padding=20,     # ContainerでPaddingを処理
-    )
-
-def _info_row(label: str, value: str) -> Row:
-    """情報表示用のヘルパー行コンポーネント"""
-    return Row(
-        controls=[
-            Text(label, width=150, color=Colors.GREY_700, weight=FontWeight.W_500),
-            Text(value, weight=FontWeight.BOLD, size=16),
-        ],
-        alignment=MainAxisAlignment.START,
-    )
-
-def _button_style(color: str):
-    """ボタンのスタイル定義 (MaterialStateを使用しない形に修正)"""
-    return ButtonStyle(
-        color=Colors.WHITE,
-        bgcolor=color,
+        expand=True,
         padding=20,
-        # 💡 修正: 辞書型やMaterialStateを使わず、直接値を渡す（全状態で適用）
-        shape=RoundedRectangleBorder(radius=10),
     )
 
 ==================================================

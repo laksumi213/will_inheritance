@@ -52,7 +52,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
     if not is_new_heir:
         data = get_heir_by_id(heir_id)
         if not data:
-            return View(f"/heir_edit/{heir_id}", [Text("相続人データが見つかりません。")])
+            return View(f"/heir_edit/{heir_id}", [Text("相続人データが見つかりませんでした。")])
 
         deceased_id = data.deceased_id
         address_info = get_address_info("heir", heir_id)
@@ -160,7 +160,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
 
     zip_field.on_blur = search_address_by_zip
 
-    # 💡 住所貼り付けロジック
+    # 💡 住所貼り付けロジック (他画面と同様に修正)
     def parse_and_fill_address(e):
         full_address = e.control.value
         if not full_address: return
@@ -188,23 +188,45 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
                 street_field.value = rest
                 building_field.value = ""
         
-        # 郵便番号検索
-        full_addr_for_zip = f"{pref_field.value}{city_field.value}{street_field.value}"
-        if full_addr_for_zip:
-             try:
-                # 簡易逆引き
-                from src.services.deceased_service import search_zip_by_address_api
-                zip_code = search_zip_by_address_api(full_addr_for_zip)
-                # フォールバック
-                if not zip_code:
-                     zip_code = search_zip_by_address_api(f"{pref_field.value}{city_field.value}")
-
-                if zip_code:
-                    zip_field.value = zip_code
-             except Exception as ex:
-                print(f"Auto zip search failed: {ex}")
+        # 郵便番号検索 (修正済みロジック)
+        if pref_field.value and city_field.value:
+            # 別スレッドで検索を実行
+            page.run_thread(lambda: _search_zip_async(pref_field.value, city_field.value, street_field.value))
 
         page.update()
+
+    def _search_zip_async(pref: str, city: str, street: str):
+        """
+        非同期で郵便番号検索を行う。
+        誤検知を防ぐため、町域での検索のみを行い、市レベルでのフォールバックは行わない。
+        """
+        try:
+            from src.services.deceased_service import search_zip_by_address_api
+            
+            zip_code = None
+            
+            # 1. 町域レベルでの検索
+            if street:
+                # 数字とハイフンを除去して町名を抽出
+                match = re.match(r'^([^0-9\-\uFF10-\uFF19]+)', street)
+                if match:
+                    town_part = match.group(1).strip()
+                    target = f"{pref}{city}{town_part}"
+                    zip_code = search_zip_by_address_api(target)
+
+            # 2. ヒットしなければフル住所
+            if not zip_code:
+                full = f"{pref}{city}{street}"
+                zip_code = search_zip_by_address_api(full)
+            
+            # 💡 修正: ここにあった「市レベルでのフォールバック (fallback = f"{pref}{city}")」を削除
+            # これにより、町名が一致しない場合に誤った代表番号がセットされるのを防ぐ
+
+            if zip_code:
+                zip_field.value = zip_code
+                page.update()
+        except Exception as ex:
+            print(f"Auto zip search failed: {ex}")
 
     paste_address_field = TextField(
         label="📍 住所貼り付け (ここに入力すると自動分割されます)",
@@ -335,7 +357,7 @@ def HeirEditView(page: Page, heir_id: int, deceased_id: int, case_id: int):
                         Divider(),
                         
                         Text("🏠 住所", weight=FontWeight.BOLD, size=16, color="onSurface"),
-                        # 💡 貼り付けフィールド追加
+                        # 💡 貼り付けフィールド
                         paste_address_field,
                         Row([zip_field, pref_field, city_field, street_field, building_field]),
                         Divider(),

@@ -86,6 +86,7 @@ def launch_kintone_automation(case_id: int) -> None:
     if not kintone_data:
         print("エラー: データが見つかりませんでした")
         return
+    print(kintone_data)
 
     load_dotenv()
     KINTONE_USER = os.getenv("KINTONE_USER")
@@ -220,7 +221,7 @@ def launch_kintone_automation(case_id: int) -> None:
                     driver.execute_script("arguments[0].click();", input_area)
                     input_area.clear()
                     input_area.send_keys(user_name)
-                    time.sleep(2.0) 
+                    time.sleep(0.5) 
                     input_area.send_keys(Keys.ARROW_DOWN)
                     time.sleep(0.2)
                     input_area.send_keys(Keys.ENTER)
@@ -231,7 +232,7 @@ def launch_kintone_automation(case_id: int) -> None:
 
             # --- D. 実行フロー ---
             print("--- 基本情報 入力開始 ---")
-            input_text_keyboard("顧客コード", kintone_data["case_number"])
+            # input_text_keyboard("顧客コード", kintone_data["case_number"])
             
             # ドロップダウン (XPathは環境依存の可能性があるため注意)
             select_dropdown_arrow("拠点", 5, "//div[./span[@id=':kf']]")
@@ -245,29 +246,27 @@ def launch_kintone_automation(case_id: int) -> None:
             input_user_select_arrow("行チェ通知先", "森町", '//*[@id=":nsearch-:o-text"]')
 
             print("--- 顧客情報 ---")
-            input_text_keyboard("郵便番号", kintone_data["client_zip"])
             input_text_keyboard("顧客名", kintone_data["client_name"])
-            input_text_keyboard("被相続人名", kintone_data["deceased_name"])
-            
-            time.sleep(3.0) # 補完待ち
-            
-            input_text_keyboard("住所", kintone_data["client_addr"], clear=True)
-            input_text_keyboard("顧客名(ふりがな)", kintone_data["client_kana"], clear=True)
-            input_text_keyboard("被相続人名（ふりがな）", kintone_data["deceased_kana"], clear=True)
-            
+            input_text_keyboard("顧客名(ふりがな)", kintone_data["client_kana"])
             input_text_keyboard("TEL", kintone_data["client_tel"])
             input_text_keyboard("メールアドレス", kintone_data["client_mail"])
+            input_text_keyboard("郵便番号", kintone_data["client_zip"])
+
+            input_text_keyboard("被相続人名", kintone_data["deceased_name"])
+            input_text_keyboard("被相続人名（ふりがな）", kintone_data["deceased_kana"])
             input_text_keyboard("相続開始日", kintone_data["inheritance_date"])
 
-            print("--- 手動操作リクエスト ---")
-            show_manual_instruction("【案件情報】タブをクリックして開いてください。\n\n切り替えが終わったら、このウィンドウの「OK」を押してください。")
-            time.sleep(1.0)
+            input_text_keyboard("住所", kintone_data["client_addr"], clear=True)
 
-            print("--- 案件情報 入力開始 ---")
-            from datetime import datetime
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            input_text_keyboard("紹介日", today_str)
-            select_dropdown_arrow("◎登記", 2, "") 
+            # print("--- 手動操作リクエスト ---")
+            # show_manual_instruction("【案件情報】タブをクリックして開いてください。\n\n切り替えが終わったら、このウィンドウの「OK」を押してください。")
+            # time.sleep(1.0)
+
+            # print("--- 案件情報 入力開始 ---")
+            # from datetime import datetime
+            # today_str = datetime.now().strftime("%Y-%m-%d")
+            # input_text_keyboard("紹介日", today_str)
+            # select_dropdown_arrow("◎登記", 2, "") 
 
             print("✅ 全項目の入力処理が完了しました。")
 
@@ -594,9 +593,9 @@ def DeceasedDetailView(page: Page, case_id: int) -> View:
             path_field.value = normalized_path or ""
 
         for heir in current_deceased.heirs:
-            heir_name = f"{heir.name_last} {heir.name_first}"
+            heir_name = f"{heir.name_last}　{heir.name_first}"
             # 💡 追加: 相続人のふりがなを取得
-            heir_kana = f"{heir.name_last_kana or ''} {heir.name_first_kana or ''}".strip()
+            heir_kana = f"{heir.name_last_kana or ''}　{heir.name_first_kana or ''}".strip()
             mark = "【契約者】" if getattr(heir, "is_contracting_party", False) else ""
             
             # 連絡先・住所取得ロジック
